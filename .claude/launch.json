@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "intentlock-preview",
+      "runtimeExecutable": "/usr/bin/ruby",
+      "runtimeArgs": ["-run", "-e", "httpd", "/Users/harshabalakrishnan/Documents/IntentLock", "-p", "8765"],
+      "port": 8765
+    }
+  ]
+}

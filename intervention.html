@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IntentLock — Drift</title>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body class="intervention">
+  <div class="lock-container">
+    <div class="header">
+      <h1>Drift detected</h1>
+      <p id="reason-text">You are deviating from your intent.</p>
+    </div>
+
+    <div class="intervention-intent">
+      <p class="intervention-intent-label">Session intent</p>
+      <p class="intervention-intent-text" id="current-intent">Loading...</p>
+    </div>
+
+    <form id="reflection-form">
+      <div class="input-group">
+        <label for="reflection-input">Why are you deviating?</label>
+        <textarea id="reflection-input" placeholder="I need a break, or this is actually relevant..." required autofocus></textarea>
+      </div>
+
+      <button type="button" id="return-btn" class="primary-btn">Close tab</button>
+      <button type="submit" id="override-btn" class="override-btn">Override &amp; continue</button>
+    </form>
+  </div>
+
+  <script src="intervention.js"></script>
+</body>
+</html>

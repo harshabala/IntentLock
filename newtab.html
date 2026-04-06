@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IntentLock</title>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+  <div class="lock-container">
+    <div class="header">
+      <h1>IntentLock</h1>
+      <p>Declare what you intend to do.</p>
+    </div>
+
+    <form id="intent-form">
+      <div class="input-group">
+        <label for="intent-input">Intent</label>
+        <textarea id="intent-input" placeholder="Research Python decorators for the new module..." required autofocus></textarea>
+      </div>
+
+      <div class="input-group">
+        <label for="time-budget">Time budget (minutes)</label>
+        <input type="number" id="time-budget" min="1" max="480" placeholder="30">
+      </div>
+
+      <button type="submit" id="start-btn">Lock in</button>
+    </form>
+
+    <div id="status-message" class="hidden"></div>
+  </div>
+
+  <script type="module" src="newtab.js"></script>
+</body>
+</html>
