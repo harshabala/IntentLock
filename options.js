@@ -26,22 +26,18 @@ document.addEventListener('DOMContentLoaded', () => {
   ], (localResult) => {
     const processSettings = (sessionApiKey) => {
       let finalKey = sessionApiKey;
-      let migrated = false;
 
       if (localResult.openaiApiKey && chrome.storage.session) {
-        migrated = true;
         finalKey = localResult.openaiApiKey;
         chrome.storage.session.set({ openaiApiKey: finalKey }, () => {
-          chrome.storage.local.remove(['openaiApiKey']);
+          chrome.storage.local.remove(['openaiApiKey'], () => {
+            showStatus(keyStatus, 'OpenAI API key migrated to secure session storage.');
+          });
         });
       }
 
       if (finalKey) {
         apiKeyInput.placeholder = 'Key saved — enter new key to replace';
-      }
-
-      if (migrated) {
-        showStatus(keyStatus, 'OpenAI API key migrated to secure session storage.');
       }
 
       if (localResult.trackingEnabled !== undefined) {
