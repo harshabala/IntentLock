@@ -7,20 +7,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveSitesBtn = document.getElementById('save-sites-btn');
   const sitesStatus = document.getElementById('sites-status');
 
-  const quickIntentsList = document.getElementById('quick-intents-list');
-  const quickStatus = document.getElementById('quick-status');
-
   const trackingToggle = document.getElementById('tracking-toggle');
-  const soundToggle = document.getElementById('sound-toggle');
   const exportBtn = document.getElementById('export-btn');
   const deleteDataBtn = document.getElementById('delete-data-btn');
   const dataStatus = document.getElementById('data-status');
   const themeStatus = document.getElementById('theme-status');
-
-  const dailyGoalInput = document.getElementById('daily-goal');
-  const weeklyGoalInput = document.getElementById('weekly-goal');
-  const saveGoalsBtn = document.getElementById('save-goals-btn');
-  const goalsStatus = document.getElementById('goals-status');
+  let deleteArmed = false;
+  let deleteArmTimer = null;
 
   const DEFAULT_SITES = [
     'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
@@ -29,37 +22,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Load existing settings
   chrome.storage.local.get([
-    'openaiApiKey', 'trackingEnabled', 'soundEnabled', 'customDistractionSites', 'quickIntents', 'theme', 'goals'
-  ], (result) => {
-    if (result.openaiApiKey) {
-      apiKeyInput.placeholder = 'Key saved — enter new key to replace';
-    }
-    if (result.trackingEnabled !== undefined) {
-      trackingToggle.checked = result.trackingEnabled;
-    }
-    if (result.soundEnabled !== undefined) {
-      soundToggle.checked = result.soundEnabled;
+    'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
+  ], (localResult) => {
+    const processSettings = (sessionApiKey) => {
+      let finalKey = sessionApiKey;
+      let migrated = false;
+
+      if (localResult.openaiApiKey && chrome.storage.session) {
+        migrated = true;
+        finalKey = localResult.openaiApiKey;
+        chrome.storage.session.set({ openaiApiKey: finalKey }, () => {
+          chrome.storage.local.remove(['openaiApiKey']);
+        });
+      }
+
+      if (finalKey) {
+        apiKeyInput.placeholder = 'Key saved — enter new key to replace';
+      }
+
+      if (migrated) {
+        showStatus(keyStatus, 'OpenAI API key migrated to secure session storage.');
+      }
+
+      if (localResult.trackingEnabled !== undefined) {
+        trackingToggle.checked = localResult.trackingEnabled;
+      }
+
+      const sites = localResult.customDistractionSites || DEFAULT_SITES;
+      distractionSitesInput.value = sites.join('\n');
+
+      // Load theme
+      const theme = localResult.theme || 'auto';
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.theme === theme);
+      });
+      applyTheme(theme);
+    };
+
+    if (chrome.storage.session) {
+      chrome.storage.session.get(['openaiApiKey'], (sessionResult) => {
+        processSettings(sessionResult.openaiApiKey);
+      });
     } else {
-      soundToggle.checked = true; // Default to enabled
+      processSettings(localResult.openaiApiKey);
     }
-
-    const sites = result.customDistractionSites || DEFAULT_SITES;
-    distractionSitesInput.value = sites.join('\n');
-
-    renderQuickIntents(result.quickIntents || []);
-
-    // Load goals
-    if (result.goals) {
-      if (result.goals.daily) dailyGoalInput.value = result.goals.daily;
-      if (result.goals.weekly) weeklyGoalInput.value = result.goals.weekly;
-    }
-
-    // Load theme
-    const theme = result.theme || 'auto';
-    document.querySelectorAll('.theme-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.theme === theme);
-    });
-    applyTheme(theme);
   });
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -100,7 +106,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    chrome.storage.local.set({ openaiApiKey: key }, () => {
+    const storageArea = chrome.storage.session || chrome.storage.local;
+    storageArea.set({ openaiApiKey: key }, () => {
       apiKeyInput.value = '';
       apiKeyInput.placeholder = 'Key saved — enter new key to replace';
       showStatus(keyStatus, 'API key saved.');
@@ -122,43 +129,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── Quick intents management ────────────────────────────────────────
-
-  function renderQuickIntents(intents) {
-    quickIntentsList.textContent = '';
-
-    if (intents.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'no-session';
-      empty.textContent = 'No saved intents. Save one from the new tab page.';
-      quickIntentsList.appendChild(empty);
-      return;
-    }
-
-    intents.forEach((qi, index) => {
-      const row = document.createElement('div');
-      row.className = 'quick-intent-row';
-
-      const text = document.createElement('span');
-      text.className = 'quick-intent-text';
-      text.textContent = qi.intent;
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'quick-intent-remove';
-      removeBtn.textContent = '\u00D7';
-      removeBtn.addEventListener('click', () => {
-        intents.splice(index, 1);
-        chrome.storage.local.set({ quickIntents: intents }, () => {
-          renderQuickIntents(intents);
-          showStatus(quickStatus, 'Intent removed.');
-        });
-      });
-
-      row.append(text, removeBtn);
-      quickIntentsList.appendChild(row);
-    });
-  }
-
   // ── Tracking toggle ─────────────────────────────────────────────────
 
   trackingToggle.addEventListener('change', (e) => {
@@ -169,41 +139,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── Sound toggle ───────────────────────────────────────────────────
-
-  soundToggle.addEventListener('change', (e) => {
-    const enabled = e.target.checked;
-    chrome.storage.local.set({ soundEnabled: enabled }, () => {
-      showStatus(dataStatus, enabled ? 'Sound alerts enabled.' : 'Sound alerts disabled.');
-      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    });
-  });
-
-  // ── Goals ──────────────────────────────────────────────────────────
-
-  saveGoalsBtn.addEventListener('click', () => {
-    const daily = parseInt(dailyGoalInput.value, 10);
-    const weekly = parseInt(weeklyGoalInput.value, 10);
-
-    const goals = {
-      daily: isNaN(daily) ? null : daily,
-      weekly: isNaN(weekly) ? null : weekly
-    };
-
-    chrome.storage.local.set({ goals }, () => {
-      showStatus(goalsStatus, 'Goals saved.');
-      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    });
-  });
-
   // ── Data export ─────────────────────────────────────────────────────
 
   exportBtn.addEventListener('click', () => {
-    chrome.storage.local.get(['sessionHistory', 'quickIntents'], (result) => {
+    chrome.storage.local.get(['sessionHistory'], (result) => {
       const data = {
         exportedAt: new Date().toISOString(),
-        sessions: result.sessionHistory || [],
-        quickIntents: result.quickIntents || []
+        sessions: result.sessionHistory || []
       };
 
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -221,21 +163,45 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Delete all data ─────────────────────────────────────────────────
 
   deleteDataBtn.addEventListener('click', () => {
-    if (confirm('Delete all stored data? This cannot be undone.')) {
-      chrome.storage.local.remove([
-        'activeSession', 'interventionState', 'sessionHistory',
-        'quickIntents', 'breakUntil', 'onboardingComplete', 'theme'
-      ], () => {
+    if (!deleteArmed) {
+      deleteArmed = true;
+      deleteDataBtn.textContent = 'Confirm delete';
+      showStatus(dataStatus, 'Click confirm delete to erase all local IntentLock data.');
+      clearTimeout(deleteArmTimer);
+      deleteArmTimer = setTimeout(() => {
+        deleteArmed = false;
+        deleteDataBtn.textContent = 'Delete all data';
+      }, 5000);
+      return;
+    }
+
+    clearTimeout(deleteArmTimer);
+    deleteArmed = false;
+    deleteDataBtn.disabled = true;
+    deleteDataBtn.textContent = 'Deleting...';
+
+    chrome.storage.local.clear(() => {
+      const finishDelete = () => {
+        distractionSitesInput.value = DEFAULT_SITES.join('\n');
+        apiKeyInput.value = '';
+        apiKeyInput.placeholder = 'sk-...';
+        trackingToggle.checked = true;
         showStatus(dataStatus, 'All data deleted.');
         chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-        renderQuickIntents([]);
-        // Reset theme to auto
         document.querySelectorAll('.theme-btn').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.theme === 'auto');
         });
         applyTheme('auto');
-      });
-    }
+        deleteDataBtn.disabled = false;
+        deleteDataBtn.textContent = 'Delete all data';
+      };
+
+      if (chrome.storage.session) {
+        chrome.storage.session.clear(finishDelete);
+      } else {
+        finishDelete();
+      }
+    });
   });
 
   // ── Theme toggle ────────────────────────────────────────────────────
