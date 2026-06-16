@@ -25,143 +25,34 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(finish, 250);
   }
 
-  chrome.storage.local.get(['activeSession', 'breakUntil', 'onboardingComplete'], (result) => {
-    if (!result.onboardingComplete) {
-      showOnboarding();
-    } else if (result.breakUntil && Date.now() < result.breakUntil) {
-      showBreakState(result.breakUntil);
-    } else if (result.activeSession && result.activeSession.isActive) {
+  let timerInterval = null;
+
+  chrome.storage.local.get(['activeSession'], (result) => {
+    if (result.activeSession && result.activeSession.isActive) {
       showActiveState(result.activeSession);
     } else {
-      loadQuickIntents();
+      showNewSessionForm(document.querySelector('.lock-container'));
     }
   });
 
-  bindForm();
-
-  // ── Onboarding ──────────────────────────────────────────────────────
-
-  function showOnboarding() {
-    const container = document.querySelector('.lock-container');
-    container.textContent = '';
-
-    const steps = [
-      {
-        title: 'Welcome to IntentLock',
-        description: 'Declare your intent before browsing. Stay focused. Get things done.',
-        icon: '🔒'
-      },
-      {
-        title: 'Declare Your Intent',
-        description: 'Before opening tabs, state what you intend to accomplish. Set an optional time budget.',
-        icon: '📝'
-      },
-      {
-        title: 'Stay On Track',
-        description: 'The extension monitors your browsing. If you drift, you\'ll be interrupted and asked to reflect.',
-        icon: '🎯'
-      },
-      {
-        title: 'Review & Improve',
-        description: 'Track your sessions, see patterns, and build better browsing habits over time.',
-        icon: '📊'
-      }
-    ];
-
-    let currentStep = 0;
-    let firstRender = true;
-    let transitioning = false;
-
-    function buildStepDOM() {
-      container.textContent = '';
-
-      const step = steps[currentStep];
-
-      const header = document.createElement('div');
-      header.className = 'header';
-
-      const icon = document.createElement('div');
-      icon.className = 'onboarding-icon';
-      icon.textContent = step.icon;
-
-      const h1 = document.createElement('h1');
-      h1.textContent = step.title;
-
-      const p = document.createElement('p');
-      p.textContent = step.description;
-
-      header.append(icon, h1, p);
-      container.appendChild(header);
-
-      // Progress dots
-      const dots = document.createElement('div');
-      dots.className = 'onboarding-dots';
-      steps.forEach((_, i) => {
-        const dot = document.createElement('span');
-        dot.className = 'onboarding-dot' + (i === currentStep ? ' active' : '');
-        dots.appendChild(dot);
-      });
-      container.appendChild(dots);
-
-      // Navigation
-      const nav = document.createElement('div');
-      nav.className = 'onboarding-nav';
-
-      if (currentStep > 0) {
-        const prevBtn = document.createElement('button');
-        prevBtn.className = 'complete-btn';
-        prevBtn.textContent = 'Back';
-        prevBtn.addEventListener('click', () => {
-          currentStep--;
-          renderStep();
-        });
-        nav.appendChild(prevBtn);
-      }
-
-      const nextBtn = document.createElement('button');
-      nextBtn.textContent = currentStep === steps.length - 1 ? 'Get Started' : 'Next';
-      nextBtn.addEventListener('click', () => {
-        if (currentStep === steps.length - 1) {
-          chrome.storage.local.set({ onboardingComplete: true }, () => {
-            loadQuickIntents();
-          });
-        } else {
-          currentStep++;
-          renderStep();
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.activeSession) {
+      const session = changes.activeSession.newValue;
+      if (session && session.isActive) {
+        showActiveState(session);
+      } else {
+        if (timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
         }
-      });
-      nav.appendChild(nextBtn);
-
-      container.appendChild(nav);
-    }
-
-    function renderStep() {
-      if (transitioning) return;
-
-      if (firstRender || reducedMotion) {
-        firstRender = false;
-        buildStepDOM();
-        return;
+        document.querySelectorAll('.confirm-overlay').forEach(el => el.remove());
+        showNewSessionForm(document.querySelector('.lock-container'));
       }
-
-      transitioning = true;
-      container.style.transition = 'opacity 200ms cubic-bezier(0.2, 0, 0, 1)';
-      container.style.opacity = '0';
-
-      setTimeout(() => {
-        buildStepDOM();
-        container.offsetHeight; // force reflow
-        container.style.opacity = '1';
-        transitioning = false;
-      }, 200);
     }
-
-    renderStep();
-  }
+  });
 
   // ── Live session timer ──────────────────────────────────────────────
 
-  let timerInterval = null;
 
   function formatTime(ms) {
     const totalSeconds = Math.floor(ms / 1000);
@@ -186,16 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     parent.appendChild(timerEl);
 
     function getElapsed() {
-      let elapsed = Date.now() - session.startTime;
-      // Subtract paused time
-      if (session.pausedTime) {
-        elapsed -= session.pausedTime;
-      }
-      // If currently paused, subtract current pause duration
-      if (session.isPaused && session.pausedAt) {
-        elapsed -= (Date.now() - session.pausedAt);
-      }
-      return elapsed;
+      return Date.now() - session.startTime;
     }
 
     function tick() {
@@ -223,6 +105,19 @@ document.addEventListener('DOMContentLoaded', () => {
     return timerEl;
   }
 
+  function createHistoryEntry(session) {
+    const events = Array.isArray(session.events) ? session.events : [];
+    return {
+      id: session.id,
+      intent: session.intent,
+      startTime: session.startTime,
+      endTime: session.endTime,
+      timeBudget: session.timeBudget,
+      driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
+      totalEvents: events.length
+    };
+  }
+
   // ── Active session state ────────────────────────────────────────────
 
   function showActiveState(session) {
@@ -234,26 +129,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const header = document.createElement('div');
     header.className = 'header';
     const h1 = document.createElement('h1');
-    h1.textContent = session.isPaused ? 'Session paused' : 'Session locked';
+    h1.textContent = 'Session locked';
     const label = document.createElement('p');
     label.className = 'intent-active-label';
-    label.textContent = session.isPaused ? 'Intent on hold' : 'Intent active';
+    label.textContent = 'Intent active';
     header.append(h1, label);
     container.appendChild(header);
-
-    // Pause indicator
-    if (session.isPaused) {
-      const pauseDiv = document.createElement('div');
-      pauseDiv.className = 'session-paused';
-      const pauseLabel = document.createElement('div');
-      pauseLabel.className = 'pause-label';
-      pauseLabel.textContent = 'Paused since';
-      const pauseTime = document.createElement('div');
-      pauseTime.className = 'pause-time';
-      pauseTime.textContent = new Date(session.pausedAt).toLocaleTimeString();
-      pauseDiv.append(pauseLabel, pauseTime);
-      container.appendChild(pauseDiv);
-    }
 
     // Timer
     createTimer(session, container);
@@ -262,9 +143,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const statsDiv = document.createElement('div');
     statsDiv.className = 'session-stats';
 
-    const pageLoads = session.events.filter(e => e.actionType === 'PAGE_LOAD').length;
-    const tabSwitches = session.events.filter(e => e.actionType === 'TAB_SWITCH').length;
-    const drifts = session.events.filter(e => e.actionType === 'OVERRIDE').length;
+    const events = Array.isArray(session.events) ? session.events : [];
+    const pageLoads = events.filter(e => e.actionType === 'PAGE_LOAD').length;
+    const tabSwitches = events.filter(e => e.actionType === 'TAB_SWITCH').length;
+    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
 
     const stats = [
       { value: String(pageLoads), label: 'Pages' },
@@ -337,27 +219,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const actions = document.createElement('div');
     actions.className = 'session-actions';
 
-    // Pause/Resume button
-    const pauseBtn = document.createElement('button');
-    pauseBtn.className = 'complete-btn';
-    pauseBtn.textContent = session.isPaused ? 'Resume session' : 'Pause session';
-    pauseBtn.addEventListener('click', () => {
-      if (session.isPaused) {
-        // Resume
-        session.isPaused = false;
-        session.pausedTime = (session.pausedTime || 0) + (Date.now() - session.pausedAt);
-        delete session.pausedAt;
-      } else {
-        // Pause
-        session.isPaused = true;
-        session.pausedAt = Date.now();
-      }
-      chrome.storage.local.set({ activeSession: session }, () => {
-        showActiveState(session);
-      });
-    });
-    actions.appendChild(pauseBtn);
-
     // Complete button
     const btn = document.createElement('button');
     btn.className = 'complete-btn';
@@ -382,7 +243,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const p = document.createElement('p');
     const elapsed = Math.round((Date.now() - session.startTime) / 60000);
-    const drifts = session.events.filter(e => e.actionType === 'OVERRIDE').length;
+    const events = Array.isArray(session.events) ? session.events : [];
+    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
     p.textContent = `You've been working for ${elapsed} minutes with ${drifts} drift${drifts !== 1 ? 's' : ''}. Are you sure you want to end this session?`;
 
     const actions = document.createElement('div');
@@ -437,9 +299,14 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.addEventListener('click', () => {
       const newIntent = textarea.value.trim();
       if (newIntent && newIntent !== session.intent) {
-        session.intent = newIntent;
+        chrome.storage.local.get(['activeSession'], (result) => {
+          const currentSession = result.activeSession;
+          if (currentSession) {
+            currentSession.intent = newIntent;
+            chrome.storage.local.set({ activeSession: currentSession });
+          }
+        });
         intentTextElement.textContent = newIntent;
-        chrome.storage.local.set({ activeSession: session });
       }
       closeOverlay(overlay);
     });
@@ -467,22 +334,15 @@ document.addEventListener('DOMContentLoaded', () => {
       // Save to history
       chrome.storage.local.get(['sessionHistory'], (histResult) => {
         const history = histResult.sessionHistory || [];
-        history.push({
-          id: s.id,
-          intent: s.intent,
-          startTime: s.startTime,
-          endTime: s.endTime,
-          timeBudget: s.timeBudget,
-          driftCount: s.events.filter(e => e.actionType === 'OVERRIDE').length,
-          totalEvents: s.events.length,
-          events: s.events
-        });
+        history.push(createHistoryEntry(s));
         // Keep last 100 sessions
         if (history.length > 100) history.shift();
 
-        chrome.storage.local.set({ activeSession: s, sessionHistory: history }, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-            showSummary(container, s);
+        chrome.storage.local.set({ sessionHistory: history }, () => {
+          chrome.storage.local.remove(['activeSession', 'interventionState'], () => {
+            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+              showSummary(container, s);
+            });
           });
         });
       });
@@ -503,9 +363,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const stats = document.createElement('div');
     stats.className = 'summary-stats';
 
+    const events = Array.isArray(session.events) ? session.events : [];
     const duration = Math.round((session.endTime - session.startTime) / 60000);
-    const drifts = session.events.filter(e => e.actionType === 'OVERRIDE').length;
-    const pageLoads = session.events.filter(e => e.actionType === 'PAGE_LOAD').length;
+    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
+    const pageLoads = events.filter(e => e.actionType === 'PAGE_LOAD').length;
 
     const statItems = [
       { label: 'Duration', value: `${duration} min` },
@@ -546,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
     container.appendChild(intentBox);
 
     // Override reflections (if any)
-    const overrides = session.events.filter(e => e.actionType === 'OVERRIDE' && e.reflection);
+    const overrides = events.filter(e => e.actionType === 'OVERRIDE' && e.reflection);
     if (overrides.length > 0) {
       const reflSection = document.createElement('div');
       reflSection.className = 'plan-section';
@@ -564,131 +425,11 @@ document.addEventListener('DOMContentLoaded', () => {
       container.appendChild(reflSection);
     }
 
-    // Break prompt
-    const breakSection = document.createElement('div');
-    breakSection.className = 'break-section';
-
-    const breakLabel = document.createElement('p');
-    breakLabel.className = 'plan-heading';
-    breakLabel.textContent = 'Take a break';
-    breakSection.appendChild(breakLabel);
-
-    const breakBtns = document.createElement('div');
-    breakBtns.className = 'break-btns';
-
-    const breakDurations = [
-      { label: '3 min', minutes: 3 },
-      { label: '5 min', minutes: 5 },
-      { label: '10 min', minutes: 10 },
-      { label: '15 min', minutes: 15 }
-    ];
-
-    breakDurations.forEach(dur => {
-      const btn = document.createElement('button');
-      btn.className = 'complete-btn break-duration-btn';
-      btn.textContent = dur.label;
-      btn.addEventListener('click', () => {
-        const breakUntil = Date.now() + dur.minutes * 60000;
-        chrome.storage.local.set({ breakUntil }, () => {
-          showBreakState(breakUntil);
-        });
-      });
-      breakBtns.appendChild(btn);
-    });
-
-    breakSection.appendChild(breakBtns);
-    container.appendChild(breakSection);
-
     const skipBtn = document.createElement('button');
     skipBtn.className = 'complete-btn';
     skipBtn.textContent = 'Start new session';
-    skipBtn.style.marginTop = '8px';
     skipBtn.addEventListener('click', () => showNewSessionForm(container));
     container.appendChild(skipBtn);
-  }
-
-  // ── Break state ─────────────────────────────────────────────────────
-
-  function showBreakState(breakUntil) {
-    if (timerInterval) clearInterval(timerInterval);
-    const container = document.querySelector('.lock-container');
-    container.textContent = '';
-
-    const header = document.createElement('div');
-    header.className = 'header';
-    const h1 = document.createElement('h1');
-    h1.textContent = 'Break';
-    const p = document.createElement('p');
-    p.textContent = 'Step away. Breathe. Come back sharper.';
-    header.append(h1, p);
-    container.appendChild(header);
-
-    const countdownEl = document.createElement('div');
-    countdownEl.className = 'break-countdown';
-    container.appendChild(countdownEl);
-
-    function tickBreak() {
-      const remaining = breakUntil - Date.now();
-      if (remaining <= 0) {
-        clearInterval(timerInterval);
-        chrome.storage.local.remove(['breakUntil'], () => {
-          showNewSessionForm(container);
-        });
-        return;
-      }
-      countdownEl.textContent = formatTime(remaining);
-    }
-
-    tickBreak();
-    timerInterval = setInterval(tickBreak, 1000);
-
-    const skipBtn = document.createElement('button');
-    skipBtn.className = 'complete-btn';
-    skipBtn.textContent = 'Skip break';
-    skipBtn.style.marginTop = '24px';
-    skipBtn.addEventListener('click', () => {
-      if (timerInterval) clearInterval(timerInterval);
-      chrome.storage.local.remove(['breakUntil'], () => {
-        showNewSessionForm(container);
-      });
-    });
-    container.appendChild(skipBtn);
-  }
-
-  // ── Quick intents ───────────────────────────────────────────────────
-
-  function loadQuickIntents() {
-    chrome.storage.local.get(['quickIntents'], (result) => {
-      const intents = result.quickIntents || [];
-      if (intents.length === 0) return;
-
-      const container = document.querySelector('.lock-container');
-      const form = document.getElementById('intent-form');
-      if (!form) return;
-
-      const quickSection = document.createElement('div');
-      quickSection.className = 'quick-intents';
-
-      const quickLabel = document.createElement('p');
-      quickLabel.className = 'plan-heading';
-      quickLabel.textContent = 'Quick start';
-      quickSection.appendChild(quickLabel);
-
-      intents.forEach(qi => {
-        const btn = document.createElement('button');
-        btn.className = 'quick-intent-btn';
-        btn.textContent = qi.intent.length > 50 ? qi.intent.slice(0, 50) + '...' : qi.intent;
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          document.getElementById('intent-input').value = qi.intent;
-          if (qi.timeBudget) document.getElementById('time-budget').value = qi.timeBudget;
-        });
-        quickSection.appendChild(btn);
-      });
-
-      // Insert before the form
-      container.insertBefore(quickSection, form);
-    });
   }
 
   // ── New session form (post-session) ─────────────────────────────────
@@ -705,24 +446,6 @@ document.addEventListener('DOMContentLoaded', () => {
     p.textContent = 'Declare what you intend to do.';
     header.append(h1, p);
     container.appendChild(header);
-
-    // Check for API key
-    chrome.storage.local.get(['openaiApiKey'], (result) => {
-      if (!result.openaiApiKey) {
-        const apiNotice = document.createElement('div');
-        apiNotice.className = 'api-notice';
-        const noticeText = document.createElement('p');
-        noticeText.textContent = 'Add an OpenAI API key in Settings to enable AI-powered drift detection.';
-        const noticeBtn = document.createElement('button');
-        noticeBtn.className = 'complete-btn';
-        noticeBtn.textContent = 'Open Settings';
-        noticeBtn.addEventListener('click', () => {
-          chrome.runtime.openOptionsPage();
-        });
-        apiNotice.append(noticeText, noticeBtn);
-        container.appendChild(apiNotice);
-      }
-    });
 
     const form = document.createElement('form');
     form.id = 'intent-form';
@@ -745,58 +468,59 @@ document.addEventListener('DOMContentLoaded', () => {
     timeLabel.setAttribute('for', 'time-budget');
     timeLabel.textContent = 'Time budget (minutes)';
     const timeInput = document.createElement('input');
-    timeInput.type = 'number';
+    timeInput.type = 'text';
+    timeInput.inputMode = 'numeric';
+    timeInput.pattern = '[0-9]*';
     timeInput.id = 'time-budget';
-    timeInput.min = '1';
-    timeInput.max = '480';
+    timeInput.autocomplete = 'off';
     timeInput.placeholder = '30';
     timeGroup.append(timeLabel, timeInput);
-
-    // Tags
-    const tagsGroup = document.createElement('div');
-    tagsGroup.className = 'input-group';
-    const tagsLabel = document.createElement('label');
-    tagsLabel.textContent = 'Category (optional)';
-    const tagsContainer = document.createElement('div');
-    tagsContainer.className = 'tags-container';
-    tagsContainer.id = 'tags-container';
-
-    const categories = ['Work', 'Learning', 'Research', 'Creative', 'Admin', 'Personal'];
-    categories.forEach(cat => {
-      const tag = document.createElement('button');
-      tag.type = 'button';
-      tag.className = 'tag';
-      tag.textContent = cat;
-      tag.dataset.category = cat;
-      tag.addEventListener('click', () => {
-        // Toggle selection
-        tagsContainer.querySelectorAll('.tag').forEach(t => t.classList.remove('selected'));
-        tag.classList.add('selected');
-      });
-      tagsContainer.appendChild(tag);
-    });
-
-    tagsGroup.append(tagsLabel, tagsContainer);
 
     const btn = document.createElement('button');
     btn.type = 'submit';
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    // Save as quick intent toggle
-    const saveRow = document.createElement('div');
-    saveRow.className = 'toggle-row';
-    saveRow.style.marginTop = '16px';
-    const saveCheck = document.createElement('input');
-    saveCheck.type = 'checkbox';
-    saveCheck.id = 'save-quick';
-    const saveLabel = document.createElement('label');
-    saveLabel.setAttribute('for', 'save-quick');
-    saveLabel.textContent = 'Save as quick intent';
-    saveRow.append(saveCheck, saveLabel);
-
-    form.append(intentGroup, timeGroup, tagsGroup, btn, saveRow);
+    form.append(intentGroup, timeGroup, btn);
     container.appendChild(form);
+
+    // Check for API key
+    const getApiKeyFromStorage = (callback) => {
+      if (chrome.storage.session) {
+        chrome.storage.session.get(['openaiApiKey'], (sessionResult) => {
+          if (sessionResult && sessionResult.openaiApiKey) {
+            callback(sessionResult.openaiApiKey);
+          } else {
+            chrome.storage.local.get(['openaiApiKey'], (localResult) => {
+              callback(localResult ? localResult.openaiApiKey || null : null);
+            });
+          }
+        });
+      } else {
+        chrome.storage.local.get(['openaiApiKey'], (localResult) => {
+          callback(localResult ? localResult.openaiApiKey || null : null);
+        });
+      }
+    };
+
+    getApiKeyFromStorage((apiKey) => {
+      if (!apiKey) {
+        const apiNotice = document.createElement('div');
+        apiNotice.className = 'api-notice';
+        const noticeText = document.createElement('p');
+        noticeText.textContent = 'Add an OpenAI API key in Settings to enable AI-powered drift detection.';
+        const noticeBtn = document.createElement('button');
+        noticeBtn.className = 'complete-btn';
+        noticeBtn.textContent = 'Open settings';
+        noticeBtn.addEventListener('click', () => {
+          chrome.runtime.openOptionsPage();
+        });
+        apiNotice.append(noticeText, noticeBtn);
+        if (form && form.parentNode === container) {
+          container.insertBefore(apiNotice, form);
+        }
+      }
+    });
 
     const statusMsg = document.createElement('div');
     statusMsg.id = 'status-message';
@@ -810,44 +534,6 @@ document.addEventListener('DOMContentLoaded', () => {
     shortcutsBtn.innerHTML = '?';
     shortcutsBtn.addEventListener('click', showShortcutsModal);
     container.appendChild(shortcutsBtn);
-
-    // Load quick intents
-    chrome.storage.local.get(['quickIntents'], (result) => {
-      const intents = result.quickIntents || [];
-      if (intents.length > 0) {
-        const quickSection = document.createElement('div');
-        quickSection.className = 'quick-intents';
-        const quickLabel = document.createElement('p');
-        quickLabel.className = 'plan-heading';
-        quickLabel.textContent = 'Quick start';
-        quickSection.appendChild(quickLabel);
-
-        intents.forEach(qi => {
-          const qBtn = document.createElement('button');
-          qBtn.className = 'quick-intent-btn';
-          qBtn.type = 'button';
-          qBtn.textContent = qi.intent.length > 50 ? qi.intent.slice(0, 50) + '...' : qi.intent;
-          qBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            intentInput.value = qi.intent;
-            if (qi.timeBudget) timeInput.value = qi.timeBudget;
-            // Select category if saved
-            if (qi.category) {
-              tagsContainer.querySelectorAll('.tag').forEach(t => {
-                if (t.dataset.category === qi.category) {
-                  t.classList.add('selected');
-                } else {
-                  t.classList.remove('selected');
-                }
-              });
-            }
-          });
-          quickSection.appendChild(qBtn);
-        });
-
-        container.insertBefore(quickSection, form);
-      }
-    });
 
     bindForm();
   }
@@ -931,13 +617,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const intentInput = document.getElementById('intent-input');
       const timeBudgetInput = document.getElementById('time-budget');
       const startBtn = document.getElementById('start-btn');
-      const saveQuick = document.getElementById('save-quick');
       const intent = intentInput.value.trim();
       const timeBudget = parseInt(timeBudgetInput.value, 10);
-
-      // Get selected category
-      const selectedTag = document.querySelector('.tag.selected');
-      const category = selectedTag ? selectedTag.dataset.category : null;
 
       if (!intent) {
         const msg = document.getElementById('status-message');
@@ -955,26 +636,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      if (!isNaN(timeBudget) && (timeBudget < 1 || timeBudget > 480)) {
+        const msg = document.getElementById('status-message');
+        msg.textContent = 'Time budget must be between 1 and 480 minutes.';
+        msg.classList.remove('hidden');
+        msg.style.display = 'block';
+        msg.style.opacity = '1';
+        timeBudgetInput.focus();
+        return;
+      }
+
       startBtn.disabled = true;
       startBtn.textContent = 'Generating plan...';
-
-      // Save as quick intent if checked
-      if (saveQuick && saveQuick.checked) {
-        chrome.storage.local.get(['quickIntents'], (result) => {
-          const intents = result.quickIntents || [];
-          // Avoid duplicates
-          if (!intents.some(qi => qi.intent === intent)) {
-            intents.push({ 
-              intent, 
-              timeBudget: isNaN(timeBudget) ? null : timeBudget,
-              category: category
-            });
-            // Keep max 10
-            if (intents.length > 10) intents.shift();
-            chrome.storage.local.set({ quickIntents: intents });
-          }
-        });
-      }
 
       const sessionData = {
         id: crypto.randomUUID(),
@@ -983,10 +656,7 @@ document.addEventListener('DOMContentLoaded', () => {
         timeBudget: isNaN(timeBudget) ? null : timeBudget,
         isActive: true,
         events: [],
-        plan: [],
-        category: category,
-        isPaused: false,
-        pausedTime: 0
+        plan: []
       };
 
       generateIntentPlan(intent).then(plan => {
