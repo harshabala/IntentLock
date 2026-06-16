@@ -532,10 +532,16 @@ document.addEventListener('DOMContentLoaded', () => {
       input.addEventListener('input', () => {
         input.style.borderColor = '';
       });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          lockInBtn.click();
+        }
+      });
     }
 
     function finishOnboarding() {
       chrome.storage.local.set({ hasSeenOnboarding: true }, () => {
+        if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
         showNewSessionForm(container);
       });
     }
