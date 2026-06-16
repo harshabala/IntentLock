@@ -220,7 +220,11 @@ function loadConfig() {
       }
       if (Array.isArray(data.overrideCooldowns)) {
         overrideCooldowns.clear();
-        data.overrideCooldowns.forEach(([k, v]) => overrideCooldowns.set(k, v));
+        data.overrideCooldowns.forEach((entry) => {
+          if (Array.isArray(entry) && entry.length === 2) {
+            overrideCooldowns.set(entry[0], entry[1]);
+          }
+        });
       } else {
         overrideCooldowns.clear();
       }

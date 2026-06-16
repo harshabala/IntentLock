@@ -23,6 +23,7 @@ globalThis.chrome = {
     onCommand: { addListener: () => {} }
   },
   runtime: {
+    lastError: undefined,
     onMessage: {
       addListener: (listener) => {
         messageListeners.push(listener);
@@ -195,7 +196,8 @@ test('Set Cooldown on Override sets a cooldown in memory and local storage', asy
   assert.ok(overrideCooldowns.has('facebook.com'), 'cooldown map should have facebook.com');
   const expiry = overrideCooldowns.get('facebook.com');
   assert.ok(expiry > now, 'cooldown expiry should be in the future');
-  assert.ok(expiry <= now + 5 * 60 * 1000, 'cooldown expiry should be within 5 minutes');
+  // Allow a 1000ms timing buffer to avoid race conditions with Date.now()
+  assert.ok(expiry <= now + 5 * 60 * 1000 + 1000, 'cooldown expiry should be within 5 minutes');
 
   // Check local storage persistence
   assert.ok(Array.isArray(storageData.overrideCooldowns), 'overrideCooldowns should be saved to local storage');
