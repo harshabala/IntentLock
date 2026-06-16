@@ -27,9 +27,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let timerInterval = null;
 
-  chrome.storage.local.get(['activeSession'], (result) => {
+  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding'], (result) => {
     if (result.activeSession && result.activeSession.isActive) {
       showActiveState(result.activeSession);
+    } else if (!result.hasSeenOnboarding) {
+      showOnboardingWizard(document.querySelector('.lock-container'));
     } else {
       showNewSessionForm(document.querySelector('.lock-container'));
     }
@@ -430,6 +432,115 @@ document.addEventListener('DOMContentLoaded', () => {
     skipBtn.textContent = 'Start new session';
     skipBtn.addEventListener('click', () => showNewSessionForm(container));
     container.appendChild(skipBtn);
+  }
+
+  // ── Onboarding wizard ────────────────────────────────────────────────
+
+  function showOnboardingWizard(container) {
+    function showStep1() {
+      container.textContent = '';
+
+      const header = document.createElement('div');
+      header.className = 'header onboarding-header';
+
+      const h1 = document.createElement('h1');
+      h1.textContent = 'WELCOME TO INTENTLOCK';
+
+      const desc = document.createElement('p');
+      desc.textContent = 'IntentLock is a minimalist tool designed to keep you focused. Before you start browsing, you declare your intent. If you drift off-task, the extension intervenes to help you stay aligned.';
+
+      header.append(h1, desc);
+      container.appendChild(header);
+
+      const nextBtn = document.createElement('button');
+      nextBtn.type = 'button';
+      nextBtn.className = 'primary-btn onboarding-btn';
+      nextBtn.textContent = 'NEXT';
+      nextBtn.addEventListener('click', showStep2);
+      container.appendChild(nextBtn);
+    }
+
+    function showStep2() {
+      container.textContent = '';
+
+      const header = document.createElement('div');
+      header.className = 'header onboarding-header';
+
+      const h1 = document.createElement('h1');
+      h1.textContent = 'ENABLE AI-POWERED ALIGNMENT';
+
+      const desc = document.createElement('p');
+      desc.textContent = 'Configure an OpenAI API key to enable semantic drift detection and automatic action-plan generation. If skipped, the extension will fall back to local heuristics.';
+
+      header.append(h1, desc);
+      container.appendChild(header);
+
+      const inputGroup = document.createElement('div');
+      inputGroup.className = 'input-group onboarding-input-group';
+
+      const label = document.createElement('label');
+      label.setAttribute('for', 'onboarding-api-key');
+      label.textContent = 'API Key';
+
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.id = 'onboarding-api-key';
+      input.placeholder = 'sk-...';
+      input.autocomplete = 'new-password';
+
+      inputGroup.append(label, input);
+      container.appendChild(inputGroup);
+
+      const securityNotice = document.createElement('p');
+      securityNotice.className = 'security-notice';
+      securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
+      container.appendChild(securityNotice);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'onboarding-actions';
+
+      const skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'complete-btn onboarding-skip-btn';
+      skipBtn.textContent = 'SKIP';
+      skipBtn.addEventListener('click', finishOnboarding);
+
+      const lockInBtn = document.createElement('button');
+      lockInBtn.type = 'button';
+      lockInBtn.className = 'primary-btn onboarding-lock-btn';
+      lockInBtn.textContent = 'LOCK IN';
+      lockInBtn.addEventListener('click', () => {
+        const apiKey = input.value.trim();
+        if (apiKey) {
+          const storageArea = chrome.storage.session || chrome.storage.local;
+          storageArea.set({ openaiApiKey: apiKey }, () => {
+            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+              if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError);
+              finishOnboarding();
+            });
+          });
+        } else {
+          input.focus();
+          input.style.borderColor = 'var(--error)';
+        }
+      });
+
+      actionsRow.append(skipBtn, lockInBtn);
+      container.appendChild(actionsRow);
+
+      input.focus();
+      input.addEventListener('input', () => {
+        input.style.borderColor = '';
+      });
+    }
+
+    function finishOnboarding() {
+      chrome.storage.local.set({ hasSeenOnboarding: true }, () => {
+        showNewSessionForm(container);
+      });
+    }
+
+    showStep1();
   }
 
   // ── New session form (post-session) ─────────────────────────────────

@@ -10,7 +10,7 @@
   --bg-surface: #111111;
   --text-primary: #ffffff;
   --text-secondary: #888888;
-  --text-muted: #555555;
+  --text-muted: #9a9a9a;
   --border: #222222;
   --border-focus: #ffffff;
   --accent: #ffffff;
@@ -27,7 +27,7 @@
     --bg-surface: #f0f0f0;
     --text-primary: #000000;
     --text-secondary: #666666;
-    --text-muted: #999999;
+    --text-muted: #767676;
     --border: #e0e0e0;
     --border-focus: #000000;
     --accent: #000000;
@@ -42,7 +42,7 @@
   --bg-surface: #111111;
   --text-primary: #ffffff;
   --text-secondary: #888888;
-  --text-muted: #555555;
+  --text-muted: #9a9a9a;
   --border: #222222;
   --border-focus: #ffffff;
   --accent: #ffffff;
@@ -55,7 +55,7 @@
   --bg-surface: #f0f0f0;
   --text-primary: #000000;
   --text-secondary: #666666;
-  --text-muted: #999999;
+  --text-muted: #767676;
   --border: #e0e0e0;
   --border-focus: #000000;
   --accent: #000000;
@@ -76,9 +76,12 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh;
+  min-height: 100vh;
+  height: auto;
   margin: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -98,9 +101,9 @@ body {
 }
 
 .header h1 {
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.3em;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--text-primary);
   margin-bottom: 16px;
@@ -193,12 +196,23 @@ button {
 }
 
 button:hover {
-  opacity: 0.8;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+  opacity: 1;
 }
 
 button:active {
   opacity: 0.6;
   transform: scale(0.97);
+}
+
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
 }
 
 button:disabled {
@@ -214,10 +228,12 @@ button:disabled {
 /* Status message */
 #status-message {
   margin-top: 20px;
-  text-align: center;
+  text-align: left;
   font-size: 0.75rem;
-  color: var(--error);
+  color: var(--text-primary);
   letter-spacing: 0.05em;
+  border-left: 2px solid var(--text-primary);
+  padding-left: 12px;
 }
 
 /* ==========================================================================
@@ -264,7 +280,8 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   cursor: pointer;
-  padding: 4px 8px;
+  min-height: 40px;
+  padding: 10px 12px;
   width: auto;
   flex-shrink: 0;
 }
@@ -354,7 +371,8 @@ button:disabled {
 }
 
 .complete-btn:hover {
-  color: var(--text-primary);
+  background-color: var(--text-primary);
+  color: var(--bg);
   border-color: var(--text-primary);
   opacity: 1;
 }
@@ -377,6 +395,46 @@ button:disabled {
 
 body.intervention {
   background-color: var(--bg);
+}
+
+body.intervention::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.015) 2px,
+    rgba(255, 255, 255, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 999;
+}
+
+@media (prefers-color-scheme: light) {
+  body.intervention::before {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.02) 2px,
+      rgba(0, 0, 0, 0.02) 4px
+    );
+  }
+}
+
+:root.theme-light body.intervention::before {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.02) 2px,
+    rgba(0, 0, 0, 0.02) 4px
+  );
 }
 
 body.intervention .lock-container {
@@ -606,12 +664,29 @@ body.popup .header::after {
   font-variant-numeric: tabular-nums;
 }
 
+@keyframes borderPulse {
+  0%, 100% { border-color: var(--text-primary); }
+  50% { border-color: var(--text-muted); }
+}
+
+.timer-exceeded {
+  border: 1px solid var(--text-primary);
+  padding: 16px;
+}
+
 .timer-exceeded .timer-value {
-  opacity: 0.6;
+  opacity: 1;
 }
 
 .timer-exceeded .timer-label {
   color: var(--text-primary);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .timer-exceeded {
+    animation: borderPulse 2s ease-in-out infinite;
+  }
 }
 
 /* ==========================================================================
@@ -666,70 +741,13 @@ body.popup .header::after {
   border-bottom: none;
 }
 
-/* ==========================================================================
-   Break countdown
-   ========================================================================== */
-
-.break-countdown {
-  text-align: center;
-  font-size: 3rem;
-  font-weight: 200;
-  color: var(--text-primary);
-  letter-spacing: 0.15em;
-  padding: 32px 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.break-section {
-  margin-bottom: 24px;
-}
-
-.break-btns {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.break-duration-btn {
-  padding: 10px;
-  font-size: 0.7rem;
-}
-
-/* ==========================================================================
-   Quick intents
-   ========================================================================== */
-
-.quick-intents {
-  margin-bottom: 24px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
-}
-
-.quick-intent-btn {
-  background-color: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  text-align: left;
-  font-size: 0.75rem;
-  padding: 10px 14px;
-  margin-bottom: 6px;
-  text-transform: none;
-  letter-spacing: 0.02em;
-}
-
-.quick-intent-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--text-primary);
-  opacity: 1;
-}
-
 /* Keyboard shortcuts button */
 .shortcuts-btn {
   position: fixed;
   bottom: 20px;
   right: 20px;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   background-color: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -746,48 +764,13 @@ body.popup .header::after {
   opacity: 1;
 }
 
-/* Quick intents in options */
-.quick-intent-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.quick-intent-text {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-right: 12px;
-}
-
-.quick-intent-remove {
-  width: auto;
-  background: transparent;
-  color: var(--text-muted);
-  border: none;
-  font-size: 1rem;
-  padding: 4px 8px;
-  cursor: pointer;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.quick-intent-remove:hover {
-  color: var(--text-primary);
-  opacity: 1;
-}
-
 /* ==========================================================================
    History page
    ========================================================================== */
 
 .history-card {
   cursor: default;
+  border-left: 3px solid transparent;
 }
 
 .history-header-row {
@@ -803,18 +786,6 @@ body.popup .header::after {
   line-height: 1.6;
   margin-bottom: 8px;
   flex: 1;
-}
-
-.history-category {
-  display: inline-block;
-  background-color: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  padding: 4px 10px;
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin-bottom: 12px;
 }
 
 .history-meta {
@@ -856,21 +827,6 @@ body.popup .header::after {
   color: var(--text-primary);
 }
 
-/* ==========================================================================
-   Onboarding
-   ========================================================================== */
-
-.onboarding-icon {
-  font-size: 3rem;
-  margin-bottom: 16px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .onboarding-icon {
-    animation: pulse 2s ease-in-out infinite;
-  }
-}
-
 /* API key notice */
 .api-notice {
   border: 1px solid var(--border);
@@ -889,40 +845,6 @@ body.popup .header::after {
 .api-notice button {
   width: auto;
   padding: 8px 16px;
-}
-
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-}
-
-.onboarding-dots {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin: 32px 0;
-}
-
-.onboarding-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--border);
-  transition: all var(--transition);
-}
-
-.onboarding-dot.active {
-  background-color: var(--text-primary);
-  transform: scale(1.3);
-}
-
-.onboarding-nav {
-  display: flex;
-  gap: 12px;
-}
-
-.onboarding-nav button {
-  flex: 1;
 }
 
 /* ==========================================================================
@@ -1022,31 +944,6 @@ body.popup .header::after {
 }
 
 /* ==========================================================================
-   Pause indicator
-   ========================================================================== */
-
-.session-paused {
-  text-align: center;
-  padding: 12px;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border);
-  margin-bottom: 24px;
-}
-
-.session-paused .pause-label {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  margin-bottom: 4px;
-}
-
-.session-paused .pause-time {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
-/* ==========================================================================
    Keyboard shortcuts modal
    ========================================================================== */
 
@@ -1085,85 +982,6 @@ body.popup .header::after {
   text-transform: uppercase;
   color: var(--text-primary);
   margin-bottom: 20px;
-}
-
-/* Event log */
-.event-log-content {
-  max-width: 500px;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-
-.event-list {
-  margin-bottom: 20px;
-}
-
-.event-row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.75rem;
-}
-
-.event-row:last-child {
-  border-bottom: none;
-}
-
-.event-time {
-  color: var(--text-muted);
-  min-width: 70px;
-}
-
-.event-type {
-  min-width: 90px;
-  padding: 2px 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.6rem;
-  border: 1px solid var(--border);
-  text-align: center;
-}
-
-.event-type-page_load {
-  color: var(--text-secondary);
-}
-
-.event-type-tab_switch {
-  color: var(--text-muted);
-}
-
-.event-type-override {
-  color: var(--text-primary);
-  border-color: var(--text-primary);
-}
-
-.event-details {
-  color: var(--text-secondary);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Events button */
-.events-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  padding: 8px 0;
-  cursor: pointer;
-  text-transform: none;
-  letter-spacing: 0.02em;
-  width: auto;
-  margin-top: 8px;
-}
-
-.events-btn:hover {
-  color: var(--text-primary);
-  opacity: 1;
 }
 
 .shortcut-row {
@@ -1220,6 +1038,7 @@ body.popup .header::after {
   letter-spacing: 0.1em;
   cursor: pointer;
   transition: all var(--transition);
+  min-height: 40px;
   width: auto;
 }
 
@@ -1231,40 +1050,6 @@ body.popup .header::after {
 .theme-btn.active {
   background-color: var(--text-primary);
   color: var(--bg);
-}
-
-/* ==========================================================================
-   Tags
-   ========================================================================== */
-
-.tags-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.tag {
-  background-color: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  padding: 6px 12px;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  cursor: pointer;
-  transition: all var(--transition);
-}
-
-.tag:hover {
-  border-color: var(--text-primary);
-  color: var(--text-primary);
-}
-
-.tag.selected {
-  background-color: var(--text-primary);
-  color: var(--bg);
-  border-color: var(--text-primary);
 }
 
 /* ==========================================================================
@@ -1317,6 +1102,7 @@ body.popup .header::after {
   letter-spacing: 0.1em;
   cursor: pointer;
   transition: all var(--transition);
+  min-height: 40px;
   width: auto;
 }
 
@@ -1329,58 +1115,6 @@ body.popup .header::after {
 .filter-btn.active {
   border-color: var(--text-primary);
   color: var(--text-primary);
-}
-
-/* ==========================================================================
-   Favorite button
-   ========================================================================== */
-
-.favorite-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 1rem;
-  padding: 4px;
-  cursor: pointer;
-  transition: color var(--transition);
-  width: auto;
-}
-
-.favorite-btn:hover {
-  color: var(--text-primary);
-  opacity: 1;
-}
-
-.favorite-btn.favorited {
-  color: var(--text-primary);
-}
-
-/* ==========================================================================
-   Notification badge
-   ========================================================================== */
-
-.notification-badge {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  background-color: var(--text-primary);
-  color: var(--bg);
-  padding: 12px 20px;
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-  z-index: 1001;
-  animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  transition: opacity 200ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.notification-badge.closing {
-  opacity: 0;
-  transform: translateX(100%);
-}
-
-@keyframes slideIn {
-  from { transform: translateX(100%); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
 }
 
 /* ==========================================================================
@@ -1402,3 +1136,76 @@ body.popup .header::after {
     scroll-behavior: auto !important;
   }
 }
+
+@media (max-width: 520px) {
+  body {
+    align-items: flex-start;
+    padding: 20px;
+  }
+
+  .lock-container {
+    padding: 24px 0;
+  }
+
+  .header {
+    margin-bottom: 32px;
+  }
+
+  .section {
+    padding: 24px;
+  }
+
+  .confirm-actions,
+  .theme-toggle {
+    flex-direction: column;
+  }
+}
+
+/* ==========================================================================
+   Onboarding Wizard
+   ========================================================================== */
+
+.onboarding-header h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.onboarding-header p {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  line-height: 1.6;
+}
+
+.onboarding-input-group {
+  margin-top: 32px;
+  margin-bottom: 16px;
+}
+
+.security-notice {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 16px;
+  margin-bottom: 24px;
+  letter-spacing: 0.02em;
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.onboarding-actions button {
+  flex: 1;
+}
+
+.onboarding-btn {
+  margin-top: 32px;
+}
+
