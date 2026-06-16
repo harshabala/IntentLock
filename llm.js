@@ -7,9 +7,40 @@
 
 const LLM_API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
+function cleanJsonString(str) {
+  if (typeof str !== 'string') return '';
+  let cleaned = str.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "");
+  }
+  return cleaned.trim();
+}
+
 async function getApiKey() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['openaiApiKey'], (res) => resolve(res.openaiApiKey || null));
+    if (typeof chrome === 'undefined' || !chrome.storage) {
+      resolve(null);
+      return;
+    }
+    if (chrome.storage.session) {
+      chrome.storage.session.get(['openaiApiKey'], (sessionRes) => {
+        if (sessionRes && sessionRes.openaiApiKey) {
+          resolve(sessionRes.openaiApiKey);
+        } else if (chrome.storage.local) {
+          chrome.storage.local.get(['openaiApiKey'], (localRes) => {
+            resolve(localRes ? localRes.openaiApiKey || null : null);
+          });
+        } else {
+          resolve(null);
+        }
+      });
+    } else if (chrome.storage.local) {
+      chrome.storage.local.get(['openaiApiKey'], (localRes) => {
+        resolve(localRes ? localRes.openaiApiKey || null : null);
+      });
+    } else {
+      resolve(null);
+    }
   });
 }
 
@@ -48,20 +79,21 @@ async function checkDriftLLM(intent, url, history) {
         model: "gpt-4o-mini", // fast model for low latency
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
-        max_tokens: 50
+        max_tokens: 50,
+        response_format: { type: "json_object" }
       })
     });
 
     if (!response.ok) {
        console.error("LLM evaluation failed", response.status);
        return { isAligned: true, confidence: 0 }; 
-    }
+     }
 
     const data = await response.json();
-    const resultText = data.choices[0].message.content.trim();
+    const resultText = cleanJsonString(data.choices[0].message.content);
     const result = JSON.parse(resultText);
 
-    if (typeof result.aligned !== 'boolean' || typeof result.confidence !== 'number') {
+    if (!result || typeof result.aligned !== 'boolean' || typeof result.confidence !== 'number') {
       console.warn("Unexpected LLM response shape:", result);
       return { isAligned: true, confidence: 0 };
     }
@@ -88,7 +120,7 @@ async function generateIntentPlan(intent) {
   const prompt = `
     The user declared the following intent for their browsing session: "${intent}"
     Create a very concise, practical 3-step checklist for them to accomplish this.
-    Respond ONLY in strict JSON format: ["Step 1", "Step 2", "Step 3"]
+    Respond ONLY in strict JSON format: {"steps": ["Step 1", "Step 2", "Step 3"]}
   `;
 
   try {
@@ -102,20 +134,29 @@ async function generateIntentPlan(intent) {
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
-        max_tokens: 100
+        max_tokens: 100,
+        response_format: { type: "json_object" }
       })
     });
 
     if (!response.ok) return [];
 
     const data = await response.json();
-    const parsed = JSON.parse(data.choices[0].message.content.trim());
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(step => typeof step === 'string').slice(0, 3);
+    const resultText = cleanJsonString(data.choices[0].message.content);
+    const parsed = JSON.parse(resultText);
+    let steps = [];
+    if (parsed && Array.isArray(parsed.steps)) {
+      steps = parsed.steps;
+    } else if (Array.isArray(parsed)) {
+      steps = parsed;
+    } else {
+      return [];
+    }
+    return steps.filter(step => typeof step === 'string').slice(0, 3);
   } catch (err) {
     console.error("Plan generation error:", err);
     return [];
   }
 }
 
-export { checkDriftLLM, generateIntentPlan };
+export { checkDriftLLM, generateIntentPlan, cleanJsonString };
