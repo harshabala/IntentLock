@@ -14,12 +14,13 @@
 
     <div class="section">
       <h2>LLM Configuration</h2>
-      <p>An OpenAI API key enables intent parsing and drift detection. Keys are stored locally.</p>
+      <p>An OpenAI API key enables intent parsing and drift detection. For security, your key is stored in secure session memory and cleared when the browser is closed.</p>
 
       <div class="input-group">
         <label for="api-key">OpenAI API Key</label>
         <input type="password" id="api-key" placeholder="sk-...">
       </div>
+      <p class="notice" style="font-size: 0.85em; opacity: 0.8; margin-top: 4px; margin-bottom: 12px;">Note: API key is stored in transient session storage and will be cleared when the browser is closed.</p>
 
       <button id="save-key-btn">Save key</button>
       <div id="key-status" class="hidden status-feedback"></div>
@@ -39,13 +40,6 @@
     </div>
 
     <div class="section">
-      <h2>Quick intents</h2>
-      <p>Manage saved quick-start intents.</p>
-      <div id="quick-intents-list"></div>
-      <div id="quick-status" class="hidden status-feedback"></div>
-    </div>
-
-    <div class="section">
       <h2>Privacy &amp; data</h2>
       <p>Manage what the extension tracks on your local machine.</p>
 
@@ -57,6 +51,18 @@
       <button id="export-btn" class="complete-btn">Export session history (JSON)</button>
       <button id="delete-data-btn" class="danger-btn" style="margin-top: 8px;">Delete all data</button>
       <div id="data-status" class="hidden status-feedback"></div>
+    </div>
+
+    <div class="section">
+      <h2>Appearance</h2>
+      <p>Choose your preferred color scheme.</p>
+
+      <div class="theme-toggle">
+        <button class="theme-btn" data-theme="auto">Auto</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+      </div>
+      <div id="theme-status" class="hidden status-feedback"></div>
     </div>
   </div>
 
