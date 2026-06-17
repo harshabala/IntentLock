@@ -1,10 +1,16 @@
 # IntentLock Changelog
 
-## Unreleased
+## [1.2.1] - 2026-06-17
+
+### Added
+- Migrated OpenAI API key to secure session memory (`chrome.storage.session`) with automatic local storage migration on startup/options load.
+- Added a minimalist 2-step onboarding wizard for first-run users.
+- Added comprehensive unit tests for per-domain override cooldown logic.
 
 ### Fixed
-
-- Fixed: infinite intervention loop after override via 5-minute per-domain cooldown (`intervention.js`, `background.js`)
+- Scoped down host permissions in `manifest.json` from `<all_urls>` to explicit web protocols (`http://*/*` and `https://*/*`).
+- Cleaned up state parser and options data resetting logic.
+- Fixed an infinite intervention loop after override via the 5-minute per-domain cooldown.
 
 ## Version 1.2 — V1 Scope Tightening
 
