@@ -561,6 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
     intentInput.placeholder = 'Research Python decorators for the new module...';
     intentInput.required = true;
     intentInput.autofocus = true;
+    intentInput.maxLength = 250;
     intentGroup.append(intentLabel, intentInput);
 
     const timeGroup = document.createElement('div');

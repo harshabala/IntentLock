@@ -92,4 +92,14 @@ test('newtab.html contains intent-input textarea with maxlength attribute', asyn
   assert.ok(!isNaN(limit) && limit > 0, `maxlength limit should be a valid positive integer, got ${limit}`);
 });
 
+test('newtab.js enforces maxLength on dynamically created textareas', async () => {
+  const code = await text('newtab.js');
+  
+  // Verify edit intent textarea has maxLength set
+  assert.ok(code.includes('.maxLength = 250') || code.includes('.maxLength=250'), 'edit intent textarea should set maxLength');
+  
+  // Verify dynamic intentInput in showNewSessionForm has maxLength set
+  assert.match(code, /intentInput\.maxLength\s*=\s*\d+/);
+});
+
 
