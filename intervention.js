@@ -20,6 +20,10 @@ document.addEventListener('DOMContentLoaded', () => {
   returnBtn.addEventListener('click', () => {
     chrome.storage.local.remove(['interventionState'], () => {
       chrome.tabs.getCurrent((tab) => {
+        if (chrome.runtime.lastError || !tab) {
+          console.error("Could not get current tab:", chrome.runtime.lastError);
+          return;
+        }
         chrome.tabs.remove(tab.id);
       });
     });
@@ -32,16 +36,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
       if (result.activeSession) {
+        const originalUrl = result.interventionState ? result.interventionState.originalUrl : null;
+        result.activeSession.events = Array.isArray(result.activeSession.events) ? result.activeSession.events : [];
         result.activeSession.events.push({
           timestamp: Date.now(),
           actionType: 'OVERRIDE',
+          url: originalUrl,
           reflection: reflection
         });
 
         chrome.storage.local.set({ activeSession: result.activeSession }, () => {
           chrome.runtime.sendMessage({ type: 'OVERRIDE_INTERVENTION', sessionData: result.activeSession });
 
-          const originalUrl = result.interventionState ? result.interventionState.originalUrl : null;
           chrome.storage.local.remove(['interventionState'], () => {
             if (originalUrl) {
               window.location.href = originalUrl;

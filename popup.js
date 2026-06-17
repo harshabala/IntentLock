@@ -1,6 +1,19 @@
 document.addEventListener('DOMContentLoaded', () => {
   const content = document.getElementById('content');
 
+  function createHistoryEntry(session) {
+    const events = Array.isArray(session.events) ? session.events : [];
+    return {
+      id: session.id,
+      intent: session.intent,
+      startTime: session.startTime,
+      endTime: session.endTime,
+      timeBudget: session.timeBudget,
+      driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
+      totalEvents: events.length
+    };
+  }
+
   chrome.storage.local.get(['activeSession'], (result) => {
     const session = result.activeSession;
 
@@ -59,26 +72,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
       chrome.storage.local.get(['sessionHistory'], (histResult) => {
         const history = histResult.sessionHistory || [];
-        history.push({
-          id: session.id,
-          intent: session.intent,
-          startTime: session.startTime,
-          endTime: session.endTime,
-          timeBudget: session.timeBudget,
-          driftCount: session.events.filter(e => e.actionType === 'OVERRIDE').length,
-          totalEvents: session.events.length,
-          events: session.events
-        });
+        history.push(createHistoryEntry(session));
         if (history.length > 100) history.shift();
 
-        chrome.storage.local.set({ activeSession: session, sessionHistory: history }, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-          content.textContent = '';
-          const p = document.createElement('p');
-          p.className = 'no-session';
-          p.textContent = 'Session ended.';
-          content.appendChild(p);
-          addFooterLinks(content);
+        chrome.storage.local.set({ sessionHistory: history }, () => {
+          chrome.storage.local.remove(['activeSession', 'interventionState'], () => {
+            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
+            content.textContent = '';
+            const p = document.createElement('p');
+            p.className = 'no-session';
+            p.textContent = 'Session ended.';
+            content.appendChild(p);
+            addFooterLinks(content);
+          });
         });
       });
     });

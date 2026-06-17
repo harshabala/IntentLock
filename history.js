@@ -1,33 +1,98 @@
 document.addEventListener('DOMContentLoaded', () => {
   const historyList = document.getElementById('history-list');
   const emptyState = document.getElementById('empty-state');
-  const insightsSection = document.getElementById('insights');
-  const insightsContent = document.getElementById('insights-content');
+  const searchInput = document.getElementById('history-search');
 
+  let allSessions = [];
+  let currentFilter = 'all';
+  let searchQuery = '';
+
+  // Load sessions
   chrome.storage.local.get(['sessionHistory'], (result) => {
-    const sessions = result.sessionHistory || [];
+    allSessions = result.sessionHistory || [];
 
-    if (sessions.length === 0) {
+    if (allSessions.length === 0) {
       emptyState.classList.remove('hidden');
+      document.querySelector('.history-controls').classList.add('hidden');
       return;
     }
 
-    // Show insights if 10+ sessions
-    if (sessions.length >= 10) {
-      renderInsights(sessions);
+    // Setup filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        renderSessions();
+      });
+    });
+
+    // Setup search
+    searchInput.addEventListener('input', (e) => {
+      searchQuery = e.target.value.toLowerCase().trim();
+      renderSessions();
+    });
+
+    renderSessions();
+  });
+
+  function filterSessions(sessions) {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    let filtered = sessions;
+
+    // Apply time filter
+    switch (currentFilter) {
+      case 'today':
+        filtered = filtered.filter(s => new Date(s.startTime) >= today);
+        break;
+      case 'week':
+        filtered = filtered.filter(s => new Date(s.startTime) >= weekAgo);
+        break;
+      case 'month':
+        filtered = filtered.filter(s => new Date(s.startTime) >= monthAgo);
+        break;
+    }
+
+    // Apply search filter
+    if (searchQuery) {
+      filtered = filtered.filter(s => s.intent.toLowerCase().includes(searchQuery));
+    }
+
+    return filtered;
+  }
+
+  function renderSessions() {
+    historyList.textContent = '';
+
+    const filtered = filterSessions(allSessions);
+
+    if (filtered.length === 0) {
+      emptyState.classList.remove('hidden');
+      return;
+    } else {
+      emptyState.classList.add('hidden');
     }
 
     // Render sessions (newest first)
-    const reversed = [...sessions].reverse();
+    const reversed = [...filtered].reverse();
     reversed.forEach(session => {
       const card = document.createElement('div');
       card.className = 'section history-card';
 
-      // Intent
+      // Header row with intent
+      const headerRow = document.createElement('div');
+      headerRow.className = 'history-header-row';
+
       const intent = document.createElement('p');
       intent.className = 'history-intent';
       intent.textContent = session.intent;
-      card.appendChild(intent);
+
+      headerRow.appendChild(intent);
+      card.appendChild(headerRow);
 
       // Meta row
       const meta = document.createElement('div');
@@ -63,101 +128,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       card.appendChild(meta);
+
       historyList.appendChild(card);
     });
-  });
-
-  function renderInsights(sessions) {
-    insightsSection.classList.remove('hidden');
-    insightsContent.textContent = '';
-
-    // Total sessions
-    const totalSessions = sessions.length;
-
-    // Average duration
-    const durations = sessions.map(s => Math.round((s.endTime - s.startTime) / 60000));
-    const avgDuration = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
-
-    // Total drift overrides
-    const totalDrifts = sessions.reduce((sum, s) => sum + (s.driftCount || 0), 0);
-
-    // Override rate
-    const sessionsWithDrift = sessions.filter(s => (s.driftCount || 0) > 0).length;
-    const driftRate = Math.round((sessionsWithDrift / totalSessions) * 100);
-
-    // Most common drift targets
-    const domainCounts = {};
-    sessions.forEach(s => {
-      (s.events || []).forEach(e => {
-        if (e.actionType === 'OVERRIDE' || e.actionType === 'PAGE_LOAD') {
-          try {
-            const domain = new URL(e.url).hostname;
-            domainCounts[domain] = (domainCounts[domain] || 0) + 1;
-          } catch (_) { /* skip */ }
-        }
-      });
-    });
-
-    const topDomains = Object.entries(domainCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-
-    // Budget adherence
-    const budgetSessions = sessions.filter(s => s.timeBudget);
-    let budgetAdherence = null;
-    if (budgetSessions.length > 0) {
-      const underBudget = budgetSessions.filter(s => {
-        const dur = Math.round((s.endTime - s.startTime) / 60000);
-        return dur <= s.timeBudget;
-      }).length;
-      budgetAdherence = Math.round((underBudget / budgetSessions.length) * 100);
-    }
-
-    // Render insight rows
-    const insights = [
-      { label: 'Total sessions', value: String(totalSessions) },
-      { label: 'Avg duration', value: `${avgDuration} min` },
-      { label: 'Total drift overrides', value: String(totalDrifts) },
-      { label: 'Sessions with drift', value: `${driftRate}%` },
-    ];
-
-    if (budgetAdherence !== null) {
-      insights.push({ label: 'Under budget rate', value: `${budgetAdherence}%` });
-    }
-
-    insights.forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'stat-row';
-      const label = document.createElement('span');
-      label.className = 'stat-label';
-      label.textContent = item.label;
-      const value = document.createElement('span');
-      value.className = 'stat-value';
-      value.textContent = item.value;
-      row.append(label, value);
-      insightsContent.appendChild(row);
-    });
-
-    // Top domains
-    if (topDomains.length > 0) {
-      const domainTitle = document.createElement('p');
-      domainTitle.className = 'plan-heading';
-      domainTitle.style.marginTop = '16px';
-      domainTitle.textContent = 'Most visited domains';
-      insightsContent.appendChild(domainTitle);
-
-      topDomains.forEach(([domain, count]) => {
-        const row = document.createElement('div');
-        row.className = 'stat-row';
-        const label = document.createElement('span');
-        label.className = 'stat-label';
-        label.textContent = domain;
-        const value = document.createElement('span');
-        value.className = 'stat-value';
-        value.textContent = `${count} visits`;
-        row.append(label, value);
-        insightsContent.appendChild(row);
-      });
-    }
   }
 });

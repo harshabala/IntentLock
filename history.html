@@ -9,20 +9,27 @@
   <div class="options-container">
     <div class="header">
       <h1>Session history</h1>
-      <p>A record of your past sessions and patterns.</p>
+      <p>A local summary of completed sessions.</p>
     </div>
-
-    <div id="insights" class="section hidden">
-      <h2>Patterns</h2>
-      <div id="insights-content"></div>
-    </div>
-
-    <div id="history-list"></div>
 
     <div id="empty-state" class="hidden">
       <p class="no-session">No sessions recorded yet.</p>
       <p class="no-session">Complete a session to see it here.</p>
     </div>
+
+    <div class="history-controls">
+      <div class="search-container">
+        <input type="text" id="history-search" placeholder="Search sessions..." class="search-input">
+      </div>
+      <div class="history-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="today">Today</button>
+        <button class="filter-btn" data-filter="week">This week</button>
+        <button class="filter-btn" data-filter="month">This month</button>
+      </div>
+    </div>
+
+    <div id="history-list"></div>
   </div>
 
   <script src="history.js"></script>
