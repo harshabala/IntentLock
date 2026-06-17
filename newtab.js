@@ -285,6 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
     textarea.className = 'edit-intent-textarea';
     textarea.value = session.intent;
     textarea.rows = 3;
+    textarea.maxLength = 250;
 
     const actions = document.createElement('div');
     actions.className = 'confirm-actions';

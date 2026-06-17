@@ -83,3 +83,13 @@ test('newtab.js contains showOnboardingWizard function', async () => {
   assert.match(code, /function\s+showOnboardingWizard/);
 });
 
+test('newtab.html contains intent-input textarea with maxlength attribute', async () => {
+  const html = await text('newtab.html');
+  const match = html.match(/<textarea[^>]*id=["']intent-input["'][^>]*maxlength=["'](\d+)["']/i) ||
+                html.match(/<textarea[^>]*maxlength=["'](\d+)["'][^>]*id=["']intent-input["']/i);
+  assert.ok(match, 'textarea with id="intent-input" must have a maxlength attribute');
+  const limit = parseInt(match[1], 10);
+  assert.ok(!isNaN(limit) && limit > 0, `maxlength limit should be a valid positive integer, got ${limit}`);
+});
+
+
