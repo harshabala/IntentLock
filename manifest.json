@@ -1,5 +1,8 @@
 {
   "manifest_version": 3,
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  },
   "name": "IntentLock",
   "version": "1.2.1",
   "description": "Enforces user-declared intent during browsing sessions.",
