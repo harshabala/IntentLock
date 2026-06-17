@@ -326,27 +326,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function endSession(container, session) {
     if (timerInterval) clearInterval(timerInterval);
 
-    chrome.storage.local.get(['activeSession'], (result) => {
-      const s = result.activeSession;
-      if (!s) return;
-
-      s.isActive = false;
-      s.endTime = Date.now();
-
-      // Save to history
-      chrome.storage.local.get(['sessionHistory'], (histResult) => {
-        const history = histResult.sessionHistory || [];
-        history.push(createHistoryEntry(s));
-        // Keep last 100 sessions
-        if (history.length > 100) history.shift();
-
-        chrome.storage.local.set({ sessionHistory: history }, () => {
-          chrome.storage.local.remove(['activeSession', 'interventionState'], () => {
-            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-              showSummary(container, s);
-            });
-          });
-        });
+    chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION' }, (response) => {
+      chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+        const endedSession = (response && response.session) ? response.session : session;
+        showSummary(container, endedSession);
       });
     });
   }
@@ -511,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
       lockInBtn.textContent = 'LOCK IN';
       lockInBtn.addEventListener('click', () => {
         const apiKey = input.value.trim();
-        if (apiKey) {
+        if (apiKey && apiKey.startsWith('sk-')) {
           const storageArea = chrome.storage.session || chrome.storage.local;
           storageArea.set({ openaiApiKey: apiKey }, () => {
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {

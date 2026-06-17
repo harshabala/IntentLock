@@ -67,25 +67,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.className = 'complete-btn';
     btn.textContent = 'End session';
     btn.addEventListener('click', () => {
-      session.isActive = false;
-      session.endTime = Date.now();
-
-      chrome.storage.local.get(['sessionHistory'], (histResult) => {
-        const history = histResult.sessionHistory || [];
-        history.push(createHistoryEntry(session));
-        if (history.length > 100) history.shift();
-
-        chrome.storage.local.set({ sessionHistory: history }, () => {
-          chrome.storage.local.remove(['activeSession', 'interventionState'], () => {
-            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-            content.textContent = '';
-            const p = document.createElement('p');
-            p.className = 'no-session';
-            p.textContent = 'Session ended.';
-            content.appendChild(p);
-            addFooterLinks(content);
-          });
-        });
+      chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION' }, () => {
+        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
+        content.textContent = '';
+        const p = document.createElement('p');
+        p.className = 'no-session';
+        p.textContent = 'Session ended.';
+        content.appendChild(p);
+        addFooterLinks(content);
       });
     });
     content.appendChild(btn);

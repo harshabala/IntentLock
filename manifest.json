@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IntentLock",
-  "version": "1.2",
+  "version": "1.2.1",
   "description": "Enforces user-declared intent during browsing sessions.",
   "icons": {
     "16": "icon16.png",

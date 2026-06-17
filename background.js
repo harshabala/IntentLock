@@ -420,6 +420,7 @@ function evaluateDrift(url, tabId) {
     if (evaluatedDomain) {
       let hasCooldown = false;
       let mapChanged = false;
+      const expiredDomains = [];
       for (const [cooldownDomain, expiresAt] of overrideCooldowns.entries()) {
         if (now < expiresAt) {
           if (evaluatedDomain === cooldownDomain || 
@@ -428,9 +429,12 @@ function evaluateDrift(url, tabId) {
             hasCooldown = true;
           }
         } else {
-          overrideCooldowns.delete(cooldownDomain);
+          expiredDomains.push(cooldownDomain);
           mapChanged = true;
         }
+      }
+      if (expiredDomains.length > 0) {
+        expiredDomains.forEach(domain => overrideCooldowns.delete(domain));
       }
       if (mapChanged) {
         chrome.storage.local.set({ overrideCooldowns: Array.from(overrideCooldowns.entries()) });
