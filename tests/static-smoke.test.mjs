@@ -24,6 +24,16 @@ test('manifest references only present extension assets and minimum V1 permissio
     manifest.permissions,
     ['tabs', 'storage', 'idle', 'tabGroups'],
   );
+
+  assert.deepEqual(
+    [...manifest.host_permissions].sort(),
+    ['http://*/*', 'https://*/*'],
+  );
+
+  assert.deepEqual(
+    [...manifest.content_scripts[0].matches].sort(),
+    ['http://*/*', 'https://*/*'],
+  );
 });
 
 test('all extension javascript files parse', async () => {
