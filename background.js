@@ -141,9 +141,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
     } else if (message.type === 'CONFIG_UPDATED') {
-      reloadConfig().then(() => {
-        sendResponse({ status: 'ok' });
-      });
+      reloadConfig()
+        .then(() => sendResponse({ status: 'ok' }))
+        .catch((err) => {
+          console.error('CONFIG_UPDATED reload failed:', err);
+          sendResponse({ status: 'error', message: err?.message || 'reload failed' });
+        });
     } else if (message.type === 'SESSION_CLEARED') {
       ungroupTabs();
       currentSession = null;

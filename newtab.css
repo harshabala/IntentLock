@@ -1305,6 +1305,18 @@ body.popup .header::after {
   letter-spacing: 0.02em;
 }
 
+.onboarding-status {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.onboarding-status-error {
+  color: var(--error);
+}
+
 .onboarding-actions {
   display: flex;
   gap: 12px;

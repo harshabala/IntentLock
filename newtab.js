@@ -618,6 +618,29 @@ document.addEventListener('DOMContentLoaded', () => {
       securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
       container.appendChild(securityNotice);
 
+      const statusEl = document.createElement('p');
+      statusEl.className = 'onboarding-status hidden';
+      statusEl.setAttribute('role', 'alert');
+      statusEl.setAttribute('aria-live', 'polite');
+      container.appendChild(statusEl);
+
+      function setOnboardingStatus(message, isError = false) {
+        if (!message) {
+          statusEl.textContent = '';
+          statusEl.classList.add('hidden');
+          statusEl.classList.remove('onboarding-status-error');
+          return;
+        }
+        statusEl.textContent = message;
+        statusEl.classList.remove('hidden');
+        statusEl.classList.toggle('onboarding-status-error', isError);
+      }
+
+      function resetLockInButton() {
+        lockInBtn.disabled = false;
+        lockInBtn.textContent = 'LOCK IN';
+      }
+
       const actionsRow = document.createElement('div');
       actionsRow.className = 'onboarding-actions';
 
@@ -632,38 +655,34 @@ document.addEventListener('DOMContentLoaded', () => {
       lockInBtn.className = 'primary-btn onboarding-lock-btn';
       lockInBtn.textContent = 'LOCK IN';
       lockInBtn.addEventListener('click', () => {
-        const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
-        const provider = getProvider(providerId);
-        const apiKey = input.value.trim();
-        const providerConfig = getDefaultProviderConfig(providerId);
+        try {
+          const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+          const provider = getProvider(providerId);
+          const apiKey = input.value.trim();
+          const providerConfig = getDefaultProviderConfig(providerId);
 
-        if (provider.requiresApiKey) {
-          const keyError = validateApiKey(providerId, apiKey);
-          if (keyError) {
-            setFieldError(input, keyError);
-            logError({
-              type: ERROR_TYPES.VALIDATION,
-              message: keyError,
-              details: { providerId, action: 'onboarding_lock_in' },
-              source: 'onboarding',
-            });
-            return;
-          }
-        }
+          setOnboardingStatus('');
+          clearFieldError(input);
 
-        const saveProvider = () => {
-          chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
-            if (chrome.runtime.lastError) {
-              const msg = 'Could not save provider settings.';
-              setFieldError(input, `${msg} Open Diagnostics from Settings.`);
+          if (provider.requiresApiKey) {
+            const keyError = validateApiKey(providerId, apiKey);
+            if (keyError) {
+              setFieldError(input, keyError);
+              setOnboardingStatus(keyError, true);
               logError({
-                type: ERROR_TYPES.STORAGE,
-                message: msg,
-                details: { error: chrome.runtime.lastError.message, providerId },
+                type: ERROR_TYPES.VALIDATION,
+                message: keyError,
+                details: { providerId, action: 'onboarding_lock_in' },
                 source: 'onboarding',
               });
               return;
             }
+          }
+
+          lockInBtn.disabled = true;
+          lockInBtn.textContent = 'Saving...';
+
+          const completeSetup = () => {
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
               if (chrome.runtime.lastError) {
                 logError({
@@ -673,29 +692,63 @@ document.addEventListener('DOMContentLoaded', () => {
                   source: 'onboarding',
                 });
               }
-              finishOnboarding();
             });
-          });
-        };
+            finishOnboarding();
+          };
 
-        if (apiKey) {
-          const storageArea = chrome.storage.session || chrome.storage.local;
-          storageArea.set({ llmApiKey: apiKey }, () => {
-            if (chrome.runtime.lastError) {
-              const msg = 'Could not save API key to session storage.';
-              setFieldError(input, `${msg} Open Diagnostics from Settings.`);
-              logError({
-                type: ERROR_TYPES.STORAGE,
-                message: msg,
-                details: { error: chrome.runtime.lastError.message, providerId },
-                source: 'onboarding',
-              });
-              return;
-            }
-            saveProvider();
+          const failSetup = (msg, errorType = ERROR_TYPES.STORAGE) => {
+            setFieldError(input, msg);
+            setOnboardingStatus(msg, true);
+            logError({
+              type: errorType,
+              message: msg,
+              details: { providerId },
+              source: 'onboarding',
+            });
+            resetLockInButton();
+          };
+
+          const saveProvider = () => {
+            chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
+              if (chrome.runtime.lastError) {
+                failSetup(`Could not save provider settings. ${chrome.runtime.lastError.message}`);
+                return;
+              }
+              completeSetup();
+            });
+          };
+
+          if (apiKey) {
+            const storageArea = chrome.storage.session || chrome.storage.local;
+            storageArea.set({ llmApiKey: apiKey }, () => {
+              if (chrome.runtime.lastError) {
+                failSetup(`Could not save API key. ${chrome.runtime.lastError.message}`);
+                return;
+              }
+              saveProvider();
+            });
+          } else {
+            const clearStoredKey = (done) => {
+              if (chrome.storage.session) {
+                chrome.storage.session.remove(['llmApiKey'], () => {
+                  chrome.storage.local.remove(['llmApiKey'], done);
+                });
+              } else {
+                chrome.storage.local.remove(['llmApiKey'], done);
+              }
+            };
+            clearStoredKey(saveProvider);
+          }
+        } catch (err) {
+          const msg = 'Something went wrong while saving. Try again or use SKIP.';
+          setOnboardingStatus(msg, true);
+          logError({
+            type: ERROR_TYPES.RUNTIME,
+            message: msg,
+            details: { error: err?.message || String(err) },
+            source: 'onboarding',
           });
-        } else {
-          saveProvider();
+          resetLockInButton();
         }
       });
 
@@ -705,6 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
       input.focus();
       input.addEventListener('input', () => {
         clearFieldError(input);
+        setOnboardingStatus('');
       });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
