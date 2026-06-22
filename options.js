@@ -1,9 +1,10 @@
+import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   const apiKeyInput = document.getElementById('api-key');
   const saveKeyBtn = document.getElementById('save-key-btn');
   const keyStatus = document.getElementById('key-status');
 
-  const distractionSitesInput = document.getElementById('distraction-sites');
   const saveSitesBtn = document.getElementById('save-sites-btn');
   const sitesStatus = document.getElementById('sites-status');
 
@@ -15,14 +16,47 @@ document.addEventListener('DOMContentLoaded', () => {
   let deleteArmed = false;
   let deleteArmTimer = null;
 
-  const DEFAULT_SITES = [
-    'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
-    'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'
-  ];
+  function buildCategoryGrid(policy) {
+    const grid = document.getElementById('category-grid');
+    if (!grid) return;
+    grid.textContent = '';
+
+    SITE_CATEGORIES.forEach(cat => {
+      const currentPolicy = policy.categoryPolicies?.[cat.id] || cat.defaultPolicy;
+
+      const row = document.createElement('div');
+      row.className = 'category-row';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'category-name';
+      nameEl.textContent = cat.label;
+
+      const controls = document.createElement('div');
+      controls.className = 'category-controls';
+
+      ['block', 'warn', 'allow'].forEach(choice => {
+        const labelEl = document.createElement('label');
+        labelEl.className = 'category-choice';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = `cat-${cat.id}`;
+        radio.value = choice;
+        radio.checked = choice === currentPolicy;
+        radio.setAttribute('aria-label', `${cat.label}: ${choice}`);
+
+        labelEl.append(radio, document.createTextNode(choice));
+        controls.appendChild(labelEl);
+      });
+
+      row.append(nameEl, controls);
+      grid.appendChild(row);
+    });
+  }
 
   // Load existing settings
   chrome.storage.local.get([
-    'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
+    'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
     const processSettings = (sessionApiKey) => {
       let finalKey = sessionApiKey;
@@ -44,8 +78,18 @@ document.addEventListener('DOMContentLoaded', () => {
         trackingToggle.checked = localResult.trackingEnabled;
       }
 
-      const sites = localResult.customDistractionSites || DEFAULT_SITES;
-      distractionSitesInput.value = sites.join('\n');
+      let activePolicy = localResult.heuristicPolicy;
+      if (!activePolicy || activePolicy.version !== 1) {
+        activePolicy = localResult.customDistractionSites
+          ? migrateLegacyDistractionSites(localResult.customDistractionSites)
+          : buildDefaultPolicy('deep_work', 'balanced');
+      }
+      buildCategoryGrid(activePolicy);
+
+      const customBlockInput = document.getElementById('custom-block-domains');
+      const customAllowInput = document.getElementById('custom-allow-domains');
+      if (customBlockInput) customBlockInput.value = (activePolicy.customBlockDomains || []).join('\n');
+      if (customAllowInput) customAllowInput.value = (activePolicy.customAllowDomains || []).join('\n');
 
       // Load theme
       const theme = localResult.theme || 'auto';
@@ -111,17 +155,40 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── Distraction sites ───────────────────────────────────────────────
+  // ── Site policies ────────────────────────────────────────────────────
+
+  const HOSTNAME_RE = /^[a-z0-9][a-z0-9\-\.]*\.[a-z]{2,}$/;
+  function parseCustomDomains(text) {
+    return text.split('\n').map(s => s.trim().toLowerCase()).filter(s => s && HOSTNAME_RE.test(s));
+  }
 
   saveSitesBtn.addEventListener('click', () => {
-    const raw = distractionSitesInput.value.trim();
-    const sites = raw.split('\n')
-      .map(s => s.trim().toLowerCase())
-      .filter(s => s.length > 0 && s.includes('.'));
+    chrome.storage.local.get(['heuristicPolicy', 'customDistractionSites'], (stored) => {
+      let policy = stored.heuristicPolicy;
+      if (!policy || policy.version !== 1) {
+        policy = stored.customDistractionSites
+          ? migrateLegacyDistractionSites(stored.customDistractionSites)
+          : buildDefaultPolicy('deep_work', 'balanced');
+      }
 
-    chrome.storage.local.set({ customDistractionSites: sites }, () => {
-      showStatus(sitesStatus, `${sites.length} sites saved.`);
-      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      // Read category grid radio values
+      const updatedPolicies = {};
+      SITE_CATEGORIES.forEach(cat => {
+        const checked = document.querySelector(`input[name="cat-${cat.id}"]:checked`);
+        if (checked) updatedPolicies[cat.id] = checked.value;
+      });
+      policy.categoryPolicies = { ...policy.categoryPolicies, ...updatedPolicies };
+
+      // Read custom block/allow textareas
+      const customBlockInput = document.getElementById('custom-block-domains');
+      const customAllowInput = document.getElementById('custom-allow-domains');
+      policy.customBlockDomains = parseCustomDomains(customBlockInput?.value || '');
+      policy.customAllowDomains = parseCustomDomains(customAllowInput?.value || '');
+
+      chrome.storage.local.set({ heuristicPolicy: policy }, () => {
+        showStatus(sitesStatus, 'Site policies saved.');
+        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      });
     });
   });
 
@@ -178,7 +245,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chrome.storage.local.clear(() => {
       const finishDelete = () => {
-        distractionSitesInput.value = DEFAULT_SITES.join('\n');
+        const defaultPolicy = buildDefaultPolicy('deep_work', 'balanced');
+        buildCategoryGrid(defaultPolicy);
+        const customBlockInput = document.getElementById('custom-block-domains');
+        const customAllowInput = document.getElementById('custom-allow-domains');
+        if (customBlockInput) customBlockInput.value = '';
+        if (customAllowInput) customAllowInput.value = '';
         apiKeyInput.value = '';
         apiKeyInput.placeholder = 'sk-...';
         trackingToggle.checked = true;
