@@ -36,6 +36,7 @@ globalThis.chrome = {
   },
 };
 
+import { clearDriftCache } from '../drift-cache.js';
 import { checkDriftLLM, generateIntentPlan, cleanJsonString } from '../llm.js';
 
 test('cleanJsonString helper strips markdown fences and surrounding whitespaces', () => {
@@ -63,7 +64,30 @@ test('cleanJsonString helper strips markdown fences and surrounding whitespaces'
   }
 });
 
+test('checkDriftLLM returns cached result without second API call', async () => {
+  clearDriftCache();
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"aligned": false, "confidence": 0.91}' } }],
+      }),
+    };
+  };
+
+  const first = await checkDriftLLM('test intent', 'https://example.com', []);
+  const second = await checkDriftLLM('test intent', 'https://example.com', []);
+
+  assert.equal(fetchCount, 1);
+  assert.equal(first.cached, undefined);
+  assert.equal(second.cached, true);
+  assert.deepEqual(second, { isAligned: false, confidence: 0.91, cached: true });
+});
+
 test('checkDriftLLM passes response_format and parses markdown JSON correctly', async () => {
+  clearDriftCache();
   let fetchBody = null;
   globalThis.fetch = async (url, options) => {
     fetchBody = JSON.parse(options.body);

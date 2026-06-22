@@ -7,6 +7,11 @@ import {
   isLlmConfigured,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
+import {
+  buildDriftCacheKey,
+  getCachedDrift,
+  setCachedDrift,
+} from './drift-cache.js';
 
 /**
  * Evaluate if a given URL + History matches the stated intent.
@@ -19,6 +24,12 @@ async function checkDriftLLM(intent, url, history) {
   const config = await getLlmConfig();
   if (!isLlmConfigured(config)) {
     return { isAligned: true, confidence: 1.0 };
+  }
+
+  const cacheKey = buildDriftCacheKey(intent, url, history);
+  const cached = getCachedDrift(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   const recentHistory = Array.isArray(history) ? history.slice(-5) : [];
@@ -60,10 +71,12 @@ async function checkDriftLLM(intent, url, history) {
       return { isAligned: true, confidence: 0 };
     }
 
-    return {
+    const driftResult = {
       isAligned: parsed.aligned,
       confidence: parsed.confidence,
     };
+    setCachedDrift(cacheKey, driftResult);
+    return driftResult;
   } catch (error) {
     await logError({
       type: ERROR_TYPES.API,

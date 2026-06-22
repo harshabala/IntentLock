@@ -1,6 +1,7 @@
 // background.js
 import { evaluateHeuristicDrift, DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
 import { checkDriftLLM } from './llm.js';
+import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 
 let currentSession = null;
@@ -150,6 +151,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.type === 'SESSION_CLEARED') {
       ungroupTabs();
       currentSession = null;
+      clearDriftCache();
       overrideCooldowns.clear();
       chrome.storage.local.remove(['overrideCooldowns']);
       chrome.alarms.clear(timeBudgetAlarmName);
@@ -311,6 +313,7 @@ migrateLlmStorage();
 
 function handleSessionStart(session) {
   currentSession = session;
+  clearDriftCache();
   overrideCooldowns.clear(); // clear cooldowns on new session
   chrome.storage.local.remove(['overrideCooldowns']);
 
