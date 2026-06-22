@@ -173,4 +173,20 @@ test('shortcuts button exposes accessible label without innerHTML', async () => 
   assert.equal(code.includes('shortcutsBtn.innerHTML'), false);
 });
 
+test('live numeric displays use tabular-nums for stable alignment', async () => {
+  const css = await text('newtab.css');
+
+  for (const selector of [
+    '.time-remaining',
+    '.timer-value',
+    '.stat-value',
+    '.stat-box .stat-value',
+  ]) {
+    const escaped = selector.replace(/\./g, '\\.');
+    const block = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`, 's'));
+    assert.ok(block, `${selector} styles required`);
+    assert.match(block[1], /font-variant-numeric:\s*tabular-nums/);
+  }
+});
+
 

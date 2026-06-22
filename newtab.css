@@ -728,6 +728,7 @@ body.popup .header::after {
   margin-bottom: 12px;
   text-align: center;
   letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
 }
 
 .time-exceeded {
@@ -829,6 +830,7 @@ body.popup .header::after {
   color: var(--text-primary);
   font-weight: 500;
   letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==========================================================================
@@ -1041,6 +1043,7 @@ body.popup .header::after {
   color: var(--text-primary);
   letter-spacing: 0.05em;
   margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-box .stat-label {
