@@ -46,6 +46,44 @@ test('repeated unrelated browsing crosses the intervention threshold', () => {
   assert.equal(result.reason, 'repeated_unrelated_activity');
 });
 
+test('extended dwell on unrelated page crosses intervention threshold', () => {
+  const now = Date.now();
+  const url = 'https://shop.example.com/products';
+  const events = [
+    { timestamp: now - 30_000, actionType: 'PAGE_DWELL', url, dwellMs: 130_000 },
+  ];
+
+  const result = evaluateHeuristicDrift({
+    intent: 'Debug the Chrome extension background worker',
+    url,
+    events,
+    distractionSites: [],
+    now,
+  });
+
+  assert.equal(result.shouldIntervene, true);
+  assert.equal(result.reason, 'extended_unrelated_dwell');
+});
+
+test('dwell on distraction domain boosts known distraction detection', () => {
+  const now = Date.now();
+  const url = 'https://www.youtube.com/watch?v=abc';
+  const events = [
+    { timestamp: now - 10_000, actionType: 'PAGE_DWELL', url, dwellMs: 70_000 },
+  ];
+
+  const result = evaluateHeuristicDrift({
+    intent: 'Write the project proposal',
+    url,
+    events,
+    distractionSites: ['youtube.com'],
+    now,
+  });
+
+  assert.equal(result.shouldIntervene, true);
+  assert.equal(result.reason, 'known_distraction');
+});
+
 test('stop-word only intent does not trigger false positive intervention on normal sites', () => {
   const now = Date.now();
   const events = [

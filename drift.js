@@ -1,4 +1,6 @@
 export const DRIFT_CONFIDENCE_THRESHOLD = 0.7;
+export const DWELL_DISTRACTION_MS = 60_000;
+export const DWELL_UNALIGNED_MS = 120_000;
 
 const STOP_WORDS = new Set([
   'about', 'after', 'again', 'also', 'from', 'have', 'into', 'latest',
@@ -66,14 +68,34 @@ function evaluateHeuristicDrift({ intent, url, events = [], distractionSites = [
     return eventUrl && eventUrl.hostname === parsed.hostname;
   }).length;
 
+  const dwellForUrl = recentEvents
+    .filter((event) => event.actionType === 'PAGE_DWELL' && event.url === url)
+    .reduce((total, event) => total + (event.dwellMs || 0), 0);
+
   let score = currentAligned ? 0 : 0.25;
   if (unrelatedEvents.length >= 3) score += 0.35;
   if (tabSwitches >= 4) score += 0.25;
   if (!currentAligned && sameDomainLoads >= 2) score += 0.2;
+  if (
+    isConfiguredDistraction(parsed.hostname, distractionSites) &&
+    !currentAligned &&
+    dwellForUrl >= DWELL_DISTRACTION_MS
+  ) {
+    score += 0.15;
+  }
+  if (!currentAligned && dwellForUrl >= DWELL_UNALIGNED_MS) {
+    score = Math.max(score, DRIFT_CONFIDENCE_THRESHOLD);
+  }
 
   let reason = 'low_confidence';
   if (score >= DRIFT_CONFIDENCE_THRESHOLD) {
-    reason = tabSwitches >= 4 ? 'rapid_context_switching' : 'repeated_unrelated_activity';
+    if (tabSwitches >= 4) {
+      reason = 'rapid_context_switching';
+    } else if (dwellForUrl >= DWELL_UNALIGNED_MS) {
+      reason = 'extended_unrelated_dwell';
+    } else {
+      reason = 'repeated_unrelated_activity';
+    }
   }
 
   return {
