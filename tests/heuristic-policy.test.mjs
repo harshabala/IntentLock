@@ -10,6 +10,8 @@ import {
   mergePolicyWithIntent,
   resolveDomainPolicy,
   getEffectiveBlockList,
+  evaluatePolicyDrift,
+  intentTerms,
 } from '../heuristic-policy.js';
 
 test('INTENT_CATEGORIES has at least 12 entries', () => {
@@ -196,4 +198,126 @@ test('mergePolicyWithIntent auto-classifies job_search text', () => {
   const policy = mergePolicyWithIntent('applying for software engineer jobs');
   assert.equal(policy.intentCategoryId, 'job_search');
   assert.equal(policy.setupCompleted, false);
+});
+
+test('blocked category domain triggers immediate intervention (score >= 0.9)', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const result = evaluatePolicyDrift({
+    intent: 'coding a new feature',
+    url: 'https://twitter.com/home',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, true);
+  assert.ok(result.score >= 0.9);
+  assert.equal(result.reason, 'blocked_category');
+  assert.ok(Array.isArray(result.signals));
+  assert.ok(typeof result.reasonLabel === 'string' && result.reasonLabel.length > 0);
+});
+
+test('job_search intent on linkedin does not intervene', () => {
+  const policy = buildDefaultPolicy('job_search', 'balanced');
+  const result = evaluatePolicyDrift({
+    intent: 'applying for software engineer jobs',
+    url: 'https://www.linkedin.com/jobs',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, false);
+});
+
+test('job_search intent on youtube triggers block (balanced)', () => {
+  const policy = buildDefaultPolicy('job_search', 'balanced');
+  const result = evaluatePolicyDrift({
+    intent: 'applying for software engineer jobs',
+    url: 'https://youtube.com/watch?v=abc',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, true);
+  assert.equal(result.reason, 'blocked_category');
+});
+
+test('warn category + 130s dwell triggers intervention', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  const now = Date.now();
+  const url = 'https://reddit.com/r/programming';
+  const result = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [{ timestamp: now - 10_000, actionType: 'PAGE_DWELL', url, dwellMs: 130_000 }],
+    policy,
+    now,
+  });
+  assert.equal(result.shouldIntervene, true);
+});
+
+test('allowed domain does not trigger category block', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const result = evaluatePolicyDrift({
+    intent: 'coding a new feature',
+    url: 'https://github.com/user/repo',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, false);
+});
+
+test('customAllowDomains prevents block on blocked-category site', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  policy.customAllowDomains = ['youtube.com'];
+  const result = evaluatePolicyDrift({
+    intent: 'coding a new feature',
+    url: 'https://youtube.com/watch?v=tutorial',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, false);
+});
+
+test('3+ unrelated events in 2 minutes boosts score by at least 0.35', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  const now = Date.now();
+  const result = evaluatePolicyDrift({
+    intent: 'coding a new feature',
+    url: 'https://news.ycombinator.com',
+    events: [
+      { timestamp: now - 90_000, actionType: 'PAGE_LOAD', url: 'https://9gag.com/a' },
+      { timestamp: now - 60_000, actionType: 'PAGE_LOAD', url: 'https://espn.com/b' },
+      { timestamp: now - 30_000, actionType: 'TAB_SWITCH', url: 'https://reddit.com' },
+    ],
+    policy,
+    now,
+  });
+  assert.ok(result.score >= 0.35, `expected score >= 0.35, got ${result.score}`);
+});
+
+test('returns signals array with blocked_category signal', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const result = evaluatePolicyDrift({
+    intent: 'coding',
+    url: 'https://twitter.com',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.ok(result.signals.some(s => s.startsWith('blocked_category')));
+});
+
+test('invalid url returns shouldIntervene false without throwing', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const result = evaluatePolicyDrift({
+    intent: 'coding',
+    url: 'not-a-url',
+    events: [],
+    policy,
+    now: Date.now(),
+  });
+  assert.equal(result.shouldIntervene, false);
+  assert.equal(result.reason, 'invalid_url');
 });

@@ -632,3 +632,162 @@ export function getEffectiveBlockList(policy) {
 
   return [...blocked];
 }
+
+// ── Drift evaluator ────────────────────────────────────────────────────
+
+function parseUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return {
+      hostname: parsed.hostname.replace(/^www\./, '').toLowerCase(),
+      text: `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function intentTerms(intent) {
+  return [...new Set(
+    tokenize(intent).filter(w => w.length > 3 && !STOP_WORDS.has(w))
+  )];
+}
+
+function isKeywordAligned(url, terms) {
+  const parsed = parseUrl(url);
+  if (!parsed || terms.length === 0) return false;
+  return terms.some(t => parsed.text.includes(t));
+}
+
+// Category-aware alignment: some intent categories have a natural set of site
+// categories that are aligned even without keyword overlap (e.g. job_search + job_boards)
+const CATEGORY_ALIGNMENT = {
+  job_search:          ['job_boards', 'professional_network'],
+  coding:              ['code_forge', 'documentation', 'ai_tools'],
+  research:            ['documentation', 'news', 'forums'],
+  learning:            ['documentation', 'code_forge', 'ai_tools'],
+  admin:               ['email', 'messaging', 'productivity'],
+  communication:       ['messaging', 'email'],
+  creative:            ['productivity', 'ai_tools'],
+  health:              ['health'],
+  shopping:            ['shopping'],
+  entertainment_allowed: ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
+};
+
+function isCategoryAligned(hostname, intentCategoryId) {
+  if (!intentCategoryId || !hostname) return false;
+  const siteCat = getSiteCategory(hostname);
+  if (!siteCat) return false;
+  const aligned = CATEGORY_ALIGNMENT[intentCategoryId] || [];
+  return aligned.includes(siteCat.categoryId);
+}
+
+const REASON_LABELS = {
+  blocked_category:          'You visited a site your session has blocked.',
+  extended_unrelated_dwell:  "You've spent a long time on an unrelated site.",
+  rapid_context_switching:   "You've been switching between unrelated tabs rapidly.",
+  repeated_unrelated_activity: "Your recent browsing doesn't match your intent.",
+  warn_category_dwell:       "You've been on a watched site past your time limit.",
+  low_confidence:            'Browsing pattern is drifting from your declared intent.',
+};
+
+export function evaluatePolicyDrift({ intent, url, events = [], policy, now = Date.now() }) {
+  const parsed = parseUrl(url);
+  if (!parsed) {
+    return { shouldIntervene: false, score: 0, reason: 'invalid_url', reasonLabel: '', signals: [] };
+  }
+
+  const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
+    ? policy
+    : buildDefaultPolicy('deep_work', 'balanced');
+
+  const terms = intentTerms(intent);
+  const signals = [];
+
+  const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
+  const keywordAligned = isKeywordAligned(url, terms);
+  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
+  const isAligned = keywordAligned || categoryAligned;
+
+  // Immediate block: domain is in a blocked category and not aligned with intent
+  if (domainDecision === 'block' && !isAligned) {
+    const siteCat = getSiteCategory(parsed.hostname);
+    signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');
+    return {
+      shouldIntervene: true,
+      score: 0.95,
+      reason: 'blocked_category',
+      reasonLabel: REASON_LABELS.blocked_category,
+      signals,
+    };
+  }
+
+  // Aligned + allowed → no intervention
+  if (domainDecision === 'allow' && isAligned) {
+    return { shouldIntervene: false, score: 0, reason: 'aligned', reasonLabel: '', signals };
+  }
+
+  if (terms.length === 0) {
+    return { shouldIntervene: false, score: 0, reason: 'empty_terms', reasonLabel: '', signals };
+  }
+
+  const recentEvents = events.filter(e => now - e.timestamp <= 2 * 60 * 1000);
+  const unrelated = recentEvents.filter(e => {
+    if (!e.url) return false;
+    const ep = parseUrl(e.url);
+    return ep && !isKeywordAligned(e.url, terms) && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
+  });
+  const tabSwitches = recentEvents.filter(e => e.actionType === 'TAB_SWITCH').length;
+  const sameDomainLoads = recentEvents.filter(e => {
+    const ep = parseUrl(e.url);
+    return ep && ep.hostname === parsed.hostname;
+  }).length;
+  const dwellForUrl = recentEvents
+    .filter(e => e.actionType === 'PAGE_DWELL' && e.url === url)
+    .reduce((t, e) => t + (e.dwellMs || 0), 0);
+
+  // +0.1 base for being on an unaligned domain
+  let score = isAligned ? 0 : 0.1;
+
+  // +0.35 for 3+ unrelated events in 2 min
+  if (unrelated.length >= 3) { score += 0.35; signals.push(`unrelated_events:${unrelated.length}`); }
+  // +0.25 for 4+ tab switches in 2 min
+  if (tabSwitches >= 4) { score += 0.25; signals.push(`tab_switches:${tabSwitches}`); }
+  // +0.2 for 2+ loads of same unaligned domain
+  if (!isAligned && sameDomainLoads >= 2) { score += 0.2; signals.push(`repeated_domain:${parsed.hostname}`); }
+
+  if (dwellForUrl > 0) signals.push(`dwell:${Math.round(dwellForUrl / 1000)}s`);
+
+  // Warn category behavior
+  if (domainDecision === 'warn' && !isAligned) {
+    // +0.2 for dwell >= 60s on warn site
+    if (dwellForUrl >= DWELL_DISTRACTION_MS) score += 0.2;
+    // floor at threshold for dwell >= 120s on warn site
+    if (dwellForUrl >= DWELL_UNALIGNED_MS) {
+      score = Math.max(score, DRIFT_CONFIDENCE_THRESHOLD);
+      signals.push('warn_dwell_exceeded');
+    }
+  }
+
+  // Extended unaligned dwell on any site → floor at threshold
+  if (!isAligned && dwellForUrl >= DWELL_UNALIGNED_MS) {
+    score = Math.max(score, DRIFT_CONFIDENCE_THRESHOLD);
+  }
+
+  score = Math.min(score, 1);
+
+  let reason = 'low_confidence';
+  if (score >= DRIFT_CONFIDENCE_THRESHOLD) {
+    if (tabSwitches >= 4) reason = 'rapid_context_switching';
+    else if (dwellForUrl >= DWELL_UNALIGNED_MS) reason = 'extended_unrelated_dwell';
+    else reason = 'repeated_unrelated_activity';
+  }
+
+  return {
+    shouldIntervene: score >= DRIFT_CONFIDENCE_THRESHOLD,
+    score,
+    reason,
+    reasonLabel: REASON_LABELS[reason] || '',
+    signals,
+  };
+}
