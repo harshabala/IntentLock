@@ -15,6 +15,7 @@
     <div class="section">
       <h2>LLM provider</h2>
       <p id="provider-description">Choose a provider for drift detection and plan generation. API keys are stored in secure session memory and cleared when the browser closes.</p>
+      <p class="field-hint privacy-note">When AI is enabled, your declared intent, current page URL, and recent browsing events are sent directly to your chosen provider for drift checks and plan generation. Data is not sent through IntentLock servers.</p>
 
       <div class="input-group">
         <label for="provider-select">Provider</label>
@@ -105,6 +106,12 @@
       <button id="export-btn" class="complete-btn">Export session history (JSON)</button>
       <button id="delete-data-btn" class="danger-btn" style="margin-top: 8px;">Delete all data</button>
       <div id="data-status" class="hidden status-feedback"></div>
+    </div>
+
+    <div class="section">
+      <h2>Diagnostics</h2>
+      <p>View recent errors — API failures, quota limits, misconfigured keys, validation issues, and actions that did not complete.</p>
+      <button id="open-diagnostics-btn" class="complete-btn">Open diagnostics log</button>
     </div>
 
     <div class="section">

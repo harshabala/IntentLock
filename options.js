@@ -7,6 +7,7 @@ import {
   validateApiKey,
   validateProviderConfig,
 } from './providers.js';
+import { logError, ERROR_TYPES } from './error-log.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const providerSelect = document.getElementById('provider-select');
@@ -37,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const deleteDataBtn = document.getElementById('delete-data-btn');
   const dataStatus = document.getElementById('data-status');
   const themeStatus = document.getElementById('theme-status');
+  const openDiagnosticsBtn = document.getElementById('open-diagnostics-btn');
   let deleteArmed = false;
   let deleteArmTimer = null;
   let hasSavedApiKey = false;
@@ -258,11 +260,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  openDiagnosticsBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
+  });
+
   saveProviderBtn.addEventListener('click', () => {
     const config = getFormConfig();
     const configError = validateProviderConfig(config);
     if (configError) {
       showStatus(providerStatus, configError);
+      logError({
+        type: ERROR_TYPES.VALIDATION,
+        message: configError,
+        details: { providerId: config.providerId, action: 'save_provider' },
+        source: 'options',
+      });
       return;
     }
 
@@ -272,17 +284,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const keyError = validateApiKey(config.providerId, key || (hasSavedApiKey ? 'saved' : ''), config);
     if (keyError && !hasSavedApiKey) {
       setFieldError(apiKeyInput, keyError, 'api-key-hint');
+      logError({
+        type: ERROR_TYPES.VALIDATION,
+        message: keyError,
+        details: { providerId: config.providerId, action: 'save_provider' },
+        source: 'options',
+      });
       return;
     }
     if (key) {
       const newKeyError = validateApiKey(config.providerId, key, config);
       if (newKeyError) {
         setFieldError(apiKeyInput, newKeyError, 'api-key-hint');
+        logError({
+          type: ERROR_TYPES.VALIDATION,
+          message: newKeyError,
+          details: { providerId: config.providerId, action: 'save_provider' },
+          source: 'options',
+        });
         return;
       }
     }
 
     chrome.storage.local.set({ llmProviderConfig: config }, () => {
+      if (chrome.runtime.lastError) {
+        const msg = 'Could not save provider settings.';
+        showStatus(providerStatus, `${msg} See Diagnostics below.`);
+        logError({
+          type: ERROR_TYPES.STORAGE,
+          message: msg,
+          details: { error: chrome.runtime.lastError.message },
+          source: 'options',
+        });
+        return;
+      }
+
       const finish = () => {
         hasSavedApiKey = hasSavedApiKey || Boolean(key);
         apiKeyInput.value = '';
@@ -293,7 +329,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (key) {
         const storageArea = chrome.storage.session || chrome.storage.local;
-        storageArea.set({ llmApiKey: key }, finish);
+        storageArea.set({ llmApiKey: key }, () => {
+          if (chrome.runtime.lastError) {
+            const msg = 'Could not save API key to session storage.';
+            setFieldError(apiKeyInput, `${msg} See Diagnostics below.`, 'api-key-hint');
+            logError({
+              type: ERROR_TYPES.STORAGE,
+              message: msg,
+              details: { error: chrome.runtime.lastError.message, providerId: config.providerId },
+              source: 'options',
+            });
+            return;
+          }
+          finish();
+        });
       } else {
         finish();
       }

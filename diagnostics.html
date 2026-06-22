@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IntentLock — Diagnostics</title>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body class="options">
+  <div class="options-container">
+    <div class="header">
+      <h1>Diagnostics</h1>
+      <p>Recent errors and issues logged locally on your device. Copy this log when reporting problems.</p>
+    </div>
+
+    <div class="section">
+      <div class="diagnostics-actions">
+        <button id="copy-log-btn" class="complete-btn">Copy log</button>
+        <button id="clear-log-btn" class="danger-btn">Clear log</button>
+      </div>
+      <div id="copy-status" class="hidden status-feedback"></div>
+
+      <div class="history-filters diagnostics-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="api">API</button>
+        <button class="filter-btn" data-filter="validation">Validation</button>
+        <button class="filter-btn" data-filter="storage">Storage</button>
+        <button class="filter-btn" data-filter="ui">UI</button>
+        <button class="filter-btn" data-filter="runtime">Runtime</button>
+      </div>
+
+      <div id="empty-log" class="hidden">
+        <p class="no-session">No errors logged yet.</p>
+        <p class="field-hint">If a button does nothing or an API call fails, the issue will appear here.</p>
+      </div>
+
+      <div id="error-log-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="diagnostics.js"></script>
+</body>
+</html>

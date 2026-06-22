@@ -8,6 +8,7 @@ import {
   isLlmConfigured,
   validateApiKey,
 } from './providers.js';
+import { logError, ERROR_TYPES } from './error-log.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -640,14 +641,38 @@ document.addEventListener('DOMContentLoaded', () => {
           const keyError = validateApiKey(providerId, apiKey);
           if (keyError) {
             setFieldError(input, keyError);
+            logError({
+              type: ERROR_TYPES.VALIDATION,
+              message: keyError,
+              details: { providerId, action: 'onboarding_lock_in' },
+              source: 'onboarding',
+            });
             return;
           }
         }
 
         const saveProvider = () => {
           chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
+            if (chrome.runtime.lastError) {
+              const msg = 'Could not save provider settings.';
+              setFieldError(input, `${msg} Open Diagnostics from Settings.`);
+              logError({
+                type: ERROR_TYPES.STORAGE,
+                message: msg,
+                details: { error: chrome.runtime.lastError.message, providerId },
+                source: 'onboarding',
+              });
+              return;
+            }
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-              if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError);
+              if (chrome.runtime.lastError) {
+                logError({
+                  type: ERROR_TYPES.RUNTIME,
+                  message: 'Provider saved but background sync failed.',
+                  details: { error: chrome.runtime.lastError.message },
+                  source: 'onboarding',
+                });
+              }
               finishOnboarding();
             });
           });
@@ -655,7 +680,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (apiKey) {
           const storageArea = chrome.storage.session || chrome.storage.local;
-          storageArea.set({ llmApiKey: apiKey }, saveProvider);
+          storageArea.set({ llmApiKey: apiKey }, () => {
+            if (chrome.runtime.lastError) {
+              const msg = 'Could not save API key to session storage.';
+              setFieldError(input, `${msg} Open Diagnostics from Settings.`);
+              logError({
+                type: ERROR_TYPES.STORAGE,
+                message: msg,
+                details: { error: chrome.runtime.lastError.message, providerId },
+                source: 'onboarding',
+              });
+              return;
+            }
+            saveProvider();
+          });
         } else {
           saveProvider();
         }
@@ -729,6 +767,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timeInput.id = 'time-budget';
     timeInput.autocomplete = 'off';
     timeInput.placeholder = '30';
+    timeInput.addEventListener('input', () => clearFieldError(timeInput));
     timeGroup.append(timeLabel, timeInput);
 
     const btn = document.createElement('button');
@@ -856,13 +895,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      if (!isNaN(timeBudget) && (timeBudget < 1 || timeBudget > 480)) {
-        const msg = document.getElementById('status-message');
-        msg.textContent = 'Time budget must be between 1 and 480 minutes.';
-        msg.classList.remove('hidden');
-        msg.style.display = 'block';
-        msg.style.opacity = '1';
-        timeBudgetInput.focus();
+      clearFieldError(timeBudgetInput);
+
+      if (!isNaN(timeBudget) && timeBudgetInput.value.trim() && (timeBudget < 1 || timeBudget > 480)) {
+        const budgetError = 'Time budget must be between 1 and 480 minutes.';
+        setFieldError(timeBudgetInput, budgetError);
+        logError({
+          type: ERROR_TYPES.VALIDATION,
+          message: budgetError,
+          details: { value: timeBudgetInput.value.trim() },
+          source: 'session_start',
+        });
         return;
       }
 
@@ -879,14 +922,62 @@ document.addEventListener('DOMContentLoaded', () => {
         plan: []
       };
 
-      generateIntentPlan(intent).then(plan => {
-        sessionData.plan = plan;
+      generateIntentPlan(intent).then(({ steps, error }) => {
+        sessionData.plan = steps;
+
+        if (error) {
+          const notice = document.createElement('div');
+          notice.className = 'api-notice';
+          const noticeText = document.createElement('p');
+          noticeText.textContent = `${error.message} Session will start without an AI plan. Check Diagnostics in Settings for details.`;
+          const diagBtn = document.createElement('button');
+          diagBtn.className = 'complete-btn';
+          diagBtn.textContent = 'Open diagnostics';
+          diagBtn.addEventListener('click', () => {
+            chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
+          });
+          notice.append(noticeText, diagBtn);
+          const form = document.getElementById('intent-form');
+          if (form && form.parentNode) {
+            form.parentNode.insertBefore(notice, form.nextSibling);
+          }
+        }
+
         chrome.storage.local.set({ activeSession: sessionData }, () => {
+          if (chrome.runtime.lastError) {
+            logError({
+              type: ERROR_TYPES.STORAGE,
+              message: 'Could not start session.',
+              details: { error: chrome.runtime.lastError.message },
+              source: 'session_start',
+            });
+            setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
+            startBtn.disabled = false;
+            startBtn.textContent = 'Lock in';
+            return;
+          }
           chrome.runtime.sendMessage({ type: 'SESSION_STARTED', session: sessionData }, () => {
-            if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError);
+            if (chrome.runtime.lastError) {
+              logError({
+                type: ERROR_TYPES.RUNTIME,
+                message: 'Session saved but background sync failed.',
+                details: { error: chrome.runtime.lastError.message },
+                source: 'session_start',
+              });
+            }
             showActiveState(sessionData);
           });
         });
+      }).catch((err) => {
+        logError({
+          type: ERROR_TYPES.RUNTIME,
+          message: 'Unexpected error while generating plan.',
+          details: { error: err.message },
+          source: 'session_start',
+        });
+        setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
+        startBtn.disabled = false;
+        startBtn.textContent = 'Lock in';
       });
     });
   }

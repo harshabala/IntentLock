@@ -6,6 +6,7 @@ import {
   getLlmConfig,
   isLlmConfigured,
 } from './providers.js';
+import { logError, ERROR_TYPES } from './error-log.js';
 
 /**
  * Evaluate if a given URL + History matches the stated intent.
@@ -17,7 +18,6 @@ import {
 async function checkDriftLLM(intent, url, history) {
   const config = await getLlmConfig();
   if (!isLlmConfigured(config)) {
-    console.warn('LLM not configured. Failing open (no drift).');
     return { isAligned: true, confidence: 1.0 };
   }
 
@@ -38,29 +38,39 @@ async function checkDriftLLM(intent, url, history) {
   `;
 
   try {
-    const resultText = await chatCompletion(prompt, {
+    const result = await chatCompletion(prompt, {
       jsonMode: true,
       maxTokens: 50,
       temperature: 0.1,
     });
 
-    if (!resultText) {
+    if (!result.ok) {
       return { isAligned: true, confidence: 0 };
     }
 
-    const result = JSON.parse(cleanJsonString(resultText));
+    const parsed = JSON.parse(cleanJsonString(result.text));
 
-    if (!result || typeof result.aligned !== 'boolean' || typeof result.confidence !== 'number') {
-      console.warn('Unexpected LLM response shape:', result);
+    if (!parsed || typeof parsed.aligned !== 'boolean' || typeof parsed.confidence !== 'number') {
+      await logError({
+        type: ERROR_TYPES.API,
+        message: 'LLM drift check returned an unexpected response shape.',
+        details: { providerId: config.providerId },
+        source: 'checkDriftLLM',
+      });
       return { isAligned: true, confidence: 0 };
     }
 
     return {
-      isAligned: result.aligned,
-      confidence: result.confidence,
+      isAligned: parsed.aligned,
+      confidence: parsed.confidence,
     };
   } catch (error) {
-    console.error('LLM check error:', error);
+    await logError({
+      type: ERROR_TYPES.API,
+      message: 'LLM drift check failed to parse response.',
+      details: { providerId: config.providerId, error: error.message },
+      source: 'checkDriftLLM',
+    });
     return { isAligned: true, confidence: 0 };
   }
 }
@@ -68,11 +78,13 @@ async function checkDriftLLM(intent, url, history) {
 /**
  * Generate a 3-step plan based on the user's intent to set expectations.
  * @param {string} intent User's stated aim
- * @returns {Promise<string[]>} Array of steps
+ * @returns {Promise<{ steps: string[], error: object|null }>}
  */
 async function generateIntentPlan(intent) {
   const config = await getLlmConfig();
-  if (!isLlmConfigured(config)) return [];
+  if (!isLlmConfigured(config)) {
+    return { steps: [], error: null };
+  }
 
   const prompt = `
     The user declared the following intent for their browsing session: "${intent}"
@@ -81,27 +93,40 @@ async function generateIntentPlan(intent) {
   `;
 
   try {
-    const resultText = await chatCompletion(prompt, {
+    const result = await chatCompletion(prompt, {
       jsonMode: true,
       maxTokens: 100,
       temperature: 0.3,
     });
 
-    if (!resultText) return [];
+    if (!result.ok) {
+      return { steps: [], error: result.error };
+    }
 
-    const parsed = JSON.parse(cleanJsonString(resultText));
+    const parsed = JSON.parse(cleanJsonString(result.text));
     let steps = [];
     if (parsed && Array.isArray(parsed.steps)) {
       steps = parsed.steps;
     } else if (Array.isArray(parsed)) {
       steps = parsed;
     } else {
-      return [];
+      await logError({
+        type: ERROR_TYPES.API,
+        message: 'Plan generation returned an unexpected response format.',
+        details: { providerId: config.providerId },
+        source: 'generateIntentPlan',
+      });
+      return { steps: [], error: { code: 'invalid_response', message: 'Plan generation returned an unexpected format.' } };
     }
-    return steps.filter((step) => typeof step === 'string').slice(0, 3);
+    return { steps: steps.filter((step) => typeof step === 'string').slice(0, 3), error: null };
   } catch (err) {
-    console.error('Plan generation error:', err);
-    return [];
+    await logError({
+      type: ERROR_TYPES.API,
+      message: 'Plan generation failed to parse response.',
+      details: { providerId: config.providerId, error: err.message },
+      source: 'generateIntentPlan',
+    });
+    return { steps: [], error: { code: 'parse_error', message: 'Plan generation failed to parse response.' } };
   }
 }
 

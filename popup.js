@@ -99,6 +99,19 @@ document.addEventListener('DOMContentLoaded', () => {
     sep.className = 'history-sep';
     sep.textContent = '\u00B7';
 
+    const diagLink = document.createElement('a');
+    diagLink.href = '#';
+    diagLink.className = 'popup-link';
+    diagLink.textContent = 'Diagnostics';
+    diagLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
+    });
+
+    const sep2 = document.createElement('span');
+    sep2.className = 'history-sep';
+    sep2.textContent = '\u00B7';
+
     const settingsLink = document.createElement('a');
     settingsLink.href = '#';
     settingsLink.className = 'popup-link';
@@ -108,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.runtime.openOptionsPage();
     });
 
-    footer.append(histLink, sep, settingsLink);
+    footer.append(histLink, sep, diagLink, sep2, settingsLink);
     parent.appendChild(footer);
   }
 });

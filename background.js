@@ -1,6 +1,7 @@
 // background.js
 import { evaluateHeuristicDrift } from './drift.js';
 import { checkDriftLLM } from './llm.js';
+import { logError, ERROR_TYPES } from './error-log.js';
 
 let currentSession = null;
 let timeBudgetAlarmName = 'intentlock-budget-alarm';
@@ -116,8 +117,8 @@ chrome.commands.onCommand.addListener((command) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
-    'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION', 
-    'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION'
+    'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
+    'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -155,6 +156,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.type === 'END_ACTIVE_SESSION') {
       endActiveSession(message.reflection, (endedSession) => {
         sendResponse({ status: 'ok', session: endedSession });
+      });
+    } else if (message.type === 'LOG_ERROR') {
+      logError(message.payload || {}).then(() => {
+        sendResponse({ status: 'ok' });
       });
     }
   });

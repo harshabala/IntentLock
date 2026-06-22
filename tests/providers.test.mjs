@@ -1,19 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+let storageData = {
+  errorLog: [],
+  llmProviderConfig: {
+    providerId: 'gemini',
+    model: 'gemini-2.0-flash',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+  },
+};
+
 globalThis.chrome = {
   storage: {
     session: {
       get: (keys, callback) => callback({ llmApiKey: 'gemini-test-key' }),
     },
     local: {
-      get: (keys, callback) => callback({
-        llmProviderConfig: {
-          providerId: 'gemini',
-          model: 'gemini-2.0-flash',
-          baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
-        },
-      }),
+      get: (keys, callback) => {
+        const res = {};
+        const keysArr = Array.isArray(keys) ? keys : [keys];
+        for (const key of keysArr) {
+          if (storageData[key] !== undefined) res[key] = storageData[key];
+        }
+        callback(res);
+      },
+      set: (data, callback) => {
+        Object.assign(storageData, data);
+        if (callback) callback();
+      },
     },
   },
 };
@@ -43,6 +57,7 @@ test('providerRequiresApiKey respects local and custom auth settings', () => {
 test('validateApiKey enforces provider-specific key formats', () => {
   assert.equal(validateApiKey('openai', ''), 'API key is required for this provider.');
   assert.match(validateApiKey('openai', 'bad'), /sk-/);
+  assert.match(validateApiKey('openai', 'AIzaSyD_valid_key_example_12345'), /Gemini key/i);
   assert.equal(validateApiKey('ollama', ''), null);
   assert.equal(validateApiKey('gemini', 'AIzaSyD_valid_key_example_12345'), null);
 });
@@ -93,8 +108,9 @@ test('chatCompletion routes Gemini requests to generateContent endpoint', async 
     };
   };
 
-  const text = await chatCompletion('test prompt', { jsonMode: true, maxTokens: 50, temperature: 0.1 });
-  assert.equal(text, '{"aligned": true, "confidence": 0.9}');
+  const result = await chatCompletion('test prompt', { jsonMode: true, maxTokens: 50, temperature: 0.1 });
+  assert.equal(result.ok, true);
+  assert.equal(result.text, '{"aligned": true, "confidence": 0.9}');
   assert.match(requestUrl, /generateContent\?key=/);
   assert.equal(requestBody.generationConfig.responseMimeType, 'application/json');
 });
@@ -123,11 +139,27 @@ test('chatCompletion routes Ollama requests to local chat endpoint', async () =>
     };
   };
 
-  const text = await chatCompletion('plan prompt', { jsonMode: true });
+  const result = await chatCompletion('plan prompt', { jsonMode: true });
   assert.equal(requestUrl, 'http://localhost:11434/api/chat');
   assert.equal(requestBody.format, 'json');
   assert.equal(requestBody.stream, false);
-  assert.equal(text, '{"steps": ["A", "B", "C"]}');
+  assert.equal(result.ok, true);
+  assert.equal(result.text, '{"steps": ["A", "B", "C"]}');
+});
+
+test('chatCompletion logs and returns structured error on API failure', async () => {
+  storageData.errorLog = [];
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 429,
+    text: async () => '{"error":{"message":"quota exceeded"}}',
+  });
+
+  const result = await chatCompletion('test prompt');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'quota_exceeded');
+  assert.equal(storageData.errorLog.length, 1);
+  assert.match(storageData.errorLog[0].message, /quota|rate limit/i);
 });
 
 test('cleanJsonString helper strips markdown fences and surrounding whitespaces', () => {

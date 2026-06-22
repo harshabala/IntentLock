@@ -1319,3 +1319,57 @@ body.popup .header::after {
   margin-top: 32px;
 }
 
+.privacy-note {
+  margin-bottom: 16px;
+}
+
+.diagnostics-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.diagnostics-actions button {
+  width: auto;
+  flex: 1;
+}
+
+.diagnostics-filters {
+  margin-bottom: 20px;
+}
+
+.diagnostics-entry {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--error);
+  padding: 16px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+}
+
+.diagnostics-meta {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.diagnostics-message {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.diagnostics-details {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

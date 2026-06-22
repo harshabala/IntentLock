@@ -45,6 +45,8 @@ test('all extension javascript files parse', async () => {
     'intervention.js',
     'llm.js',
     'providers.js',
+    'error-log.js',
+    'diagnostics.js',
     'newtab.js',
     'options.js',
     'popup.js',
@@ -65,6 +67,7 @@ test('V1 UI avoids non-goal habit tracking and analytics surfaces', async () => 
     'options.html': await text('options.html'),
     'options.js': await text('options.js'),
   };
+  // diagnostics.* intentionally excluded — uses "category" for error log typing
 
   const combined = Object.values(files).join('\n').toLowerCase();
   for (const forbidden of [
@@ -104,6 +107,19 @@ test('options tracking toggle meets 44px minimum touch target', async () => {
   assert.ok(hitTargetBlock, 'tracking-toggle-hit styles required');
   assert.match(hitTargetBlock[1], /min-width:\s*44px/);
   assert.match(hitTargetBlock[1], /min-height:\s*44px/);
+});
+
+test('diagnostics page exposes copyable error log UI', async () => {
+  const html = await text('diagnostics.html');
+  assert.match(html, /id=["']copy-log-btn["']/);
+  assert.match(html, /id=["']error-log-list["']/);
+  assert.match(html, /diagnostics\.js/);
+});
+
+test('options.html includes privacy note and diagnostics access', async () => {
+  const html = await text('options.html');
+  assert.match(html, /privacy-note/);
+  assert.match(html, /id=["']open-diagnostics-btn["']/);
 });
 
 test('options.html exposes multi-provider LLM settings', async () => {

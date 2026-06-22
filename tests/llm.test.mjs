@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+let storageData = {
+  errorLog: [],
+  llmProviderConfig: {
+    providerId: 'openai',
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://api.openai.com/v1/chat/completions',
+    authType: 'bearer',
+    apiStyle: 'openai',
+  },
+};
+
 globalThis.chrome = {
   storage: {
     session: {
@@ -10,15 +21,16 @@ globalThis.chrome = {
     },
     local: {
       get: (keys, callback) => {
-        callback({
-          llmProviderConfig: {
-            providerId: 'openai',
-            model: 'gpt-4o-mini',
-            baseUrl: 'https://api.openai.com/v1/chat/completions',
-            authType: 'bearer',
-            apiStyle: 'openai',
-          },
-        });
+        const res = {};
+        const keysArr = Array.isArray(keys) ? keys : [keys];
+        for (const key of keysArr) {
+          if (storageData[key] !== undefined) res[key] = storageData[key];
+        }
+        callback(res);
+      },
+      set: (data, callback) => {
+        Object.assign(storageData, data);
+        if (callback) callback();
       },
     },
   },
@@ -95,15 +107,17 @@ test('generateIntentPlan passes response_format and extracts steps safely from s
   };
 
   responseContent = '```json\n{"steps": ["Read spec", "Write tests", "Implement code"]}\n```';
-  let steps = await generateIntentPlan('Write code');
-  assert.deepEqual(steps, ['Read spec', 'Write tests', 'Implement code']);
+  let result = await generateIntentPlan('Write code');
+  assert.deepEqual(result.steps, ['Read spec', 'Write tests', 'Implement code']);
+  assert.equal(result.error, null);
   assert.deepEqual(fetchBody.response_format, { type: 'json_object' });
 
   responseContent = '```\n["Step A", "Step B"]\n```';
-  steps = await generateIntentPlan('Write code');
-  assert.deepEqual(steps, ['Step A', 'Step B']);
+  result = await generateIntentPlan('Write code');
+  assert.deepEqual(result.steps, ['Step A', 'Step B']);
 
   responseContent = '{"invalid": "format"}';
-  steps = await generateIntentPlan('Write code');
-  assert.deepEqual(steps, []);
+  result = await generateIntentPlan('Write code');
+  assert.deepEqual(result.steps, []);
+  assert.ok(result.error);
 });

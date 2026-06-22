@@ -1,5 +1,7 @@
 // providers.js — Multi-provider LLM adapter for IntentLock
 
+import { classifyApiError, logError, ERROR_TYPES } from './error-log.js';
+
 export const DEFAULT_PROVIDER_ID = 'openai';
 
 export const PROVIDERS = {
@@ -118,6 +120,12 @@ export function validateApiKey(providerId, key, config = {}) {
   if (!trimmed) {
     return providerRequiresApiKey(providerId, config) ? 'API key is required for this provider.' : null;
   }
+  if (providerId === 'openai' && trimmed.startsWith('AIza')) {
+    return 'This looks like a Google Gemini key. Switch provider to Google Gemini above.';
+  }
+  if (providerId === 'gemini' && trimmed.startsWith('sk-')) {
+    return 'This looks like an OpenAI key. Switch provider to OpenAI above.';
+  }
   if (providerId === 'openai' && !trimmed.startsWith('sk-')) {
     return 'OpenAI keys typically start with "sk-".';
   }
@@ -128,6 +136,14 @@ export function validateApiKey(providerId, key, config = {}) {
     return 'Enter a valid Gemini API key from Google AI Studio.';
   }
   return null;
+}
+
+async function throwApiFailure(response, providerId) {
+  const bodyText = await response.text().catch(() => '');
+  const apiError = classifyApiError(response.status, bodyText, providerId);
+  const err = new Error(apiError.message);
+  err.apiError = apiError;
+  throw err;
 }
 
 export function validateProviderConfig(config) {
@@ -212,7 +228,7 @@ export async function getLlmConfig() {
   });
 }
 
-async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, authType }) {
+async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, authType, providerId }) {
   const headers = { 'Content-Type': 'application/json' };
   let url = baseUrl;
 
@@ -242,14 +258,14 @@ async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, 
   });
 
   if (!response.ok) {
-    throw new Error(`LLM request failed: ${response.status}`);
+    await throwApiFailure(response, providerId);
   }
 
   const data = await response.json();
   return data.choices?.[0]?.message?.content ?? null;
 }
 
-async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature }) {
+async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, providerId }) {
   const root = baseUrl.replace(/\/$/, '');
   const url = `${root}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
@@ -271,14 +287,14 @@ async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens,
   });
 
   if (!response.ok) {
-    throw new Error(`Gemini request failed: ${response.status}`);
+    await throwApiFailure(response, providerId);
   }
 
   const data = await response.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
 }
 
-async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, temperature }) {
+async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, temperature, providerId }) {
   const body = {
     model,
     messages: [{ role: 'user', content: prompt }],
@@ -296,7 +312,7 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama request failed: ${response.status}`);
+    await throwApiFailure(response, providerId);
   }
 
   const data = await response.json();
@@ -308,7 +324,7 @@ export async function chatCompletion(prompt, options = {}) {
   const config = await getLlmConfig();
 
   if (!isLlmConfigured(config)) {
-    return null;
+    return { ok: false, error: { code: 'not_configured', message: 'LLM provider is not configured.', providerId: config.providerId } };
   }
 
   const apiStyle = config.providerId === 'custom'
@@ -316,9 +332,10 @@ export async function chatCompletion(prompt, options = {}) {
     : config.provider.apiStyle;
 
   try {
+    let text = null;
     switch (apiStyle) {
       case 'openai':
-        return await callOpenAiCompatible({
+        text = await callOpenAiCompatible({
           baseUrl: config.baseUrl,
           apiKey: config.apiKey,
           model: config.model,
@@ -327,9 +344,11 @@ export async function chatCompletion(prompt, options = {}) {
           maxTokens,
           temperature,
           authType: config.authType,
+          providerId: config.providerId,
         });
+        break;
       case 'gemini':
-        return await callGemini({
+        text = await callGemini({
           baseUrl: config.baseUrl,
           apiKey: config.apiKey,
           model: config.model,
@@ -337,21 +356,44 @@ export async function chatCompletion(prompt, options = {}) {
           jsonMode,
           maxTokens,
           temperature,
+          providerId: config.providerId,
         });
+        break;
       case 'ollama':
-        return await callOllama({
+        text = await callOllama({
           baseUrl: config.baseUrl,
           model: config.model,
           prompt,
           jsonMode,
           maxTokens,
           temperature,
+          providerId: config.providerId,
         });
+        break;
       default:
-        return null;
+        return { ok: false, error: { code: 'unsupported_provider', message: 'Unsupported API format.', providerId: config.providerId } };
     }
+
+    if (!text) {
+      const emptyError = { code: 'empty_response', message: 'API returned an empty response.', providerId: config.providerId };
+      await logError({
+        type: ERROR_TYPES.API,
+        message: emptyError.message,
+        details: emptyError,
+        source: 'chatCompletion',
+      });
+      return { ok: false, error: emptyError };
+    }
+
+    return { ok: true, text };
   } catch (error) {
-    console.error('chatCompletion error:', error);
-    return null;
+    const apiError = error.apiError || classifyApiError(0, error.message, config.providerId);
+    await logError({
+      type: ERROR_TYPES.API,
+      message: apiError.message,
+      details: apiError,
+      source: 'chatCompletion',
+    });
+    return { ok: false, error: apiError };
   }
 }
