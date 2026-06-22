@@ -488,3 +488,147 @@ export function getSiteCategory(hostname) {
   const cat = SITE_CATEGORIES.find(c => c.id === categoryId);
   return cat ? { categoryId, label: cat.label } : null;
 }
+
+// ── Policy schema + builders ──────────────────────────────────────────
+
+export const STRICTNESS_PRESETS = {
+  strict: {
+    social_media:        'block',
+    short_video:         'block',
+    streaming:           'block',
+    gaming:              'block',
+    forums:              'block',
+    memes:               'block',
+    gambling:            'block',
+    news:                'warn',
+    shopping:            'warn',
+    sports:              'warn',
+    finance:             'warn',
+    email:               'allow',
+    messaging:           'allow',
+    job_boards:          'allow',
+    professional_network:'allow',
+    documentation:       'allow',
+    code_forge:          'allow',
+    ai_tools:            'allow',
+    productivity:        'allow',
+    health:              'allow',
+    travel:              'allow',
+  },
+  balanced: {
+    social_media:        'block',
+    short_video:         'block',
+    streaming:           'block',
+    gaming:              'warn',
+    forums:              'warn',
+    memes:               'block',
+    gambling:            'block',
+    news:                'warn',
+    shopping:            'warn',
+    sports:              'warn',
+    finance:             'allow',
+    email:               'allow',
+    messaging:           'allow',
+    job_boards:          'allow',
+    professional_network:'allow',
+    documentation:       'allow',
+    code_forge:          'allow',
+    ai_tools:            'allow',
+    productivity:        'allow',
+    health:              'allow',
+    travel:              'allow',
+  },
+  relaxed: {
+    social_media:        'warn',
+    short_video:         'block',
+    streaming:           'warn',
+    gaming:              'warn',
+    forums:              'allow',
+    memes:               'warn',
+    gambling:            'warn',
+    news:                'allow',
+    shopping:            'allow',
+    sports:              'allow',
+    finance:             'allow',
+    email:               'allow',
+    messaging:           'allow',
+    job_boards:          'allow',
+    professional_network:'allow',
+    documentation:       'allow',
+    code_forge:          'allow',
+    ai_tools:            'allow',
+    productivity:        'allow',
+    health:              'allow',
+    travel:              'allow',
+  },
+};
+
+export function buildDefaultPolicy(intentCategoryId, strictness) {
+  const intentCat = INTENT_CATEGORIES.find(c => c.id === intentCategoryId);
+  const resolvedStrictness = strictness || intentCat?.defaultStrictness || 'balanced';
+  const preset = STRICTNESS_PRESETS[resolvedStrictness] || STRICTNESS_PRESETS.balanced;
+  return {
+    version: 1,
+    intentCategoryId: intentCategoryId || null,
+    strictness: resolvedStrictness,
+    categoryPolicies: { ...preset },
+    customBlockDomains: [],
+    customAllowDomains: [],
+    setupCompleted: false,
+  };
+}
+
+export function mergePolicyWithIntent(intentText, existingPolicy = null) {
+  const classification = classifyIntentCategory(intentText);
+  const base = existingPolicy ? { ...existingPolicy } : buildDefaultPolicy(classification.categoryId, null);
+  base.intentCategoryId = classification.categoryId;
+  return base;
+}
+
+function normalizeHostname(h) {
+  return String(h || '').replace(/^www\./, '').toLowerCase();
+}
+
+export function resolveDomainPolicy(hostname, policy) {
+  try {
+    if (!policy || typeof policy !== 'object') return 'neutral';
+    const normalized = normalizeHostname(hostname);
+    if (!normalized) return 'neutral';
+
+    const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
+    const blockList = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [];
+
+    if (allowList.some(d => normalizeHostname(d) === normalized)) return 'allow';
+    if (blockList.some(d => normalizeHostname(d) === normalized)) return 'block';
+
+    const lookup = getSiteCategory(normalized);
+    if (!lookup) return 'neutral';
+    return policy.categoryPolicies?.[lookup.categoryId] || 'neutral';
+  } catch {
+    return 'neutral';
+  }
+}
+
+export function getEffectiveBlockList(policy) {
+  if (!policy || typeof policy !== 'object') return [];
+  const blocked = new Set();
+  const allowSet = new Set(
+    (Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : []).map(normalizeHostname)
+  );
+
+  for (const cat of SITE_CATEGORIES) {
+    if (policy.categoryPolicies?.[cat.id] === 'block') {
+      for (const domain of cat.domains) {
+        const n = normalizeHostname(domain);
+        if (!allowSet.has(n)) blocked.add(n);
+      }
+    }
+  }
+
+  for (const d of (Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [])) {
+    const n = normalizeHostname(d);
+    if (!allowSet.has(n)) blocked.add(n);
+  }
+
+  return [...blocked];
+}

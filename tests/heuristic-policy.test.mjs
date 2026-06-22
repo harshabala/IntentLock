@@ -6,6 +6,10 @@ import {
   SITE_CATEGORIES,
   DOMAIN_TO_CATEGORY,
   getSiteCategory,
+  buildDefaultPolicy,
+  mergePolicyWithIntent,
+  resolveDomainPolicy,
+  getEffectiveBlockList,
 } from '../heuristic-policy.js';
 
 test('INTENT_CATEGORIES has at least 12 entries', () => {
@@ -117,4 +121,79 @@ test('unknown domain returns null', () => {
 
 test('www prefix is stripped before lookup', () => {
   assert.equal(getSiteCategory('www.youtube.com')?.categoryId, 'short_video');
+});
+
+test('buildDefaultPolicy has correct schema', () => {
+  const policy = buildDefaultPolicy('deep_work', 'strict');
+  assert.equal(policy.version, 1);
+  assert.equal(policy.intentCategoryId, 'deep_work');
+  assert.equal(policy.strictness, 'strict');
+  assert.ok(typeof policy.categoryPolicies === 'object');
+  assert.ok(Array.isArray(policy.customBlockDomains));
+  assert.ok(Array.isArray(policy.customAllowDomains));
+  assert.equal(policy.setupCompleted, false);
+});
+
+test('strict preset blocks social_media and short_video', () => {
+  const policy = buildDefaultPolicy('deep_work', 'strict');
+  assert.equal(policy.categoryPolicies.social_media, 'block');
+  assert.equal(policy.categoryPolicies.short_video, 'block');
+  assert.equal(policy.categoryPolicies.streaming, 'block');
+});
+
+test('relaxed preset only blocks short_video', () => {
+  const policy = buildDefaultPolicy('learning', 'relaxed');
+  assert.equal(policy.categoryPolicies.short_video, 'block');
+  assert.equal(policy.categoryPolicies.social_media, 'warn');
+  assert.equal(policy.categoryPolicies.streaming, 'warn');
+});
+
+test('balanced preset blocks social, short_video, streaming; warns gaming', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  assert.equal(policy.categoryPolicies.social_media, 'block');
+  assert.equal(policy.categoryPolicies.short_video, 'block');
+  assert.equal(policy.categoryPolicies.streaming, 'block');
+  assert.equal(policy.categoryPolicies.gaming, 'warn');
+});
+
+test('customAllowDomains overrides category block', () => {
+  const policy = buildDefaultPolicy('deep_work', 'strict');
+  policy.customAllowDomains = ['youtube.com'];
+  assert.equal(resolveDomainPolicy('youtube.com', policy), 'allow');
+});
+
+test('customBlockDomains overrides category allow', () => {
+  const policy = buildDefaultPolicy('deep_work', 'relaxed');
+  policy.customBlockDomains = ['myspecificsite.com'];
+  assert.equal(resolveDomainPolicy('myspecificsite.com', policy), 'block');
+});
+
+test('linkedin.com resolves to allow for any policy (professional_network default)', () => {
+  const policy = buildDefaultPolicy('job_search', 'balanced');
+  assert.equal(resolveDomainPolicy('linkedin.com', policy), 'allow');
+});
+
+test('null policy in resolveDomainPolicy returns neutral without throwing', () => {
+  assert.equal(resolveDomainPolicy('youtube.com', null), 'neutral');
+});
+
+test('getEffectiveBlockList includes youtube.com for strict policy', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const list = getEffectiveBlockList(policy);
+  assert.ok(Array.isArray(list));
+  assert.ok(list.includes('youtube.com'), 'youtube.com should be in block list');
+  assert.ok(list.includes('twitter.com'), 'twitter.com should be in block list');
+});
+
+test('getEffectiveBlockList excludes customAllowDomains', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  policy.customAllowDomains = ['youtube.com'];
+  const list = getEffectiveBlockList(policy);
+  assert.ok(!list.includes('youtube.com'), 'customAllowDomains should not be in block list');
+});
+
+test('mergePolicyWithIntent auto-classifies job_search text', () => {
+  const policy = mergePolicyWithIntent('applying for software engineer jobs');
+  assert.equal(policy.intentCategoryId, 'job_search');
+  assert.equal(policy.setupCompleted, false);
 });
