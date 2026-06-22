@@ -78,17 +78,25 @@
     </div>
 
     <div class="section">
-      <h2>Distraction sites</h2>
-      <p>Sites that trigger an intervention when visited during a session. One domain per line.</p>
+      <h2>Site policies</h2>
+      <p>Control how IntentLock handles each site category. Changes apply to all future sessions.</p>
 
-      <div class="input-group">
-        <label for="distraction-sites">Domains</label>
-        <textarea id="distraction-sites" placeholder="twitter.com&#10;reddit.com&#10;youtube.com"></textarea>
+      <div id="category-grid" role="group" aria-label="Site category policies">
+        <!-- populated by options.js -->
       </div>
 
-      <button id="save-sites-btn">Save sites</button>
+      <div class="input-group" style="margin-top:12px">
+        <label for="custom-block-domains">Always block (one domain per line)</label>
+        <textarea id="custom-block-domains" placeholder="myexample.com"></textarea>
+      </div>
+
+      <div class="input-group">
+        <label for="custom-allow-domains">Always allow (one domain per line)</label>
+        <textarea id="custom-allow-domains" placeholder="internal.company.com"></textarea>
+      </div>
+
+      <button id="save-sites-btn">Save site policies</button>
       <div id="sites-status" class="hidden status-feedback"></div>
-      <p class="field-hint">youtube.com is included by default. If the list is empty, defaults are used automatically.</p>
     </div>
 
     <div class="section">

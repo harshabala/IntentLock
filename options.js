@@ -8,6 +8,7 @@ import {
   validateProviderConfig,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
+import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const providerSelect = document.getElementById('provider-select');
@@ -29,7 +30,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveProviderBtn = document.getElementById('save-provider-btn');
   const providerStatus = document.getElementById('provider-status');
 
-  const distractionSitesInput = document.getElementById('distraction-sites');
   const saveSitesBtn = document.getElementById('save-sites-btn');
   const sitesStatus = document.getElementById('sites-status');
 
@@ -50,11 +50,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const provider = getProvider(providerId);
     return !provider.isLocal && providerId !== 'custom';
   }
-
-  const DEFAULT_SITES = [
-    'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
-    'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com',
-  ];
 
   PROVIDER_LIST.forEach((provider) => {
     const option = document.createElement('option');
@@ -160,8 +155,46 @@ document.addEventListener('DOMContentLoaded', () => {
     clearFieldError(apiKeyInput, 'api-key-hint');
   });
 
+  function buildCategoryGrid(policy) {
+    const grid = document.getElementById('category-grid');
+    if (!grid) return;
+    grid.textContent = '';
+
+    SITE_CATEGORIES.forEach(cat => {
+      const currentPolicy = policy.categoryPolicies?.[cat.id] || cat.defaultPolicy;
+
+      const row = document.createElement('div');
+      row.className = 'category-row';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'category-name';
+      nameEl.textContent = cat.label;
+
+      const controls = document.createElement('div');
+      controls.className = 'category-controls';
+
+      ['block', 'warn', 'allow'].forEach(choice => {
+        const labelEl = document.createElement('label');
+        labelEl.className = 'category-choice';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = `cat-${cat.id}`;
+        radio.value = choice;
+        radio.checked = choice === currentPolicy;
+        radio.setAttribute('aria-label', `${cat.label}: ${choice}`);
+
+        labelEl.append(radio, document.createTextNode(choice));
+        controls.appendChild(labelEl);
+      });
+
+      row.append(nameEl, controls);
+      grid.appendChild(row);
+    });
+  }
+
   chrome.storage.local.get([
-    'llmProviderConfig', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
+    'llmProviderConfig', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
     const processSettings = (sessionApiKey) => {
       let migratedKey = sessionApiKey;
@@ -188,8 +221,18 @@ document.addEventListener('DOMContentLoaded', () => {
         trackingToggle.checked = localResult.trackingEnabled;
       }
 
-      const sites = localResult.customDistractionSites || DEFAULT_SITES;
-      distractionSitesInput.value = sites.join('\n');
+      let activePolicy = localResult.heuristicPolicy;
+      if (!activePolicy || activePolicy.version !== 1) {
+        activePolicy = localResult.customDistractionSites
+          ? migrateLegacyDistractionSites(localResult.customDistractionSites)
+          : buildDefaultPolicy('deep_work', 'balanced');
+      }
+      buildCategoryGrid(activePolicy);
+
+      const customBlockInput = document.getElementById('custom-block-domains');
+      const customAllowInput = document.getElementById('custom-allow-domains');
+      if (customBlockInput) customBlockInput.value = (activePolicy.customBlockDomains || []).join('\n');
+      if (customAllowInput) customAllowInput.value = (activePolicy.customAllowDomains || []).join('\n');
 
       const theme = localResult.theme || 'auto';
       document.querySelectorAll('.theme-btn').forEach((btn) => {
@@ -351,15 +394,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  saveSitesBtn.addEventListener('click', () => {
-    const raw = distractionSitesInput.value.trim();
-    const sites = raw.split('\n')
-      .map((s) => s.trim().toLowerCase())
-      .filter((s) => s.length > 0 && s.includes('.'));
+  const HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/;
+  function parseCustomDomains(text) {
+    return text.split('\n').map(s => s.trim().toLowerCase()).filter(s => s && HOSTNAME_RE.test(s));
+  }
 
-    chrome.storage.local.set({ customDistractionSites: sites }, () => {
-      showStatus(sitesStatus, `${sites.length} sites saved.`);
-      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+  saveSitesBtn.addEventListener('click', () => {
+    const categoryPolicies = {};
+    document.querySelectorAll('#category-grid input[type="radio"]:checked').forEach(radio => {
+      const catId = radio.name.replace(/^cat-/, '');
+      categoryPolicies[catId] = radio.value;
+    });
+
+    const customBlockDomains = parseCustomDomains(
+      (document.getElementById('custom-block-domains')?.value || '')
+    );
+    const customAllowDomains = parseCustomDomains(
+      (document.getElementById('custom-allow-domains')?.value || '')
+    );
+
+    chrome.storage.local.get(['heuristicPolicy'], (result) => {
+      const current = (result.heuristicPolicy?.version === 1)
+        ? result.heuristicPolicy
+        : buildDefaultPolicy('deep_work', 'balanced');
+      const updated = { ...current, categoryPolicies, customBlockDomains, customAllowDomains, setupCompleted: true };
+      chrome.storage.local.set({ heuristicPolicy: updated }, () => {
+        showStatus(sitesStatus, 'Site policies saved.');
+        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      });
     });
   });
 
