@@ -93,6 +93,19 @@ test('newtab.html contains intent-input textarea with maxlength attribute', asyn
   assert.ok(!isNaN(limit) && limit > 0, `maxlength limit should be a valid positive integer, got ${limit}`);
 });
 
+test('options tracking toggle meets 44px minimum touch target', async () => {
+  const css = await text('newtab.css');
+  const html = await text('options.html');
+
+  assert.match(html, /class=["']tracking-toggle-hit["']/);
+  assert.match(html, /id=["']tracking-toggle["']/);
+
+  const hitTargetBlock = css.match(/\.tracking-toggle-hit\s*\{([^}]+)\}/);
+  assert.ok(hitTargetBlock, 'tracking-toggle-hit styles required');
+  assert.match(hitTargetBlock[1], /min-width:\s*44px/);
+  assert.match(hitTargetBlock[1], /min-height:\s*44px/);
+});
+
 test('options.html exposes multi-provider LLM settings', async () => {
   const html = await text('options.html');
   assert.match(html, /id=["']provider-select["']/);

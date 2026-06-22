@@ -569,19 +569,35 @@ body.options {
 
 .toggle-row {
   display: flex;
-  gap: 12px;
   align-items: center;
   margin-bottom: 20px;
 }
 
-.toggle-row input[type="checkbox"] {
+.tracking-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.tracking-toggle-hit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+}
+
+.tracking-toggle-hit input[type="checkbox"] {
   width: 16px;
   height: 16px;
+  margin: 0;
   accent-color: var(--text-primary);
 }
 
-.toggle-row label {
-  margin: 0;
+.tracking-toggle-text {
   font-size: 0.75rem;
   text-transform: none;
   letter-spacing: 0.02em;

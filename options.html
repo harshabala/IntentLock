@@ -86,8 +86,12 @@
       <p>Manage what the extension tracks on your local machine.</p>
 
       <div class="toggle-row">
-        <input type="checkbox" id="tracking-toggle" checked>
-        <label for="tracking-toggle">Enable behavior &amp; time tracking</label>
+        <label class="tracking-toggle-label">
+          <span class="tracking-toggle-hit">
+            <input type="checkbox" id="tracking-toggle" checked>
+          </span>
+          <span class="tracking-toggle-text">Enable behavior &amp; time tracking</span>
+        </label>
       </div>
 
       <button id="export-btn" class="complete-btn">Export session history (JSON)</button>
