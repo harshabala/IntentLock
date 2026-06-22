@@ -703,6 +703,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const form = document.createElement('form');
     form.id = 'intent-form';
+    form.noValidate = true;
 
     const intentGroup = document.createElement('div');
     intentGroup.className = 'input-group';
