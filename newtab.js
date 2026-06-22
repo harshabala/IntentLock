@@ -9,6 +9,10 @@ import {
   validateApiKey,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
+import {
+  INTENT_CATEGORIES,
+  buildDefaultPolicy,
+} from './heuristic-policy.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -653,7 +657,7 @@ document.addEventListener('DOMContentLoaded', () => {
       skipBtn.type = 'button';
       skipBtn.className = 'complete-btn onboarding-skip-btn';
       skipBtn.textContent = 'SKIP';
-      skipBtn.addEventListener('click', finishOnboarding);
+      skipBtn.addEventListener('click', showStep3);
 
       const lockInBtn = document.createElement('button');
       lockInBtn.type = 'button';
@@ -698,7 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
               }
             });
-            finishOnboarding();
+            showStep3();
           };
 
           const failSetup = (msg, errorType = ERROR_TYPES.STORAGE) => {
@@ -777,6 +781,102 @@ document.addEventListener('DOMContentLoaded', () => {
         if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
         showNewSessionForm(container);
       });
+    }
+
+    function showStep3() {
+      container.textContent = '';
+
+      const header = document.createElement('div');
+      header.className = 'header onboarding-header';
+      const h1 = document.createElement('h1');
+      h1.textContent = 'SET YOUR DEFAULT POLICY';
+      const desc = document.createElement('p');
+      desc.textContent = 'Choose your most common intent type and how strictly IntentLock should enforce it. You can change this anytime in Settings.';
+      header.append(h1, desc);
+      container.appendChild(header);
+
+      // Intent category selector
+      const categoryGroup = document.createElement('div');
+      categoryGroup.className = 'input-group onboarding-input-group';
+      const categoryLabel = document.createElement('label');
+      categoryLabel.setAttribute('for', 'onboarding-category');
+      categoryLabel.textContent = 'Default intent type';
+      const categorySelect = document.createElement('select');
+      categorySelect.id = 'onboarding-category';
+      INTENT_CATEGORIES.forEach(cat => {
+        const option = document.createElement('option');
+        option.value = cat.id;
+        option.textContent = cat.label;
+        if (cat.id === 'deep_work') option.selected = true;
+        categorySelect.appendChild(option);
+      });
+      categoryGroup.append(categoryLabel, categorySelect);
+      container.appendChild(categoryGroup);
+
+      // Strictness selector
+      const strictnessGroup = document.createElement('div');
+      strictnessGroup.className = 'input-group onboarding-input-group';
+      const strictnessLabel = document.createElement('label');
+      strictnessLabel.setAttribute('for', 'onboarding-strictness');
+      strictnessLabel.textContent = 'Strictness';
+      const strictnessSelect = document.createElement('select');
+      strictnessSelect.id = 'onboarding-strictness';
+      [
+        { value: 'relaxed', text: 'Relaxed — only block short video' },
+        { value: 'balanced', text: 'Balanced — block social, short video, streaming' },
+        { value: 'strict', text: 'Strict — block social, video, gaming, forums' },
+      ].forEach(({ value, text }) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        if (value === 'balanced') option.selected = true;
+        strictnessSelect.appendChild(option);
+      });
+      strictnessGroup.append(strictnessLabel, strictnessSelect);
+      container.appendChild(strictnessGroup);
+
+      const statusEl = document.createElement('p');
+      statusEl.className = 'onboarding-status hidden';
+      statusEl.setAttribute('role', 'alert');
+      statusEl.setAttribute('aria-live', 'polite');
+      container.appendChild(statusEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'onboarding-actions';
+
+      const skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'complete-btn onboarding-skip-btn';
+      skipBtn.textContent = 'SKIP';
+      skipBtn.addEventListener('click', finishOnboarding);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'primary-btn onboarding-lock-btn';
+      saveBtn.textContent = 'SAVE POLICY';
+      saveBtn.addEventListener('click', () => {
+        const policy = buildDefaultPolicy(categorySelect.value, strictnessSelect.value);
+        policy.setupCompleted = true;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        chrome.storage.local.set({ heuristicPolicy: policy }, () => {
+          if (chrome.runtime.lastError) {
+            statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
+            statusEl.classList.remove('hidden');
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'SAVE POLICY';
+            return;
+          }
+          chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+            void chrome.runtime.lastError;
+          });
+          finishOnboarding();
+        });
+      });
+
+      actionsRow.append(skipBtn, saveBtn);
+      container.appendChild(actionsRow);
+      categorySelect.focus();
     }
 
     showStep1();
