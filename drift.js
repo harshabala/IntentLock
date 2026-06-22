@@ -1,3 +1,5 @@
+export const DRIFT_CONFIDENCE_THRESHOLD = 0.7;
+
 const STOP_WORDS = new Set([
   'about', 'after', 'again', 'also', 'from', 'have', 'into', 'latest',
   'learn', 'look', 'make', 'need', 'page', 'read', 'some', 'task',
@@ -70,12 +72,12 @@ function evaluateHeuristicDrift({ intent, url, events = [], distractionSites = [
   if (!currentAligned && sameDomainLoads >= 2) score += 0.2;
 
   let reason = 'low_confidence';
-  if (score >= 0.7) {
+  if (score >= DRIFT_CONFIDENCE_THRESHOLD) {
     reason = tabSwitches >= 4 ? 'rapid_context_switching' : 'repeated_unrelated_activity';
   }
 
   return {
-    shouldIntervene: score >= 0.7,
+    shouldIntervene: score >= DRIFT_CONFIDENCE_THRESHOLD,
     score: Math.min(score, 1),
     reason
   };

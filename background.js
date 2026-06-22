@@ -1,5 +1,5 @@
 // background.js
-import { evaluateHeuristicDrift } from './drift.js';
+import { evaluateHeuristicDrift, DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
 import { checkDriftLLM } from './llm.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 
@@ -520,7 +520,7 @@ function evaluateDrift(url, tabId) {
     }
 
     checkDriftLLM(session.intent, url, session.events).then(res => {
-      if (!res.isAligned) {
+      if (!res.isAligned && res.confidence >= DRIFT_CONFIDENCE_THRESHOLD) {
         chrome.storage.local.get(['activeSession', 'overrideCooldowns'], (storageResult) => {
           const current = storageResult.activeSession;
           if (current && current.isActive && current.id === session.id) {
