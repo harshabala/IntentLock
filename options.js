@@ -39,6 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const dataStatus = document.getElementById('data-status');
   const themeStatus = document.getElementById('theme-status');
   const openDiagnosticsBtn = document.getElementById('open-diagnostics-btn');
+  const testInterventionBtn = document.getElementById('test-intervention-btn');
+  const testInterventionStatus = document.getElementById('test-intervention-status');
   let deleteArmed = false;
   let deleteArmTimer = null;
   let hasSavedApiKey = false;
@@ -51,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const DEFAULT_SITES = [
     'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
-    'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'
+    'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com',
   ];
 
   PROVIDER_LIST.forEach((provider) => {
@@ -461,6 +463,20 @@ document.addEventListener('DOMContentLoaded', () => {
       setTheme();
     }
   }
+
+  testInterventionBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'TEST_INTERVENTION' }, (response) => {
+      if (chrome.runtime.lastError) {
+        showStatus(testInterventionStatus, 'Could not reach extension background. Reload the extension.');
+        return;
+      }
+      if (response?.ok) {
+        showStatus(testInterventionStatus, 'Intervention triggered on your current tab.');
+      } else {
+        showStatus(testInterventionStatus, response?.error || 'Could not trigger intervention.');
+      }
+    });
+  });
 
   document.querySelectorAll('.theme-btn').forEach((btn) => {
     btn.addEventListener('click', () => {

@@ -56,6 +56,9 @@ async function checkDriftLLM(intent, url, history) {
     });
 
     if (!result.ok) {
+      if (result.error?.code === 'quota_backoff' || result.error?.code === 'quota_exceeded') {
+        return { isAligned: true, confidence: 0, llmSkipped: result.error.code };
+      }
       return { isAligned: true, confidence: 0 };
     }
 

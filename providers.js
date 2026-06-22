@@ -1,6 +1,12 @@
 // providers.js — Multi-provider LLM adapter for IntentLock
 
 import { classifyApiError, logError, ERROR_TYPES } from './error-log.js';
+import {
+  isLlmBackedOff,
+  parseRetryAfterMs,
+  setQuotaBackoff,
+  shouldLogQuotaError,
+} from './llm-backoff.js';
 
 export const DEFAULT_PROVIDER_ID = 'openai';
 
@@ -21,7 +27,7 @@ export const PROVIDERS = {
     id: 'gemini',
     label: 'Google Gemini',
     apiStyle: 'gemini',
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-2.0-flash-lite',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
     authType: 'query',
     requiresApiKey: true,
@@ -143,6 +149,8 @@ async function throwApiFailure(response, providerId) {
   const apiError = classifyApiError(response.status, bodyText, providerId);
   const err = new Error(apiError.message);
   err.apiError = apiError;
+  err.bodyText = bodyText;
+  err.status = response.status;
   throw err;
 }
 
@@ -327,6 +335,17 @@ export async function chatCompletion(prompt, options = {}) {
     return { ok: false, error: { code: 'not_configured', message: 'LLM provider is not configured.', providerId: config.providerId } };
   }
 
+  if (isLlmBackedOff()) {
+    return {
+      ok: false,
+      error: {
+        code: 'quota_backoff',
+        message: 'LLM calls paused after a quota error. Heuristic drift still works. Retry later or switch models in Settings.',
+        providerId: config.providerId,
+      },
+    };
+  }
+
   const apiStyle = config.providerId === 'custom'
     ? (config.apiStyle || 'openai')
     : config.provider.apiStyle;
@@ -387,13 +406,31 @@ export async function chatCompletion(prompt, options = {}) {
 
     return { ok: true, text };
   } catch (error) {
-    const apiError = error.apiError || classifyApiError(0, error.message, config.providerId);
-    await logError({
-      type: ERROR_TYPES.API,
-      message: apiError.message,
-      details: apiError,
-      source: 'chatCompletion',
-    });
+    const bodyText = error.bodyText || error.message || '';
+    const apiError = error.apiError || classifyApiError(error.status || 0, bodyText, config.providerId);
+
+    if (apiError.code === 'quota_exceeded') {
+      setQuotaBackoff({ retryAfterMs: parseRetryAfterMs(bodyText) });
+      if (shouldLogQuotaError()) {
+        const modelHint = config.providerId === 'gemini'
+          ? ' Try model gemini-2.0-flash-lite in Advanced settings, or wait for quota reset.'
+          : '';
+        await logError({
+          type: ERROR_TYPES.API,
+          message: `${apiError.message}${modelHint}`,
+          details: { ...apiError, model: config.model },
+          source: 'chatCompletion',
+        });
+      }
+    } else {
+      await logError({
+        type: ERROR_TYPES.API,
+        message: apiError.message,
+        details: apiError,
+        source: 'chatCompletion',
+      });
+    }
+
     return { ok: false, error: apiError };
   }
 }

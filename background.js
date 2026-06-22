@@ -3,14 +3,13 @@ import { evaluateHeuristicDrift, DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
 import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
+import { DEFAULT_DISTRACTION_SITES, getEffectiveDistractionSites } from './distraction-sites.js';
+import { clearLlmBackoff } from './llm-backoff.js';
 
 let currentSession = null;
 let timeBudgetAlarmName = 'intentlock-budget-alarm';
 let trackingEnabled = true;
-let customDistractionSites = [
-  'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
-  'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'
-];
+let customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
 let sessionTabGroupId = null;
 
 const OVERRIDE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
@@ -120,7 +119,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR',
-    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS'
+    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'TEST_INTERVENTION'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -181,6 +180,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
       sendResponse({ status: 'ok' });
+    } else if (message.type === 'TEST_INTERVENTION') {
+      chrome.storage.local.get(['activeSession'], (result) => {
+        const session = result.activeSession;
+        if (!session?.isActive) {
+          sendResponse({ ok: false, error: 'Start a session first (Lock in on the new tab).' });
+          return;
+        }
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const activeTab = tabs.find((tab) => tab.id && tab.url && isTrackableUrl(tab.url));
+          triggerIntervention('Test intervention — drift detection is working.', activeTab?.id || null);
+          sendResponse({ ok: true });
+        });
+      });
     }
   });
   return true; // Keep channel open for async response
@@ -220,14 +232,7 @@ function loadConfig() {
       } else {
         trackingEnabled = true;
       }
-      if (data.customDistractionSites) {
-        customDistractionSites = data.customDistractionSites;
-      } else {
-        customDistractionSites = [
-          'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
-          'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'
-        ];
-      }
+      customDistractionSites = getEffectiveDistractionSites(data.customDistractionSites);
       if (data.sessionTabGroupId !== undefined) {
         sessionTabGroupId = data.sessionTabGroupId;
       } else {
@@ -329,6 +334,7 @@ migrateLlmStorage();
 function handleSessionStart(session) {
   currentSession = session;
   clearDriftCache();
+  clearLlmBackoff();
   overrideCooldowns.clear(); // clear cooldowns on new session
   chrome.storage.local.remove(['overrideCooldowns']);
 
@@ -569,7 +575,10 @@ function evaluateDrift(url, tabId) {
       return;
     }
 
-    const customDistSites = result.customDistractionSites || customDistractionSites;
+    const customDistSites = getEffectiveDistractionSites(
+      result.customDistractionSites,
+      customDistractionSites,
+    );
     const heuristic = evaluateHeuristicDrift({
       intent: session.intent,
       url,
