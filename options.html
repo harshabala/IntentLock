@@ -47,21 +47,29 @@
         </div>
       </div>
 
-      <div class="input-group">
-        <label for="model-input">Model</label>
-        <input type="text" id="model-input" placeholder="gpt-4o-mini">
-      </div>
-
-      <div id="base-url-group" class="input-group">
-        <label for="base-url-input">API endpoint</label>
-        <input type="text" id="base-url-input" placeholder="https://api.openai.com/v1/chat/completions">
-        <p class="field-hint" id="base-url-hint"></p>
-      </div>
-
       <div id="api-key-group" class="input-group">
         <label for="api-key">API key</label>
         <input type="password" id="api-key" placeholder="sk-...">
         <p class="field-hint" id="api-key-hint">Stored in transient session memory — cleared when the browser closes.</p>
+      </div>
+
+      <div id="provider-advanced-disclosure" class="disclosure hidden">
+        <button type="button" id="provider-advanced-toggle" class="disclosure-toggle" aria-expanded="false" aria-controls="provider-model-fields">
+          Advanced
+        </button>
+      </div>
+
+      <div id="provider-model-fields" class="hidden">
+        <div class="input-group">
+          <label for="model-input">Model</label>
+          <input type="text" id="model-input" placeholder="gpt-4o-mini">
+        </div>
+
+        <div id="base-url-group" class="input-group">
+          <label for="base-url-input">API endpoint</label>
+          <input type="text" id="base-url-input" placeholder="https://api.openai.com/v1/chat/completions">
+          <p class="field-hint" id="base-url-hint"></p>
+        </div>
       </div>
 
       <button id="save-provider-btn">Save provider settings</button>

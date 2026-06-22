@@ -169,6 +169,57 @@ select:focus {
   margin-bottom: 8px;
 }
 
+.disclosure {
+  margin-bottom: 8px;
+}
+
+.disclosure-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 10px 14px;
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.7rem;
+  font-weight: 500;
+  font-family: var(--font);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.disclosure-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+  background-color: transparent;
+  opacity: 1;
+}
+
+.disclosure-toggle::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--transition);
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.disclosure-toggle[aria-expanded="true"]::after {
+  transform: rotate(-135deg);
+}
+
+#provider-model-fields.hidden {
+  display: none;
+}
+
 textarea,
 input[type="number"],
 input[type="password"],

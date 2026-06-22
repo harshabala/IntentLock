@@ -114,6 +114,33 @@ test('options.html exposes multi-provider LLM settings', async () => {
   assert.match(html, /id=["']custom-provider-fields["']/);
 });
 
+test('options page uses progressive disclosure for cloud LLM settings', async () => {
+  const html = await text('options.html');
+  const js = await text('options.js');
+  const css = await text('newtab.css');
+
+  assert.match(html, /id=["']provider-advanced-disclosure["']/);
+  assert.match(html, /id=["']provider-advanced-toggle["']/);
+  assert.match(html, /id=["']provider-model-fields["']/);
+  assert.match(html, /aria-controls=["']provider-model-fields["']/);
+  assert.match(html, /aria-expanded=["']false["']/);
+
+  const providerIdx = html.indexOf('id="provider-select"');
+  const apiKeyIdx = html.indexOf('id="api-key-group"');
+  const advancedIdx = html.indexOf('id="provider-advanced-disclosure"');
+  const modelFieldsIdx = html.indexOf('id="provider-model-fields"');
+  assert.ok(providerIdx < apiKeyIdx, 'provider select should precede API key for cloud defaults');
+  assert.ok(apiKeyIdx < advancedIdx, 'API key should precede advanced disclosure');
+  assert.ok(advancedIdx < modelFieldsIdx, 'advanced toggle should precede model fields');
+
+  assert.match(js, /function\s+isCloudProvider/);
+  assert.match(js, /providerAdvancedOpen/);
+  assert.match(js, /providerAdvancedDisclosure\.classList\.toggle\(\s*['"]hidden['"],\s*!cloudProvider\)/);
+
+  assert.match(css, /\.disclosure-toggle/);
+  assert.match(css, /aria-expanded/);
+});
+
 test('newtab.js enforces maxLength on dynamically created textareas', async () => {
   const code = await text('newtab.js');
   

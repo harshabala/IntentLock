@@ -15,6 +15,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const customLabelInput = document.getElementById('custom-label');
   const apiStyleSelect = document.getElementById('api-style-select');
   const authTypeSelect = document.getElementById('auth-type-select');
+  const providerAdvancedDisclosure = document.getElementById('provider-advanced-disclosure');
+  const providerAdvancedToggle = document.getElementById('provider-advanced-toggle');
+  const providerModelFields = document.getElementById('provider-model-fields');
   const modelInput = document.getElementById('model-input');
   const baseUrlGroup = document.getElementById('base-url-group');
   const baseUrlInput = document.getElementById('base-url-input');
@@ -37,6 +40,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let deleteArmed = false;
   let deleteArmTimer = null;
   let hasSavedApiKey = false;
+  let providerAdvancedOpen = false;
+
+  function isCloudProvider(providerId) {
+    const provider = getProvider(providerId);
+    return !provider.isLocal && providerId !== 'custom';
+  }
 
   const DEFAULT_SITES = [
     'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
@@ -65,10 +74,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateProviderUI(providerId = providerSelect.value) {
     const provider = getProvider(providerId);
+    const cloudProvider = isCloudProvider(providerId);
     providerDescription.textContent = provider.description;
     customProviderFields.classList.toggle('hidden', providerId !== 'custom');
 
-    const showBaseUrl = providerId === 'custom' || provider.isLocal;
+    providerAdvancedDisclosure.classList.toggle('hidden', !cloudProvider);
+    if (cloudProvider) {
+      providerModelFields.classList.toggle('hidden', !providerAdvancedOpen);
+      providerAdvancedToggle.setAttribute('aria-expanded', String(providerAdvancedOpen));
+    } else {
+      providerModelFields.classList.remove('hidden');
+      providerAdvancedOpen = false;
+      providerAdvancedToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    const showBaseUrl = providerId === 'custom' || provider.isLocal || cloudProvider;
     baseUrlGroup.classList.toggle('hidden', !showBaseUrl);
 
     if (providerId !== 'custom') {
@@ -108,7 +128,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const provider = getProvider(providerSelect.value);
     modelInput.value = provider.defaultModel;
     baseUrlInput.value = provider.defaultBaseUrl;
+    providerAdvancedOpen = false;
     updateProviderUI(providerSelect.value);
+  });
+
+  providerAdvancedToggle.addEventListener('click', () => {
+    providerAdvancedOpen = !providerAdvancedOpen;
+    updateProviderUI();
   });
 
   authTypeSelect.addEventListener('change', () => updateProviderUI());
