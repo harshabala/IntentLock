@@ -1,9 +1,10 @@
 // background.js
-import { evaluateHeuristicDrift, DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
+import { DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
+import { evaluatePolicyDrift, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
 import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
-import { DEFAULT_DISTRACTION_SITES, getEffectiveDistractionSites } from './distraction-sites.js';
+import { getEffectiveDistractionSites, DEFAULT_DISTRACTION_SITES } from './distraction-sites.js';
 import { clearLlmBackoff } from './llm-backoff.js';
 
 let currentSession = null;
@@ -11,6 +12,7 @@ let timeBudgetAlarmName = 'intentlock-budget-alarm';
 let trackingEnabled = true;
 let customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
 let sessionTabGroupId = null;
+let heuristicPolicy = null;
 
 const OVERRIDE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const overrideCooldowns = new Map(); // domain -> cooldown expiry timestamp
@@ -204,9 +206,9 @@ function loadConfig() {
   if (configPromise) return configPromise;
   configPromise = new Promise((resolve) => {
     chrome.storage.local.get([
-      'activeSession', 'trackingEnabled', 'customDistractionSites', 
+      'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
-      'overrideCooldowns'
+      'overrideCooldowns', 'heuristicPolicy'
     ], (result) => {
       const data = result || {};
       if (data.activeSession && data.activeSession.isActive) {
@@ -233,6 +235,14 @@ function loadConfig() {
         trackingEnabled = true;
       }
       customDistractionSites = getEffectiveDistractionSites(data.customDistractionSites);
+      if (data.heuristicPolicy && data.heuristicPolicy.version === 1) {
+        heuristicPolicy = data.heuristicPolicy;
+      } else if (data.customDistractionSites) {
+        heuristicPolicy = migrateLegacyDistractionSites(data.customDistractionSites);
+        chrome.storage.local.set({ heuristicPolicy });
+      } else {
+        heuristicPolicy = buildDefaultPolicy('deep_work', 'balanced');
+      }
       if (data.sessionTabGroupId !== undefined) {
         sessionTabGroupId = data.sessionTabGroupId;
       } else {
@@ -575,22 +585,17 @@ function evaluateDrift(url, tabId) {
       return;
     }
 
-    const customDistSites = getEffectiveDistractionSites(
-      result.customDistractionSites,
-      customDistractionSites,
-    );
-    const heuristic = evaluateHeuristicDrift({
+    const activePolicy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+    const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
       events: session.events,
-      distractionSites: customDistSites
+      policy: activePolicy,
+      now: Date.now(),
     });
 
-    if (heuristic.shouldIntervene) {
-      const reason = heuristic.reason === 'known_distraction'
-        ? 'You seem to be drifting to a known distraction site. Why?'
-        : 'Your recent browsing no longer matches your declared intent. Why?';
-      triggerIntervention(reason, tabId);
+    if (policyDrift.shouldIntervene) {
+      triggerIntervention(policyDrift.reasonLabel || 'Your recent browsing no longer matches your declared intent.', tabId);
       return;
     }
 
@@ -738,6 +743,7 @@ export function getInMemoryState() {
     currentSession,
     trackingEnabled,
     customDistractionSites,
+    heuristicPolicy,
     sessionTabGroupId,
     isCurrentlyIdle,
     lastIdleTime,
