@@ -124,4 +124,26 @@ test('newtab.js enforces maxLength on dynamically created textareas', async () =
   assert.match(code, /intentInput\.maxLength\s*=\s*\d+/);
 });
 
+test('newtab.js modal dialogs use shared a11y helper with focus trap', async () => {
+  const code = await text('newtab.js');
+
+  assert.match(code, /function\s+setupModalDialog/);
+  assert.match(code, /setAttribute\(['"]role['"],\s*['"]dialog['"]\)/);
+  assert.match(code, /setAttribute\(['"]aria-modal['"],\s*['"]true['"]\)/);
+  assert.match(code, /setAttribute\(['"]aria-labelledby['"],\s*headingId\)/);
+  assert.match(code, /e\.key\s*===\s*['"]Escape['"]/);
+  assert.match(code, /e\.key\s*!==\s*['"]Tab['"]/);
+  assert.match(code, /setupModalDialog\(\{[^}]*overlay[^}]*dialog[^}]*heading[^}]*trigger/);
+  assert.match(code, /showConfirmEndDialog\(container,\s*session,\s*e\.currentTarget\)/);
+  assert.match(code, /showShortcutsModal\(e\.currentTarget\)/);
+});
+
+test('shortcuts button exposes accessible label without innerHTML', async () => {
+  const code = await text('newtab.js');
+
+  assert.match(code, /shortcutsBtn\.setAttribute\(['"]aria-label['"],\s*['"]Keyboard shortcuts['"]\)/);
+  assert.match(code, /shortcutsBtn\.textContent\s*=\s*['"]\?['"]/);
+  assert.equal(code.includes('shortcutsBtn.innerHTML'), false);
+});
+
 

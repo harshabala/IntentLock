@@ -34,6 +34,78 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(finish, 250);
   }
 
+  function setupModalDialog({ overlay, dialog, heading, trigger }) {
+    const previousFocus = trigger || document.activeElement;
+    const headingId = `modal-title-${crypto.randomUUID()}`;
+    heading.id = headingId;
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', headingId);
+
+    const FOCUSABLE_SELECTOR =
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    function getFocusableElements() {
+      return Array.from(dialog.querySelectorAll(FOCUSABLE_SELECTOR))
+        .filter((el) => el.offsetParent !== null || el === document.activeElement);
+    }
+
+    function restoreFocus() {
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+      }
+    }
+
+    function handleKeydown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const focusable = getFocusableElements();
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    function teardown() {
+      document.removeEventListener('keydown', handleKeydown);
+    }
+
+    function closeModal(callback) {
+      teardown();
+      closeOverlay(overlay, () => {
+        restoreFocus();
+        if (callback) callback();
+      });
+    }
+
+    document.addEventListener('keydown', handleKeydown);
+
+    const focusable = getFocusableElements();
+    if (focusable.length > 0) {
+      focusable[0].focus();
+    } else {
+      dialog.setAttribute('tabindex', '-1');
+      dialog.focus();
+    }
+
+    return { closeModal };
+  }
+
   let timerInterval = null;
 
   chrome.storage.local.get(['activeSession', 'hasSeenOnboarding'], (result) => {
@@ -234,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = document.createElement('button');
     btn.className = 'complete-btn';
     btn.textContent = 'Complete session';
-    btn.addEventListener('click', () => showConfirmEndDialog(container, session));
+    btn.addEventListener('click', (e) => showConfirmEndDialog(container, session, e.currentTarget));
     actions.appendChild(btn);
 
     container.appendChild(actions);
@@ -242,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Confirmation dialog ─────────────────────────────────────────────
 
-  function showConfirmEndDialog(container, session) {
+  function showConfirmEndDialog(container, session, trigger) {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
 
@@ -264,20 +336,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'complete-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
-      closeOverlay(overlay);
-    });
 
     const confirmBtn = document.createElement('button');
     confirmBtn.textContent = 'End session';
-    confirmBtn.addEventListener('click', () => {
-      closeOverlay(overlay, () => endSession(container, session));
-    });
 
     actions.append(cancelBtn, confirmBtn);
     dialog.append(h3, p, actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+
+    const { closeModal } = setupModalDialog({ overlay, dialog, heading: h3, trigger });
+
+    cancelBtn.addEventListener('click', () => closeModal());
+    confirmBtn.addEventListener('click', () => closeModal(() => endSession(container, session)));
   }
 
   function showEditIntentDialog(session, intentTextElement) {
@@ -668,8 +739,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const shortcutsBtn = document.createElement('button');
     shortcutsBtn.className = 'shortcuts-btn';
     shortcutsBtn.type = 'button';
-    shortcutsBtn.innerHTML = '?';
-    shortcutsBtn.addEventListener('click', showShortcutsModal);
+    shortcutsBtn.setAttribute('aria-label', 'Keyboard shortcuts');
+    shortcutsBtn.textContent = '?';
+    shortcutsBtn.addEventListener('click', (e) => showShortcutsModal(e.currentTarget));
     container.appendChild(shortcutsBtn);
 
     bindForm();
@@ -677,7 +749,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Keyboard shortcuts modal ─────────────────────────────────────────
 
-  function showShortcutsModal() {
+  function showShortcutsModal(trigger) {
     const modal = document.createElement('div');
     modal.className = 'shortcuts-modal';
 
@@ -719,27 +791,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeBtn = document.createElement('button');
     closeBtn.className = 'complete-btn';
     closeBtn.textContent = 'Close';
-    closeBtn.addEventListener('click', () => {
-      closeOverlay(modal);
-    });
     content.appendChild(closeBtn);
 
     modal.appendChild(content);
     document.body.appendChild(modal);
 
-    // Close on escape
-    const handleEsc = (e) => {
-      if (e.key === 'Escape') {
-        closeOverlay(modal, () => document.removeEventListener('keydown', handleEsc));
-      }
-    };
-    document.addEventListener('keydown', handleEsc);
+    const { closeModal } = setupModalDialog({ overlay: modal, dialog: content, heading: h3, trigger });
 
-    // Close on overlay click
+    closeBtn.addEventListener('click', () => closeModal());
+
     modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        closeOverlay(modal, () => document.removeEventListener('keydown', handleEsc));
-      }
+      if (e.target === modal) closeModal();
     });
   }
 
