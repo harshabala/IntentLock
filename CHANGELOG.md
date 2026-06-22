@@ -1,5 +1,14 @@
 # IntentLock Changelog
 
+## [1.5.0] — 2026-06-22
+
+### Added
+- Heuristic self-setup engine (`heuristic-policy.js`): intent taxonomy (12 categories), site taxonomy (21 categories, 529 domains), policy schema with strictness presets, category-aware drift evaluator
+- Onboarding step 3: intent category and strictness picker
+- Settings category grid: per-category block/warn/allow controls replacing flat domain textarea
+- Migration from legacy `customDistractionSites` flat list to `heuristicPolicy` schema
+- Deterministic heuristics work with zero API key
+
 ## [1.4.0] - 2026-06-22
 
 ### Added
