@@ -791,3 +791,67 @@ export function evaluatePolicyDrift({ intent, url, events = [], policy, now = Da
     signals,
   };
 }
+
+// ── Onboarding / settings UI contract ─────────────────────────────────
+
+export const SETUP_WIZARD_STEPS = [
+  {
+    id: 'intent',
+    title: 'What are you working on?',
+    description: 'Describe your goal for this session. The more specific, the better.',
+  },
+  {
+    id: 'category',
+    title: 'Confirm your intent type',
+    description: 'We detected what kind of work this is. Adjust if needed.',
+  },
+  {
+    id: 'strictness',
+    title: 'How strict should IntentLock be?',
+    description: 'Choose how aggressively to block distracting sites.',
+  },
+  {
+    id: 'review',
+    title: 'Review your session policy',
+    description: 'Confirm which site categories will be blocked, warned, or allowed.',
+  },
+];
+
+export function getCategoryPolicyOptions(intentCategoryId) {
+  const intentCat = INTENT_CATEGORIES.find(c => c.id === intentCategoryId);
+  const strictness = intentCat?.defaultStrictness || 'balanced';
+  const preset = STRICTNESS_PRESETS[strictness] || STRICTNESS_PRESETS.balanced;
+  return SITE_CATEGORIES.map(cat => ({
+    siteCategoryId: cat.id,
+    label: cat.label,
+    description: cat.description,
+    recommended: preset[cat.id] || 'allow',
+    choices: ['block', 'warn', 'allow'],
+  }));
+}
+
+// ── Migration ──────────────────────────────────────────────────────────
+
+const DEFAULT_LEGACY_DOMAINS = new Set([
+  'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
+  'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com',
+]);
+
+export function migrateLegacyDistractionSites(customDistractionSites) {
+  const list = Array.isArray(customDistractionSites) ? customDistractionSites : [];
+  const base = buildDefaultPolicy('deep_work', 'balanced');
+
+  if (list.length === 0) return base;
+
+  const isDefaultList = list.length === DEFAULT_LEGACY_DOMAINS.size &&
+    list.every(d => DEFAULT_LEGACY_DOMAINS.has(String(d).replace(/^www\./, '').toLowerCase()));
+
+  if (isDefaultList) return base;
+
+  const customBlocks = list.filter(d => {
+    const n = String(d).replace(/^www\./, '').toLowerCase();
+    return !DOMAIN_TO_CATEGORY.has(n);
+  });
+  base.customBlockDomains = customBlocks;
+  return base;
+}

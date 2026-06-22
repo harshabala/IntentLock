@@ -321,3 +321,57 @@ test('invalid url returns shouldIntervene false without throwing', () => {
   assert.equal(result.shouldIntervene, false);
   assert.equal(result.reason, 'invalid_url');
 });
+
+// ── UI exports and migration ──────────────────────────────────────────
+
+import {
+  SETUP_WIZARD_STEPS,
+  getCategoryPolicyOptions,
+  migrateLegacyDistractionSites,
+} from '../heuristic-policy.js';
+
+test('SETUP_WIZARD_STEPS has exactly 4 steps with correct ids', () => {
+  assert.equal(SETUP_WIZARD_STEPS.length, 4);
+  assert.deepEqual(SETUP_WIZARD_STEPS.map(s => s.id), ['intent', 'category', 'strictness', 'review']);
+});
+
+test('each wizard step has title and description', () => {
+  for (const step of SETUP_WIZARD_STEPS) {
+    assert.ok(typeof step.title === 'string' && step.title.length > 0);
+    assert.ok(typeof step.description === 'string' && step.description.length > 0);
+  }
+});
+
+test('getCategoryPolicyOptions returns entries for all site categories', () => {
+  const opts = getCategoryPolicyOptions('coding');
+  assert.ok(Array.isArray(opts));
+  assert.ok(opts.length >= 20);
+  for (const o of opts) {
+    assert.ok(typeof o.siteCategoryId === 'string');
+    assert.ok(typeof o.label === 'string');
+    assert.ok(Array.isArray(o.choices));
+    assert.ok(['block', 'warn', 'allow'].includes(o.recommended));
+  }
+});
+
+test('migrateLegacyDistractionSites with default 8 domains returns deep_work balanced policy', () => {
+  const legacy = ['twitter.com', 'x.com', 'facebook.com', 'reddit.com',
+    'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'];
+  const policy = migrateLegacyDistractionSites(legacy);
+  assert.equal(policy.version, 1);
+  assert.equal(policy.intentCategoryId, 'deep_work');
+  assert.equal(policy.strictness, 'balanced');
+  assert.deepEqual(policy.customBlockDomains, []);
+});
+
+test('migrateLegacyDistractionSites preserves non-catalogued custom domains', () => {
+  const policy = migrateLegacyDistractionSites(['twitter.com', 'mycompany-internal.com']);
+  assert.ok(policy.customBlockDomains.includes('mycompany-internal.com'));
+  assert.ok(!policy.customBlockDomains.includes('twitter.com'));
+});
+
+test('migrateLegacyDistractionSites with empty list returns default policy without throwing', () => {
+  const policy = migrateLegacyDistractionSites([]);
+  assert.equal(policy.version, 1);
+  assert.ok(typeof policy.categoryPolicies === 'object');
+});
