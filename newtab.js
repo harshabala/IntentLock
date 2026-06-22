@@ -12,6 +12,35 @@ import {
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  function setFieldError(field, message, hintId) {
+    let errorEl = field._errorEl;
+    if (!errorEl) {
+      errorEl = document.createElement('p');
+      errorEl.className = 'field-error';
+      errorEl.id = `${field.id}-error`;
+      errorEl.setAttribute('role', 'alert');
+      field.parentNode.appendChild(errorEl);
+      field._errorEl = errorEl;
+    }
+    errorEl.textContent = message;
+    field.setAttribute('aria-invalid', 'true');
+    const describedBy = [hintId, errorEl.id].filter(Boolean).join(' ');
+    field.setAttribute('aria-describedby', describedBy);
+    field.focus();
+  }
+
+  function clearFieldError(field, hintId) {
+    if (field._errorEl) {
+      field._errorEl.textContent = '';
+    }
+    field.removeAttribute('aria-invalid');
+    if (hintId) {
+      field.setAttribute('aria-describedby', hintId);
+    } else {
+      field.removeAttribute('aria-describedby');
+    }
+  }
+
   function closeOverlay(overlay, callback) {
     let done = false;
     function finish() {
@@ -611,8 +640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (provider.requiresApiKey) {
           const keyError = validateApiKey(providerId, apiKey);
           if (keyError) {
-            input.focus();
-            input.style.borderColor = 'var(--error)';
+            setFieldError(input, keyError);
             return;
           }
         }
@@ -639,7 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       input.focus();
       input.addEventListener('input', () => {
-        input.style.borderColor = '';
+        clearFieldError(input);
       });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -744,6 +772,10 @@ document.addEventListener('DOMContentLoaded', () => {
     shortcutsBtn.addEventListener('click', (e) => showShortcutsModal(e.currentTarget));
     container.appendChild(shortcutsBtn);
 
+    intentInput.addEventListener('input', () => {
+      clearFieldError(intentInput);
+    });
+
     bindForm();
   }
 
@@ -820,18 +852,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const timeBudget = parseInt(timeBudgetInput.value, 10);
 
       if (!intent) {
-        const msg = document.getElementById('status-message');
-        msg.textContent = 'Please declare your intent.';
-        msg.classList.remove('hidden');
-        msg.style.display = 'block';
-        if (reducedMotion) {
-          msg.style.opacity = '1';
-        } else {
-          msg.style.opacity = '0';
-          msg.style.transition = 'opacity 200ms cubic-bezier(0.2, 0, 0, 1)';
-          msg.offsetHeight;
-          msg.style.opacity = '1';
-        }
+        setFieldError(intentInput, 'Please declare your intent.');
         return;
       }
 

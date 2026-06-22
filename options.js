@@ -140,6 +140,10 @@ document.addEventListener('DOMContentLoaded', () => {
   authTypeSelect.addEventListener('change', () => updateProviderUI());
   apiStyleSelect.addEventListener('change', () => updateProviderUI());
 
+  apiKeyInput.addEventListener('input', () => {
+    clearFieldError(apiKeyInput, 'api-key-hint');
+  });
+
   chrome.storage.local.get([
     'llmProviderConfig', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
   ], (localResult) => {
@@ -189,6 +193,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  function setFieldError(field, message, hintId) {
+    let errorEl = field._errorEl;
+    if (!errorEl) {
+      errorEl = document.createElement('p');
+      errorEl.className = 'field-error';
+      errorEl.id = `${field.id}-error`;
+      errorEl.setAttribute('role', 'alert');
+      field.parentNode.appendChild(errorEl);
+      field._errorEl = errorEl;
+    }
+    errorEl.textContent = message;
+    field.setAttribute('aria-invalid', 'true');
+    const describedBy = [hintId, errorEl.id].filter(Boolean).join(' ');
+    field.setAttribute('aria-describedby', describedBy);
+    field.focus();
+  }
+
+  function clearFieldError(field, hintId) {
+    if (field._errorEl) {
+      field._errorEl.textContent = '';
+    }
+    field.removeAttribute('aria-invalid');
+    if (hintId) {
+      field.setAttribute('aria-describedby', hintId);
+    } else {
+      field.removeAttribute('aria-describedby');
+    }
+  }
+
   function showStatus(el, text) {
     el.textContent = text;
     el.classList.remove('hidden');
@@ -221,16 +254,18 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    clearFieldError(apiKeyInput, 'api-key-hint');
+
     const key = apiKeyInput.value.trim();
     const keyError = validateApiKey(config.providerId, key || (hasSavedApiKey ? 'saved' : ''), config);
     if (keyError && !hasSavedApiKey) {
-      showStatus(providerStatus, keyError);
+      setFieldError(apiKeyInput, keyError, 'api-key-hint');
       return;
     }
     if (key) {
       const newKeyError = validateApiKey(config.providerId, key, config);
       if (newKeyError) {
-        showStatus(providerStatus, newKeyError);
+        setFieldError(apiKeyInput, newKeyError, 'api-key-hint');
         return;
       }
     }
