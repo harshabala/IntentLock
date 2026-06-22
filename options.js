@@ -474,7 +474,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const finishDelete = () => {
         hasSavedApiKey = false;
         applyStoredConfig(getDefaultProviderConfig());
-        distractionSitesInput.value = DEFAULT_SITES.join('\n');
+        const freshPolicy = buildDefaultPolicy('deep_work', 'balanced');
+        buildCategoryGrid(freshPolicy);
+        const blockInput = document.getElementById('custom-block-domains');
+        const allowInput = document.getElementById('custom-allow-domains');
+        if (blockInput) blockInput.value = '';
+        if (allowInput) allowInput.value = '';
         apiKeyInput.value = '';
         trackingToggle.checked = true;
         chrome.storage.local.set({ llmProviderConfig: getDefaultProviderConfig() });
