@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   INTENT_CATEGORIES,
   classifyIntentCategory,
+  SITE_CATEGORIES,
+  DOMAIN_TO_CATEGORY,
+  getSiteCategory,
 } from '../heuristic-policy.js';
 
 test('INTENT_CATEGORIES has at least 12 entries', () => {
@@ -57,12 +60,6 @@ test('vague single-word intent returns low confidence', () => {
   const result = classifyIntentCategory('stuff');
   assert.ok(result.confidence < 0.3);
 });
-
-import {
-  SITE_CATEGORIES,
-  DOMAIN_TO_CATEGORY,
-  getSiteCategory,
-} from '../heuristic-policy.js';
 
 test('SITE_CATEGORIES has at least 20 entries', () => {
   assert.ok(SITE_CATEGORIES.length >= 20);
