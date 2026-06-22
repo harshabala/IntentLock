@@ -240,20 +240,64 @@ function reloadConfig() {
 }
 loadConfig();
 
-function migrateApiKeyToSession() {
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session && chrome.storage.local) {
-    chrome.storage.local.get(['openaiApiKey'], (res) => {
-      if (res && res.openaiApiKey) {
-        chrome.storage.session.set({ openaiApiKey: res.openaiApiKey }, () => {
-          chrome.storage.local.remove(['openaiApiKey'], () => {
-            console.log("OpenAI API key migrated from local to session storage.");
+function migrateLlmStorage() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.session || !chrome.storage?.local) {
+    return;
+  }
+
+  chrome.storage.local.get(['openaiApiKey', 'llmProviderConfig'], (localRes) => {
+    chrome.storage.session.get(['openaiApiKey', 'llmApiKey'], (sessionRes) => {
+      const legacyKey = sessionRes?.openaiApiKey || localRes?.openaiApiKey;
+      const sessionUpdates = {};
+      const sessionRemovals = [];
+      const localRemovals = [];
+
+      if (legacyKey && !sessionRes?.llmApiKey) {
+        sessionUpdates.llmApiKey = legacyKey;
+      }
+      if (sessionRes?.openaiApiKey) {
+        sessionRemovals.push('openaiApiKey');
+      }
+      if (localRes?.openaiApiKey) {
+        localRemovals.push('openaiApiKey');
+      }
+
+      const applySessionMigration = () => {
+        if (!localRes?.llmProviderConfig) {
+          chrome.storage.local.set({
+            llmProviderConfig: {
+              providerId: 'openai',
+              model: 'gpt-4o-mini',
+              baseUrl: 'https://api.openai.com/v1/chat/completions',
+              customLabel: '',
+              authType: 'bearer',
+              apiStyle: 'openai',
+            },
           });
+        }
+        if (localRemovals.length > 0) {
+          chrome.storage.local.remove(localRemovals);
+        }
+        if (legacyKey) {
+          console.log('LLM API key migrated to secure session storage.');
+        }
+      };
+
+      if (Object.keys(sessionUpdates).length > 0) {
+        chrome.storage.session.set(sessionUpdates, () => {
+          if (sessionRemovals.length > 0) {
+            chrome.storage.session.remove(sessionRemovals, applySessionMigration);
+          } else {
+            applySessionMigration();
+          }
         });
+      } else {
+        applySessionMigration();
       }
     });
-  }
+  });
 }
-migrateApiKeyToSession();
+migrateLlmStorage();
 
 // ── Session start ──────────────────────────────────────────────────────
 

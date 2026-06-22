@@ -13,17 +13,59 @@
     </div>
 
     <div class="section">
-      <h2>LLM Configuration</h2>
-      <p>An OpenAI API key enables intent parsing and drift detection. For security, your key is stored in secure session memory and cleared when the browser is closed.</p>
+      <h2>LLM provider</h2>
+      <p id="provider-description">Choose a provider for drift detection and plan generation. API keys are stored in secure session memory and cleared when the browser closes.</p>
 
       <div class="input-group">
-        <label for="api-key">OpenAI API Key</label>
-        <input type="password" id="api-key" placeholder="sk-...">
+        <label for="provider-select">Provider</label>
+        <select id="provider-select"></select>
       </div>
-      <p class="notice" style="font-size: 0.85em; opacity: 0.8; margin-top: 4px; margin-bottom: 12px;">Note: API key is stored in transient session storage and will be cleared when the browser is closed.</p>
 
-      <button id="save-key-btn">Save key</button>
-      <div id="key-status" class="hidden status-feedback"></div>
+      <div id="custom-provider-fields" class="provider-advanced hidden">
+        <div class="input-group">
+          <label for="custom-label">Provider name</label>
+          <input type="text" id="custom-label" placeholder="My API provider">
+        </div>
+
+        <div class="input-group">
+          <label for="api-style-select">API format</label>
+          <select id="api-style-select">
+            <option value="openai">OpenAI-compatible (chat/completions)</option>
+            <option value="gemini">Google Gemini (generateContent)</option>
+            <option value="ollama">Ollama (local /api/chat)</option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label for="auth-type-select">Authentication</label>
+          <select id="auth-type-select">
+            <option value="bearer">Bearer token</option>
+            <option value="header">API key header (x-api-key)</option>
+            <option value="query">Query parameter (?key=)</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label for="model-input">Model</label>
+        <input type="text" id="model-input" placeholder="gpt-4o-mini">
+      </div>
+
+      <div id="base-url-group" class="input-group">
+        <label for="base-url-input">API endpoint</label>
+        <input type="text" id="base-url-input" placeholder="https://api.openai.com/v1/chat/completions">
+        <p class="field-hint" id="base-url-hint"></p>
+      </div>
+
+      <div id="api-key-group" class="input-group">
+        <label for="api-key">API key</label>
+        <input type="password" id="api-key" placeholder="sk-...">
+        <p class="field-hint" id="api-key-hint">Stored in transient session memory — cleared when the browser closes.</p>
+      </div>
+
+      <button id="save-provider-btn">Save provider settings</button>
+      <div id="provider-status" class="hidden status-feedback"></div>
     </div>
 
     <div class="section">
@@ -66,6 +108,6 @@
     </div>
   </div>
 
-  <script src="options.js"></script>
+  <script type="module" src="options.js"></script>
 </body>
 </html>

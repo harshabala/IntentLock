@@ -44,6 +44,7 @@ test('all extension javascript files parse', async () => {
     'history.js',
     'intervention.js',
     'llm.js',
+    'providers.js',
     'newtab.js',
     'options.js',
     'popup.js',
@@ -90,6 +91,14 @@ test('newtab.html contains intent-input textarea with maxlength attribute', asyn
   assert.ok(match, 'textarea with id="intent-input" must have a maxlength attribute');
   const limit = parseInt(match[1], 10);
   assert.ok(!isNaN(limit) && limit > 0, `maxlength limit should be a valid positive integer, got ${limit}`);
+});
+
+test('options.html exposes multi-provider LLM settings', async () => {
+  const html = await text('options.html');
+  assert.match(html, /id=["']provider-select["']/);
+  assert.match(html, /id=["']model-input["']/);
+  assert.match(html, /id=["']base-url-input["']/);
+  assert.match(html, /id=["']custom-provider-fields["']/);
 });
 
 test('newtab.js enforces maxLength on dynamically created textareas', async () => {

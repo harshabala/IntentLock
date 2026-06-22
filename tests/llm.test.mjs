@@ -1,20 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-// Mock chrome API
 globalThis.chrome = {
   storage: {
     session: {
       get: (keys, callback) => {
-        callback({ openaiApiKey: 'fake-api-key' });
-      }
+        callback({ llmApiKey: 'fake-api-key' });
+      },
     },
     local: {
       get: (keys, callback) => {
-        callback({});
-      }
-    }
-  }
+        callback({
+          llmProviderConfig: {
+            providerId: 'openai',
+            model: 'gpt-4o-mini',
+            baseUrl: 'https://api.openai.com/v1/chat/completions',
+            authType: 'bearer',
+            apiStyle: 'openai',
+          },
+        });
+      },
+    },
+  },
 };
 
 import { checkDriftLLM, generateIntentPlan, cleanJsonString } from '../llm.js';
@@ -23,20 +30,20 @@ test('cleanJsonString helper strips markdown fences and surrounding whitespaces'
   const cases = [
     {
       input: '```json\n{"aligned": true, "confidence": 0.95}\n```',
-      expected: '{"aligned": true, "confidence": 0.95}'
+      expected: '{"aligned": true, "confidence": 0.95}',
     },
     {
       input: '```\n{"aligned": false}\n```',
-      expected: '{"aligned": false}'
+      expected: '{"aligned": false}',
     },
     {
       input: '  ```json\n{"steps": ["A", "B"]}\n```  ',
-      expected: '{"steps": ["A", "B"]}'
+      expected: '{"steps": ["A", "B"]}',
     },
     {
       input: '{"aligned": true}',
-      expected: '{"aligned": true}'
-    }
+      expected: '{"aligned": true}',
+    },
   ];
 
   for (const { input, expected } of cases) {
@@ -54,11 +61,11 @@ test('checkDriftLLM passes response_format and parses markdown JSON correctly', 
         choices: [
           {
             message: {
-              content: '```json\n{"aligned": false, "confidence": 0.88}\n```'
-            }
-          }
-        ]
-      })
+              content: '```json\n{"aligned": false, "confidence": 0.88}\n```',
+            },
+          },
+        ],
+      }),
     };
   };
 
@@ -79,26 +86,23 @@ test('generateIntentPlan passes response_format and extracts steps safely from s
         choices: [
           {
             message: {
-              content: responseContent
-            }
-          }
-        ]
-      })
+              content: responseContent,
+            },
+          },
+        ],
+      }),
     };
   };
 
-  // Case 1: Wrapped in steps property, with markdown formatting
   responseContent = '```json\n{"steps": ["Read spec", "Write tests", "Implement code"]}\n```';
   let steps = await generateIntentPlan('Write code');
-  assert.deepEqual(steps, ["Read spec", "Write tests", "Implement code"]);
+  assert.deepEqual(steps, ['Read spec', 'Write tests', 'Implement code']);
   assert.deepEqual(fetchBody.response_format, { type: 'json_object' });
 
-  // Case 2: Flat array returned, with markdown formatting (fallback)
   responseContent = '```\n["Step A", "Step B"]\n```';
   steps = await generateIntentPlan('Write code');
-  assert.deepEqual(steps, ["Step A", "Step B"]);
+  assert.deepEqual(steps, ['Step A', 'Step B']);
 
-  // Case 3: Invalid structure, returns empty array
   responseContent = '{"invalid": "format"}';
   steps = await generateIntentPlan('Write code');
   assert.deepEqual(steps, []);

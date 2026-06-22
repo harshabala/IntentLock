@@ -1,4 +1,13 @@
 import { generateIntentPlan } from './llm.js';
+import {
+  PROVIDER_LIST,
+  DEFAULT_PROVIDER_ID,
+  getProvider,
+  getDefaultProviderConfig,
+  getLlmConfig,
+  isLlmConfigured,
+  validateApiKey,
+} from './providers.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -454,13 +463,32 @@ document.addEventListener('DOMContentLoaded', () => {
       h1.textContent = 'ENABLE AI-POWERED ALIGNMENT';
 
       const desc = document.createElement('p');
-      desc.textContent = 'Configure an OpenAI API key to enable semantic drift detection and automatic action-plan generation. If skipped, the extension will fall back to local heuristics.';
+      desc.textContent = 'Choose a provider for semantic drift detection and plan generation. Use Gemini from Google AI Studio, a local Ollama/LM Studio server, or skip to use heuristics only.';
 
       header.append(h1, desc);
       container.appendChild(header);
 
+      const providerGroup = document.createElement('div');
+      providerGroup.className = 'input-group onboarding-input-group';
+
+      const providerLabel = document.createElement('label');
+      providerLabel.setAttribute('for', 'onboarding-provider');
+      providerLabel.textContent = 'Provider';
+
+      const providerSelect = document.createElement('select');
+      providerSelect.id = 'onboarding-provider';
+      PROVIDER_LIST.forEach((provider) => {
+        const option = document.createElement('option');
+        option.value = provider.id;
+        option.textContent = provider.label;
+        providerSelect.appendChild(option);
+      });
+      providerGroup.append(providerLabel, providerSelect);
+      container.appendChild(providerGroup);
+
       const inputGroup = document.createElement('div');
       inputGroup.className = 'input-group onboarding-input-group';
+      inputGroup.id = 'onboarding-key-group';
 
       const label = document.createElement('label');
       label.setAttribute('for', 'onboarding-api-key');
@@ -474,6 +502,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       inputGroup.append(label, input);
       container.appendChild(inputGroup);
+
+      function updateOnboardingProviderUI() {
+        const provider = getProvider(providerSelect.value);
+        input.placeholder = provider.keyPlaceholder;
+        const needsKey = provider.requiresApiKey;
+        inputGroup.classList.toggle('hidden', !needsKey);
+      }
+
+      providerSelect.addEventListener('change', updateOnboardingProviderUI);
+      updateOnboardingProviderUI();
 
       const securityNotice = document.createElement('p');
       securityNotice.className = 'security-notice';
@@ -494,18 +532,34 @@ document.addEventListener('DOMContentLoaded', () => {
       lockInBtn.className = 'primary-btn onboarding-lock-btn';
       lockInBtn.textContent = 'LOCK IN';
       lockInBtn.addEventListener('click', () => {
+        const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+        const provider = getProvider(providerId);
         const apiKey = input.value.trim();
-        if (apiKey && apiKey.startsWith('sk-')) {
-          const storageArea = chrome.storage.session || chrome.storage.local;
-          storageArea.set({ openaiApiKey: apiKey }, () => {
+        const providerConfig = getDefaultProviderConfig(providerId);
+
+        if (provider.requiresApiKey) {
+          const keyError = validateApiKey(providerId, apiKey);
+          if (keyError) {
+            input.focus();
+            input.style.borderColor = 'var(--error)';
+            return;
+          }
+        }
+
+        const saveProvider = () => {
+          chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
               if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError);
               finishOnboarding();
             });
           });
+        };
+
+        if (apiKey) {
+          const storageArea = chrome.storage.session || chrome.storage.local;
+          storageArea.set({ llmApiKey: apiKey }, saveProvider);
         } else {
-          input.focus();
-          input.style.borderColor = 'var(--error)';
+          saveProvider();
         }
       });
 
@@ -586,31 +640,12 @@ document.addEventListener('DOMContentLoaded', () => {
     form.append(intentGroup, timeGroup, btn);
     container.appendChild(form);
 
-    // Check for API key
-    const getApiKeyFromStorage = (callback) => {
-      if (chrome.storage.session) {
-        chrome.storage.session.get(['openaiApiKey'], (sessionResult) => {
-          if (sessionResult && sessionResult.openaiApiKey) {
-            callback(sessionResult.openaiApiKey);
-          } else {
-            chrome.storage.local.get(['openaiApiKey'], (localResult) => {
-              callback(localResult ? localResult.openaiApiKey || null : null);
-            });
-          }
-        });
-      } else {
-        chrome.storage.local.get(['openaiApiKey'], (localResult) => {
-          callback(localResult ? localResult.openaiApiKey || null : null);
-        });
-      }
-    };
-
-    getApiKeyFromStorage((apiKey) => {
-      if (!apiKey) {
+    getLlmConfig().then((config) => {
+      if (!isLlmConfigured(config)) {
         const apiNotice = document.createElement('div');
         apiNotice.className = 'api-notice';
         const noticeText = document.createElement('p');
-        noticeText.textContent = 'Add an OpenAI API key in Settings to enable AI-powered drift detection.';
+        noticeText.textContent = 'Configure an LLM provider in Settings to enable AI-powered drift detection and plan generation.';
         const noticeBtn = document.createElement('button');
         noticeBtn.className = 'complete-btn';
         noticeBtn.textContent = 'Open settings';

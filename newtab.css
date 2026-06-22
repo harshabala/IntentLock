@@ -141,6 +141,34 @@ label {
   letter-spacing: 0.2em;
 }
 
+select {
+  width: 100%;
+  background-color: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 14px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-family: var(--font);
+  transition: border-color var(--transition);
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.field-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.provider-advanced {
+  margin-bottom: 8px;
+}
+
 textarea,
 input[type="number"],
 input[type="password"],

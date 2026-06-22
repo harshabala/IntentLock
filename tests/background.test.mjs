@@ -124,7 +124,8 @@ test('loadConfig resets in-memory variables to defaults when storage is cleared'
   assert.equal(reset.overrideCooldowns.size, 0, 'overrideCooldowns map should be cleared');
 });
 
-test('migrateApiKeyToSession migrates key from local to session storage on load', () => {
-  assert.equal(sessionStorageData.openaiApiKey, 'test-migration-key');
+test('migrateLlmStorage migrates legacy key to llmApiKey in session storage on load', () => {
+  assert.equal(sessionStorageData.llmApiKey, 'test-migration-key');
+  assert.equal(sessionStorageData.openaiApiKey, undefined);
   assert.equal(storageData.openaiApiKey, undefined);
 });

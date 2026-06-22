@@ -1,7 +1,29 @@
+import {
+  PROVIDER_LIST,
+  DEFAULT_PROVIDER_ID,
+  getProvider,
+  getDefaultProviderConfig,
+  providerRequiresApiKey,
+  validateApiKey,
+  validateProviderConfig,
+} from './providers.js';
+
 document.addEventListener('DOMContentLoaded', () => {
+  const providerSelect = document.getElementById('provider-select');
+  const providerDescription = document.getElementById('provider-description');
+  const customProviderFields = document.getElementById('custom-provider-fields');
+  const customLabelInput = document.getElementById('custom-label');
+  const apiStyleSelect = document.getElementById('api-style-select');
+  const authTypeSelect = document.getElementById('auth-type-select');
+  const modelInput = document.getElementById('model-input');
+  const baseUrlGroup = document.getElementById('base-url-group');
+  const baseUrlInput = document.getElementById('base-url-input');
+  const baseUrlHint = document.getElementById('base-url-hint');
+  const apiKeyGroup = document.getElementById('api-key-group');
   const apiKeyInput = document.getElementById('api-key');
-  const saveKeyBtn = document.getElementById('save-key-btn');
-  const keyStatus = document.getElementById('key-status');
+  const apiKeyHint = document.getElementById('api-key-hint');
+  const saveProviderBtn = document.getElementById('save-provider-btn');
+  const providerStatus = document.getElementById('provider-status');
 
   const distractionSitesInput = document.getElementById('distraction-sites');
   const saveSitesBtn = document.getElementById('save-sites-btn');
@@ -14,30 +36,106 @@ document.addEventListener('DOMContentLoaded', () => {
   const themeStatus = document.getElementById('theme-status');
   let deleteArmed = false;
   let deleteArmTimer = null;
+  let hasSavedApiKey = false;
 
   const DEFAULT_SITES = [
     'twitter.com', 'x.com', 'facebook.com', 'reddit.com',
     'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com'
   ];
 
-  // Load existing settings
+  PROVIDER_LIST.forEach((provider) => {
+    const option = document.createElement('option');
+    option.value = provider.id;
+    option.textContent = provider.label;
+    providerSelect.appendChild(option);
+  });
+
+  function getFormConfig() {
+    const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+    const provider = getProvider(providerId);
+    return {
+      providerId,
+      model: modelInput.value.trim() || provider.defaultModel,
+      baseUrl: baseUrlInput.value.trim() || provider.defaultBaseUrl,
+      customLabel: customLabelInput.value.trim(),
+      authType: providerId === 'custom' ? authTypeSelect.value : provider.authType,
+      apiStyle: providerId === 'custom' ? apiStyleSelect.value : provider.apiStyle,
+    };
+  }
+
+  function updateProviderUI(providerId = providerSelect.value) {
+    const provider = getProvider(providerId);
+    providerDescription.textContent = provider.description;
+    customProviderFields.classList.toggle('hidden', providerId !== 'custom');
+
+    const showBaseUrl = providerId === 'custom' || provider.isLocal;
+    baseUrlGroup.classList.toggle('hidden', !showBaseUrl);
+
+    if (providerId !== 'custom') {
+      modelInput.placeholder = provider.defaultModel;
+      baseUrlInput.placeholder = provider.defaultBaseUrl;
+    }
+
+    baseUrlHint.textContent = provider.isLocal
+      ? 'Make sure your local server is running before starting a session.'
+      : providerId === 'custom'
+        ? 'Full URL to your provider endpoint.'
+        : '';
+
+    const needsKey = providerRequiresApiKey(providerId, getFormConfig());
+    apiKeyGroup.classList.toggle('hidden', !needsKey);
+    apiKeyInput.placeholder = hasSavedApiKey && needsKey
+      ? 'Key saved — enter new key to replace'
+      : provider.keyPlaceholder;
+    apiKeyHint.textContent = needsKey
+      ? `${provider.keyHint}. Stored in session memory and cleared when the browser closes.`
+      : provider.keyHint;
+  }
+
+  function applyStoredConfig(stored = {}) {
+    const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
+    const provider = getProvider(providerId);
+    providerSelect.value = providerId;
+    modelInput.value = stored.model || provider.defaultModel;
+    baseUrlInput.value = stored.baseUrl || provider.defaultBaseUrl;
+    customLabelInput.value = stored.customLabel || '';
+    authTypeSelect.value = stored.authType || provider.authType;
+    apiStyleSelect.value = stored.apiStyle || provider.apiStyle;
+    updateProviderUI(providerId);
+  }
+
+  providerSelect.addEventListener('change', () => {
+    const provider = getProvider(providerSelect.value);
+    modelInput.value = provider.defaultModel;
+    baseUrlInput.value = provider.defaultBaseUrl;
+    updateProviderUI(providerSelect.value);
+  });
+
+  authTypeSelect.addEventListener('change', () => updateProviderUI());
+  apiStyleSelect.addEventListener('change', () => updateProviderUI());
+
   chrome.storage.local.get([
-    'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
+    'llmProviderConfig', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme'
   ], (localResult) => {
     const processSettings = (sessionApiKey) => {
-      let finalKey = sessionApiKey;
+      let migratedKey = sessionApiKey;
 
       if (localResult.openaiApiKey && chrome.storage.session) {
-        finalKey = localResult.openaiApiKey;
-        chrome.storage.session.set({ openaiApiKey: finalKey }, () => {
+        migratedKey = localResult.openaiApiKey;
+        chrome.storage.session.set({ llmApiKey: migratedKey }, () => {
           chrome.storage.local.remove(['openaiApiKey'], () => {
-            showStatus(keyStatus, 'OpenAI API key migrated to secure session storage.');
+            showStatus(providerStatus, 'Legacy API key migrated to secure session storage.');
           });
         });
       }
 
-      if (finalKey) {
-        apiKeyInput.placeholder = 'Key saved — enter new key to replace';
+      hasSavedApiKey = Boolean(migratedKey);
+      applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
+
+      if (!localResult.llmProviderConfig) {
+        chrome.storage.local.set({
+          llmProviderConfig: getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
+        });
       }
 
       if (localResult.trackingEnabled !== undefined) {
@@ -47,17 +145,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const sites = localResult.customDistractionSites || DEFAULT_SITES;
       distractionSitesInput.value = sites.join('\n');
 
-      // Load theme
       const theme = localResult.theme || 'auto';
-      document.querySelectorAll('.theme-btn').forEach(btn => {
+      document.querySelectorAll('.theme-btn').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.theme === theme);
       });
       applyTheme(theme);
     };
 
     if (chrome.storage.session) {
-      chrome.storage.session.get(['openaiApiKey'], (sessionResult) => {
-        processSettings(sessionResult.openaiApiKey);
+      chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionResult) => {
+        processSettings(sessionResult.llmApiKey || sessionResult.openaiApiKey);
       });
     } else {
       processSettings(localResult.openaiApiKey);
@@ -90,42 +187,57 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // ── API Key ─────────────────────────────────────────────────────────
-
-  saveKeyBtn.addEventListener('click', () => {
-    const key = apiKeyInput.value.trim();
-    if (!key) return;
-
-    // Basic validation: OpenAI API keys typically start with 'sk-'
-    if (!key.startsWith('sk-')) {
-      showStatus(keyStatus, 'Invalid API key format. Key should start with "sk-"');
+  saveProviderBtn.addEventListener('click', () => {
+    const config = getFormConfig();
+    const configError = validateProviderConfig(config);
+    if (configError) {
+      showStatus(providerStatus, configError);
       return;
     }
 
-    const storageArea = chrome.storage.session || chrome.storage.local;
-    storageArea.set({ openaiApiKey: key }, () => {
-      apiKeyInput.value = '';
-      apiKeyInput.placeholder = 'Key saved — enter new key to replace';
-      showStatus(keyStatus, 'API key saved.');
-      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+    const key = apiKeyInput.value.trim();
+    const keyError = validateApiKey(config.providerId, key || (hasSavedApiKey ? 'saved' : ''), config);
+    if (keyError && !hasSavedApiKey) {
+      showStatus(providerStatus, keyError);
+      return;
+    }
+    if (key) {
+      const newKeyError = validateApiKey(config.providerId, key, config);
+      if (newKeyError) {
+        showStatus(providerStatus, newKeyError);
+        return;
+      }
+    }
+
+    chrome.storage.local.set({ llmProviderConfig: config }, () => {
+      const finish = () => {
+        hasSavedApiKey = hasSavedApiKey || Boolean(key);
+        apiKeyInput.value = '';
+        updateProviderUI(config.providerId);
+        showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
+        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      };
+
+      if (key) {
+        const storageArea = chrome.storage.session || chrome.storage.local;
+        storageArea.set({ llmApiKey: key }, finish);
+      } else {
+        finish();
+      }
     });
   });
-
-  // ── Distraction sites ───────────────────────────────────────────────
 
   saveSitesBtn.addEventListener('click', () => {
     const raw = distractionSitesInput.value.trim();
     const sites = raw.split('\n')
-      .map(s => s.trim().toLowerCase())
-      .filter(s => s.length > 0 && s.includes('.'));
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0 && s.includes('.'));
 
     chrome.storage.local.set({ customDistractionSites: sites }, () => {
       showStatus(sitesStatus, `${sites.length} sites saved.`);
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
     });
   });
-
-  // ── Tracking toggle ─────────────────────────────────────────────────
 
   trackingToggle.addEventListener('change', (e) => {
     const enabled = e.target.checked;
@@ -134,8 +246,6 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
     });
   });
-
-  // ── Data export ─────────────────────────────────────────────────────
 
   exportBtn.addEventListener('click', () => {
     chrome.storage.local.get(['sessionHistory'], (result) => {
@@ -155,8 +265,6 @@ document.addEventListener('DOMContentLoaded', () => {
       showStatus(dataStatus, 'History exported.');
     });
   });
-
-  // ── Delete all data ─────────────────────────────────────────────────
 
   deleteDataBtn.addEventListener('click', () => {
     if (!deleteArmed) {
@@ -178,13 +286,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chrome.storage.local.clear(() => {
       const finishDelete = () => {
+        hasSavedApiKey = false;
+        applyStoredConfig(getDefaultProviderConfig());
         distractionSitesInput.value = DEFAULT_SITES.join('\n');
         apiKeyInput.value = '';
-        apiKeyInput.placeholder = 'sk-...';
         trackingToggle.checked = true;
+        chrome.storage.local.set({ llmProviderConfig: getDefaultProviderConfig() });
         showStatus(dataStatus, 'All data deleted.');
         chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-        document.querySelectorAll('.theme-btn').forEach(btn => {
+        document.querySelectorAll('.theme-btn').forEach((btn) => {
           btn.classList.toggle('active', btn.dataset.theme === 'auto');
         });
         applyTheme('auto');
@@ -199,8 +309,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
-
-  // ── Theme toggle ────────────────────────────────────────────────────
 
   function applyTheme(theme, animate) {
     const root = document.documentElement;
@@ -232,10 +340,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  document.querySelectorAll('.theme-btn').forEach(btn => {
+  document.querySelectorAll('.theme-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const theme = btn.dataset.theme;
-      document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.theme-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       chrome.storage.local.set({ theme }, () => {
         applyTheme(theme, true);
