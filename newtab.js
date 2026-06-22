@@ -292,8 +292,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const editBtn = document.createElement('button');
     editBtn.className = 'edit-intent-btn';
     editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', () => {
-      showEditIntentDialog(session, intentText);
+    editBtn.addEventListener('click', (e) => {
+      showEditIntentDialog(session, intentText, e.currentTarget);
     });
     intentHeader.append(intentText, editBtn);
     intentBox.appendChild(intentHeader);
@@ -380,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
     confirmBtn.addEventListener('click', () => closeModal(() => endSession(container, session)));
   }
 
-  function showEditIntentDialog(session, intentTextElement) {
+  function showEditIntentDialog(session, intentTextElement, trigger) {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
 
@@ -402,12 +402,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'complete-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
-      closeOverlay(overlay);
-    });
 
     const saveBtn = document.createElement('button');
     saveBtn.textContent = 'Save';
+
+    actions.append(cancelBtn, saveBtn);
+    dialog.append(h3, textarea, actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const { closeModal } = setupModalDialog({ overlay, dialog, heading: h3, trigger });
+
+    cancelBtn.addEventListener('click', () => closeModal());
     saveBtn.addEventListener('click', () => {
       const newIntent = textarea.value.trim();
       if (newIntent && newIntent !== session.intent) {
@@ -420,15 +426,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         intentTextElement.textContent = newIntent;
       }
-      closeOverlay(overlay);
+      closeModal();
     });
-
-    actions.append(cancelBtn, saveBtn);
-    dialog.append(h3, textarea, actions);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    textarea.focus();
   }
 
   // ── Session summary ─────────────────────────────────────────────────

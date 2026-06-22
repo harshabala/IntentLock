@@ -129,7 +129,19 @@ document.addEventListener('DOMContentLoaded', () => {
     modelInput.value = provider.defaultModel;
     baseUrlInput.value = provider.defaultBaseUrl;
     providerAdvancedOpen = false;
-    updateProviderUI(providerSelect.value);
+    hasSavedApiKey = false;
+    apiKeyInput.value = '';
+    clearFieldError(apiKeyInput, 'api-key-hint');
+
+    const finishProviderSwitch = () => {
+      updateProviderUI(providerSelect.value);
+    };
+
+    if (chrome.storage.session) {
+      chrome.storage.session.remove(['llmApiKey'], finishProviderSwitch);
+    } else {
+      finishProviderSwitch();
+    }
   });
 
   providerAdvancedToggle.addEventListener('click', () => {
