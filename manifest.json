@@ -32,6 +32,7 @@
     {
       "matches": ["https://*/*", "http://*/*"],
       "js": ["content.js"],
+      "type": "module",
       "run_at": "document_idle"
     }
   ],

@@ -13,6 +13,7 @@ let alarmListeners = [];
 let tabsGetMock = (tabId) => ({ id: tabId, url: '' });
 let tabsQueryMock = (queryInfo) => [];
 let tabsUpdateCalls = [];
+let tabsSendMessageCalls = [];
 
 globalThis.chrome = {
   idle: {
@@ -65,6 +66,11 @@ globalThis.chrome = {
     update: (tabId, updateProperties, callback) => {
       tabsUpdateCalls.push({ tabId, updateProperties });
       if (callback) callback();
+      return Promise.resolve();
+    },
+    sendMessage: (tabId, message, callback) => {
+      tabsSendMessageCalls.push({ tabId, message });
+      if (callback) callback(undefined);
       return Promise.resolve();
     },
     group: () => Promise.resolve(456)

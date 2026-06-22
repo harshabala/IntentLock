@@ -119,7 +119,8 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
-    'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR'
+    'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR',
+    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -166,6 +167,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       logError(message.payload || {}).then(() => {
         sendResponse({ status: 'ok' });
       });
+    } else if (message.type === 'CONTENT_EVENT') {
+      handleContentEvent(message.payload, sender.tab?.id);
+      sendResponse({ status: 'ok' });
+    } else if (message.type === 'OVERLAY_OVERRIDE') {
+      handleOverlayOverride(message.payload, sender.tab?.id);
+      sendResponse({ status: 'ok' });
+    } else if (message.type === 'OVERLAY_DISMISS') {
+      chrome.storage.local.remove(['interventionState']);
+      if (sender.tab?.id) {
+        chrome.tabs.sendMessage(sender.tab.id, { type: 'HIDE_INTERVENTION' }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+      sendResponse({ status: 'ok' });
     }
   });
   return true; // Keep channel open for async response
@@ -434,13 +449,18 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 // ── Event logging ──────────────────────────────────────────────────────
 
-function logEvent(actionType, url) {
+function logEvent(actionType, url, extras = {}) {
   chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
 
-    const event = { timestamp: Date.now(), url: url, actionType: actionType };
+    const event = {
+      timestamp: Date.now(),
+      url,
+      actionType,
+      ...extras,
+    };
     session.events = Array.isArray(session.events) ? session.events : [];
     session.events.push(event);
 
@@ -449,6 +469,49 @@ function logEvent(actionType, url) {
     }
     chrome.storage.local.set({ activeSession: session });
     currentSession = session;
+  });
+}
+
+function handleContentEvent(payload, tabId) {
+  if (!payload?.url || !payload?.actionType) return;
+
+  const extras = {};
+  if (payload.pageTitle) extras.pageTitle = payload.pageTitle;
+  if (typeof payload.dwellMs === 'number') extras.dwellMs = payload.dwellMs;
+  if (payload.previousUrl) extras.previousUrl = payload.previousUrl;
+
+  logEvent(payload.actionType, payload.url, extras);
+
+  if (payload.actionType === 'SPA_NAVIGATION') {
+    evaluateDrift(payload.url, tabId);
+  }
+}
+
+function handleOverlayOverride(payload, tabId) {
+  chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
+    const session = result.activeSession;
+    if (!session || !session.isActive) return;
+
+    const originalUrl = payload?.url || result.interventionState?.originalUrl || null;
+    session.events = Array.isArray(session.events) ? session.events : [];
+    session.events.push({
+      timestamp: Date.now(),
+      actionType: 'OVERRIDE',
+      url: originalUrl,
+      reflection: payload?.reflection || '',
+      pageTitle: payload?.pageTitle || null,
+      source: 'overlay',
+    });
+
+    chrome.storage.local.set({ activeSession: session }, () => {
+      handleOverride(session);
+      chrome.storage.local.remove(['interventionState']);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'HIDE_INTERVENTION' }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    });
   });
 }
 
@@ -567,7 +630,7 @@ function evaluateDrift(url, tabId) {
 // ── Intervention ───────────────────────────────────────────────────────
 
 function triggerIntervention(reason, tabId = null) {
-  const storeAndShow = (targetTabId, originalUrl) => {
+  const showTabReplacement = (targetTabId, originalUrl) => {
     chrome.storage.local.set({
       interventionState: { reason, timestamp: Date.now(), originalTabId: targetTabId, originalUrl }
     }, () => {
@@ -579,13 +642,43 @@ function triggerIntervention(reason, tabId = null) {
     });
   };
 
-  const captureAndShow = (targetTabId) => {
-    chrome.tabs.get(targetTabId, (tab) => {
-      if (chrome.runtime.lastError) {
-        storeAndShow(null, null);
-      } else {
-        storeAndShow(targetTabId, tab.url || null);
+  const tryOverlayThenFallback = (targetTabId, originalUrl, intent) => {
+    chrome.storage.local.set({
+      interventionState: {
+        reason,
+        timestamp: Date.now(),
+        originalTabId: targetTabId,
+        originalUrl,
+        mode: 'overlay',
+      },
+    }, () => {
+      if (!targetTabId) {
+        showTabReplacement(null, originalUrl);
+        return;
       }
+
+      chrome.tabs.sendMessage(targetTabId, {
+        type: 'SHOW_INTERVENTION',
+        reason,
+        intent,
+      }, (response) => {
+        if (chrome.runtime.lastError || !response?.shown) {
+          showTabReplacement(targetTabId, originalUrl);
+        }
+      });
+    });
+  };
+
+  const captureAndShow = (targetTabId) => {
+    chrome.storage.local.get(['activeSession'], (result) => {
+      const intent = result.activeSession?.intent || '';
+      chrome.tabs.get(targetTabId, (tab) => {
+        if (chrome.runtime.lastError) {
+          tryOverlayThenFallback(null, null, intent);
+        } else {
+          tryOverlayThenFallback(targetTabId, tab.url || null, intent);
+        }
+      });
     });
   };
 
@@ -603,7 +696,9 @@ function triggerIntervention(reason, tabId = null) {
       if (activeTab) {
         captureAndShow(activeTab.id);
       } else {
-        storeAndShow(null, null);
+        chrome.storage.local.get(['activeSession'], (result) => {
+          tryOverlayThenFallback(null, null, result.activeSession?.intent || '');
+        });
       }
     });
   }
