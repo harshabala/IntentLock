@@ -57,3 +57,67 @@ test('vague single-word intent returns low confidence', () => {
   const result = classifyIntentCategory('stuff');
   assert.ok(result.confidence < 0.3);
 });
+
+import {
+  SITE_CATEGORIES,
+  DOMAIN_TO_CATEGORY,
+  getSiteCategory,
+} from '../heuristic-policy.js';
+
+test('SITE_CATEGORIES has at least 20 entries', () => {
+  assert.ok(SITE_CATEGORIES.length >= 20);
+});
+
+test('each site category has required fields', () => {
+  for (const cat of SITE_CATEGORIES) {
+    assert.ok(typeof cat.id === 'string');
+    assert.ok(typeof cat.label === 'string');
+    assert.ok(typeof cat.description === 'string');
+    assert.ok(['block', 'warn', 'allow'].includes(cat.defaultPolicy), `bad defaultPolicy: ${cat.id}`);
+    assert.ok(Array.isArray(cat.domains) && cat.domains.length > 0, `empty domains: ${cat.id}`);
+  }
+});
+
+test('DOMAIN_TO_CATEGORY covers at least 300 unique domains', () => {
+  assert.ok(DOMAIN_TO_CATEGORY.size >= 300, `only ${DOMAIN_TO_CATEGORY.size} domains`);
+});
+
+test('youtube.com is in short_video', () => {
+  assert.equal(getSiteCategory('youtube.com')?.categoryId, 'short_video');
+});
+
+test('twitter.com is in social_media', () => {
+  assert.equal(getSiteCategory('twitter.com')?.categoryId, 'social_media');
+});
+
+test('github.com is in code_forge', () => {
+  assert.equal(getSiteCategory('github.com')?.categoryId, 'code_forge');
+});
+
+test('indeed.com is in job_boards', () => {
+  assert.equal(getSiteCategory('indeed.com')?.categoryId, 'job_boards');
+});
+
+test('netflix.com is in streaming', () => {
+  assert.equal(getSiteCategory('netflix.com')?.categoryId, 'streaming');
+});
+
+test('linkedin.com is in professional_network', () => {
+  assert.equal(getSiteCategory('linkedin.com')?.categoryId, 'professional_network');
+});
+
+test('notion.so is in productivity', () => {
+  assert.equal(getSiteCategory('notion.so')?.categoryId, 'productivity');
+});
+
+test('espn.com is in sports', () => {
+  assert.equal(getSiteCategory('espn.com')?.categoryId, 'sports');
+});
+
+test('unknown domain returns null', () => {
+  assert.equal(getSiteCategory('my-private-intranet.internal'), null);
+});
+
+test('www prefix is stripped before lookup', () => {
+  assert.equal(getSiteCategory('www.youtube.com')?.categoryId, 'short_video');
+});

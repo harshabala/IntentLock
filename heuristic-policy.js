@@ -158,3 +158,333 @@ export function classifyIntentCategory(intentText) {
     matchedKeywords: [...new Set(bestMatched)],
   };
 }
+
+// ── Site taxonomy ──────────────────────────────────────────────────────
+
+export const SITE_CATEGORIES = [
+  {
+    id: 'social_media',
+    label: 'Social Media',
+    description: 'General social networking and sharing platforms',
+    defaultPolicy: 'block',
+    domains: [
+      'facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'threads.net',
+      'snapchat.com', 'pinterest.com', 'tumblr.com', 'mastodon.social', 'mastodon.online',
+      'bsky.app', 'myspace.com', 'vk.com', 'weibo.com', 'wechat.com', 'renren.com',
+      'mewe.com', 'parler.com', 'gab.com', 'clubhouse.com', 'mix.com',
+      'band.us', 'nextdoor.com', 'taringa.net', 'diaspora.social',
+    ],
+  },
+  {
+    id: 'short_video',
+    label: 'Short Video & YouTube',
+    description: 'Video platforms optimized for passive entertainment consumption',
+    defaultPolicy: 'block',
+    domains: [
+      'youtube.com', 'tiktok.com', 'douyin.com', 'kwai.com', 'triller.co',
+      'likee.video', 'cheez.tv', 'snackvideo.com', 'moj.in', 'roposo.com',
+    ],
+    pathPatterns: ['youtube\\.com/watch', 'youtube\\.com/shorts', 'youtube\\.com/feed'],
+  },
+  {
+    id: 'streaming',
+    label: 'Video Streaming',
+    description: 'Movie and TV show streaming services',
+    defaultPolicy: 'block',
+    domains: [
+      'netflix.com', 'hulu.com', 'disneyplus.com', 'hbomax.com', 'max.com',
+      'primevideo.com', 'tv.apple.com', 'peacocktv.com', 'paramountplus.com',
+      'fubo.tv', 'sling.com', 'philo.com', 'crunchyroll.com', 'funimation.com',
+      'mubi.com', 'britbox.com', 'acornnetwork.com', 'shudder.com',
+      'discoveryplus.com', 'espnplus.com', 'plex.tv', 'tubitv.com',
+      'pluto.tv', 'vudu.com', 'crackle.com', 'kanopy.com', 'mxplayer.in',
+      'hotstar.com', 'sonyliv.com', 'zee5.com', 'voot.com', 'jiocinema.com',
+    ],
+  },
+  {
+    id: 'gaming',
+    label: 'Gaming',
+    description: 'Online games, gaming platforms, and game stores',
+    defaultPolicy: 'warn',
+    domains: [
+      'twitch.tv', 'store.steampowered.com', 'epicgames.com', 'gog.com',
+      'origin.com', 'ubisoft.com', 'blizzard.com', 'xbox.com', 'playstation.com',
+      'nintendo.com', 'itch.io', 'miniclip.com', 'kongregate.com',
+      'armor-games.com', 'coolmathgames.com', 'poki.com', 'y8.com',
+      'friv.com', 'addictinggames.com', 'roblox.com', 'minecraft.net',
+      'fortnite.com', 'leagueoflegends.com', 'dota2.com', 'pathofexile.com',
+      'guildwars2.com', 'wowhead.com', 'curse.com', 'overwolf.com',
+      'gamesradar.com', 'ign.com', 'gamespot.com', 'polygon.com',
+    ],
+  },
+  {
+    id: 'news',
+    label: 'News',
+    description: 'General news, politics, and current events',
+    defaultPolicy: 'warn',
+    domains: [
+      'cnn.com', 'foxnews.com', 'bbc.com', 'bbc.co.uk', 'nytimes.com',
+      'theguardian.com', 'washingtonpost.com', 'wsj.com', 'reuters.com',
+      'apnews.com', 'nbcnews.com', 'cbsnews.com', 'msnbc.com',
+      'huffpost.com', 'politico.com', 'thehill.com', 'npr.org',
+      'aljazeera.com', 'dw.com', 'euronews.com', 'axios.com',
+      'vox.com', 'theatlantic.com', 'newyorker.com', 'slate.com',
+      'salon.com', 'dailybeast.com', 'breitbart.com', 'newsweek.com',
+      'time.com', 'techcrunch.com', 'theverge.com', 'wired.com',
+      'arstechnica.com', 'engadget.com', 'zdnet.com', 'cnet.com',
+      'gizmodo.com', 'lifehacker.com', 'mashable.com', 'buzzfeed.com',
+      'vice.com', 'businessinsider.com', 'fortune.com', 'fastcompany.com',
+      'inc.com', 'entrepreneur.com', 'cnbc.com', 'marketwatch.com',
+      'usatoday.com', 'latimes.com', 'nypost.com', 'dailymail.co.uk',
+      'independent.co.uk', 'telegraph.co.uk', 'thesun.co.uk',
+    ],
+  },
+  {
+    id: 'forums',
+    label: 'Forums & Discussion',
+    description: 'Community discussion boards and Q&A sites',
+    defaultPolicy: 'warn',
+    domains: [
+      'reddit.com', 'news.ycombinator.com', 'quora.com', 'stackexchange.com',
+      'stackoverflow.com', 'superuser.com', 'serverfault.com', 'askubuntu.com',
+      'unix.stackexchange.com', 'math.stackexchange.com', 'physics.stackexchange.com',
+      '4chan.org', 'community.atlassian.com', 'discuss.python.org',
+      'forum.unity.com', 'forums.developer.apple.com', 'discourse.org',
+      'lemmy.world', 'kbin.social', 'tildes.net',
+    ],
+  },
+  {
+    id: 'shopping',
+    label: 'Shopping',
+    description: 'E-commerce and retail sites',
+    defaultPolicy: 'warn',
+    domains: [
+      'amazon.com', 'ebay.com', 'etsy.com', 'walmart.com', 'target.com',
+      'bestbuy.com', 'newegg.com', 'costco.com', 'bhphotovideo.com',
+      'adorama.com', 'aliexpress.com', 'wish.com', 'temu.com',
+      'shein.com', 'asos.com', 'zara.com', 'hm.com', 'uniqlo.com',
+      'nordstrom.com', 'macys.com', 'kohls.com', 'gap.com',
+      'wayfair.com', 'overstock.com', 'homedepot.com', 'lowes.com',
+      'ikea.com', 'chewy.com', 'petco.com', 'petsmart.com',
+      'rei.com', 'patagonia.com', 'nike.com', 'adidas.com', 'underarmour.com',
+      'zappos.com', 'sephora.com', 'ulta.com', 'walgreens.com', 'cvs.com',
+      'rakuten.com', 'groupon.com', 'woot.com', 'slickdeals.net',
+    ],
+  },
+  {
+    id: 'email',
+    label: 'Email',
+    description: 'Web-based email clients',
+    defaultPolicy: 'allow',
+    domains: [
+      'mail.google.com', 'gmail.com', 'outlook.com', 'outlook.live.com',
+      'mail.yahoo.com', 'protonmail.com', 'mail.proton.me', 'tutanota.com',
+      'fastmail.com', 'zoho.com', 'icloud.com', 'aol.com', 'gmx.com',
+      'yandex.com', 'mail.ru',
+    ],
+  },
+  {
+    id: 'messaging',
+    label: 'Messaging & Chat',
+    description: 'Instant messaging and team communication tools',
+    defaultPolicy: 'allow',
+    domains: [
+      'slack.com', 'discord.com', 'web.whatsapp.com', 'web.telegram.org',
+      'signal.org', 'messenger.com', 'teams.microsoft.com',
+      'meet.google.com', 'zoom.us', 'whereby.com', 'gather.town',
+      'lark.com', 'mattermost.com', 'rocketchat.com', 'wire.com',
+      'keybase.io', 'element.io', 'matrix.org',
+    ],
+  },
+  {
+    id: 'job_boards',
+    label: 'Job Boards',
+    description: 'Job listings and application platforms',
+    defaultPolicy: 'allow',
+    domains: [
+      'indeed.com', 'glassdoor.com', 'monster.com', 'ziprecruiter.com',
+      'careerbuilder.com', 'simplyhired.com', 'dice.com', 'greenhouse.io',
+      'lever.co', 'workday.com', 'icims.com', 'taleo.net', 'jobvite.com',
+      'hired.com', 'wellfound.com', 'otta.com', 'remoteok.com',
+      'weworkremotely.com', 'remotive.io', 'flexjobs.com', 'angel.co',
+      'builtin.com', 'techcareers.com', 'cyberseek.org',
+    ],
+  },
+  {
+    id: 'professional_network',
+    label: 'Professional Network',
+    description: 'LinkedIn and professional community platforms',
+    defaultPolicy: 'allow',
+    domains: [
+      'linkedin.com', 'xing.com', 'meetup.com', 'lunchclub.com',
+      'clarity.fm', 'toptal.com', 'upwork.com', 'fiverr.com',
+      'freelancer.com', 'guru.com', '99designs.com', 'contra.com',
+      'workco.com', 'bench.co',
+    ],
+  },
+  {
+    id: 'documentation',
+    label: 'Documentation & Reference',
+    description: 'Technical documentation, API references, and language specs',
+    defaultPolicy: 'allow',
+    domains: [
+      'developer.mozilla.org', 'devdocs.io', 'docs.python.org',
+      'docs.microsoft.com', 'learn.microsoft.com', 'docs.aws.amazon.com',
+      'cloud.google.com', 'developer.apple.com', 'developer.android.com',
+      'docs.docker.com', 'kubernetes.io', 'reactjs.org', 'vuejs.org',
+      'angular.io', 'nextjs.org', 'svelte.dev', 'deno.land',
+      'nodejs.org', 'npmjs.com', 'pypi.org', 'crates.io', 'pkg.go.dev',
+      'rubygems.org', 'packagist.org', 'hex.pm', 'docs.rs',
+      'cppreference.com', 'en.cppreference.com', 'php.net',
+      'ruby-doc.org', 'javadoc.io', 'docs.spring.io',
+    ],
+  },
+  {
+    id: 'code_forge',
+    label: 'Code & Version Control',
+    description: 'Source code hosting, CI/CD, and collaborative development',
+    defaultPolicy: 'allow',
+    domains: [
+      'github.com', 'gitlab.com', 'bitbucket.org', 'codeberg.org',
+      'sourceforge.net', 'gitee.com', 'launchpad.net', 'sr.ht',
+      'replit.com', 'glitch.com', 'codepen.io', 'jsfiddle.net',
+      'codesandbox.io', 'stackblitz.com', 'gitpod.io',
+      'circleci.com', 'travis-ci.org', 'jenkins.io', 'drone.io',
+    ],
+  },
+  {
+    id: 'ai_tools',
+    label: 'AI Tools',
+    description: 'AI assistants, code generation, and LLM platforms',
+    defaultPolicy: 'allow',
+    domains: [
+      'chat.openai.com', 'claude.ai', 'gemini.google.com', 'bard.google.com',
+      'perplexity.ai', 'you.com', 'phind.com', 'poe.com',
+      'character.ai', 'replika.com', 'midjourney.com', 'stability.ai',
+      'playground.ai', 'runwayml.com', 'elevenlabs.io',
+      'huggingface.co', 'replicate.com', 'together.ai', 'cohere.com',
+      'anthropic.com', 'openai.com', 'mistral.ai', 'groq.com',
+    ],
+  },
+  {
+    id: 'finance',
+    label: 'Finance & Markets',
+    description: 'Stock markets, banking, trading, and crypto',
+    defaultPolicy: 'warn',
+    domains: [
+      'bloomberg.com', 'finance.yahoo.com', 'cnbc.com',
+      'investing.com', 'seekingalpha.com', 'morningstar.com',
+      'robinhood.com', 'etrade.com', 'schwab.com', 'fidelity.com',
+      'vanguard.com', 'tdameritrade.com', 'webull.com', 'm1finance.com',
+      'binance.com', 'coinbase.com', 'kraken.com', 'crypto.com',
+      'coinmarketcap.com', 'coingecko.com', 'tradingview.com',
+      'bankrate.com', 'nerdwallet.com', 'mint.com', 'creditkarma.com',
+      'experian.com', 'equifax.com', 'transunion.com',
+      'ally.com', 'sofi.com', 'chime.com', 'capitalone.com',
+    ],
+  },
+  {
+    id: 'sports',
+    label: 'Sports',
+    description: 'Sports news, scores, fantasy sports, and analysis',
+    defaultPolicy: 'warn',
+    domains: [
+      'espn.com', 'nfl.com', 'nba.com', 'mlb.com', 'nhl.com',
+      'mls.com', 'fifa.com', 'uefa.com', 'si.com', 'bleacherreport.com',
+      'cbssports.com', 'nbcsports.com', 'foxsports.com', 'theathletic.com',
+      'sofascore.com', 'flashscore.com', 'soccerway.com',
+      'draftkings.com', 'fanduel.com', 'yahoo.com/sports',
+    ],
+  },
+  {
+    id: 'gambling',
+    label: 'Gambling',
+    description: 'Online casinos, sports betting, and poker sites',
+    defaultPolicy: 'block',
+    domains: [
+      'betway.com', 'bet365.com', 'ladbrokes.com', 'williamhill.com',
+      'pokerstars.com', '888casino.com', 'bwin.com', 'unibet.com',
+      'paddypower.com', 'bodog.com', 'bovada.lv', 'mybookie.ag',
+      'betmgm.com', 'caesarssportsbook.com', 'pointsbet.com',
+      'barstoolsportsbook.com', 'wynnbet.com',
+    ],
+  },
+  {
+    id: 'memes',
+    label: 'Memes & Humor',
+    description: 'Meme aggregators and humor content sites',
+    defaultPolicy: 'block',
+    domains: [
+      '9gag.com', 'ifunny.co', 'imgur.com', 'memedroid.com',
+      'cheezburger.com', 'knowyourmeme.com', 'funnyjunk.com',
+      'lolcat.com', 'ebaumsworld.com',
+    ],
+  },
+  {
+    id: 'productivity',
+    label: 'Productivity Tools',
+    description: 'Task management, notes, documents, and work tools',
+    defaultPolicy: 'allow',
+    domains: [
+      'notion.so', 'trello.com', 'asana.com', 'monday.com', 'clickup.com',
+      'todoist.com', 'ticktick.com', 'evernote.com', 'onenote.com',
+      'obsidian.md', 'roamresearch.com', 'logseq.com', 'coda.io',
+      'airtable.com', 'docs.google.com', 'sheets.google.com',
+      'slides.google.com', 'drive.google.com', 'dropbox.com',
+      'box.com', 'onedrive.live.com', 'calendar.google.com',
+      'calendly.com', 'loom.com', 'descript.com', 'grammarly.com',
+      'hemingwayapp.com', 'zotero.org', 'mendeley.com',
+      'miro.com', 'figjam.com', 'figma.com', 'canva.com',
+      'lucidchart.com', 'whimsical.com', 'linear.app',
+      'jira.atlassian.com', 'confluence.atlassian.com',
+      'basecamp.com', 'wrike.com', 'teamwork.com', 'smartsheet.com',
+      'craft.do', 'bear.app', 'ulysses.app', 'ia.net',
+    ],
+  },
+  {
+    id: 'health',
+    label: 'Health & Medical',
+    description: 'Health information, medical resources, and wellness apps',
+    defaultPolicy: 'allow',
+    domains: [
+      'webmd.com', 'mayoclinic.org', 'healthline.com', 'medlineplus.gov',
+      'nih.gov', 'cdc.gov', 'who.int', 'nhs.uk', 'drugs.com',
+      'rxlist.com', 'medscape.com', 'pubmed.ncbi.nlm.nih.gov',
+      'myfitnesspal.com', 'loseit.com', 'cronometer.com',
+      'calm.com', 'headspace.com', 'betterhelp.com', 'talkspace.com',
+      'zocdoc.com', 'goodrx.com', 'cvs.com/minuteclinic',
+    ],
+  },
+  {
+    id: 'travel',
+    label: 'Travel & Booking',
+    description: 'Flight and hotel booking, travel planning and research',
+    defaultPolicy: 'allow',
+    domains: [
+      'booking.com', 'airbnb.com', 'hotels.com', 'expedia.com',
+      'kayak.com', 'priceline.com', 'orbitz.com', 'tripadvisor.com',
+      'skyscanner.com', 'momondo.com', 'google.com/travel',
+      'united.com', 'delta.com', 'aa.com', 'southwest.com',
+      'vrbo.com', 'hipcamp.com', 'hostelworld.com', 'agoda.com',
+    ],
+  },
+];
+
+export const DOMAIN_TO_CATEGORY = new Map();
+for (const cat of SITE_CATEGORIES) {
+  for (const domain of cat.domains) {
+    const normalized = String(domain).replace(/^www\./, '').toLowerCase();
+    if (normalized && !DOMAIN_TO_CATEGORY.has(normalized)) {
+      DOMAIN_TO_CATEGORY.set(normalized, cat.id);
+    }
+  }
+}
+
+export function getSiteCategory(hostname) {
+  if (!hostname) return null;
+  const normalized = String(hostname).replace(/^www\./, '').toLowerCase();
+  const categoryId = DOMAIN_TO_CATEGORY.get(normalized);
+  if (!categoryId) return null;
+  const cat = SITE_CATEGORIES.find(c => c.id === categoryId);
+  return cat ? { categoryId, label: cat.label } : null;
+}
