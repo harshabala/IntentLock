@@ -282,6 +282,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     container.appendChild(statsDiv);
 
+    const monitoringHint = document.createElement('p');
+    monitoringHint.className = 'monitoring-hint';
+    monitoringHint.textContent = 'Monitoring tab switches, page loads, dwell time, and SPA navigation. Drift triggers an in-page overlay or full-page intervention.';
+    container.appendChild(monitoringHint);
+
     // Intent display
     const intentBox = document.createElement('div');
     intentBox.className = 'intent-display';

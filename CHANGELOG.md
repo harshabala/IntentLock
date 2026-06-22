@@ -1,5 +1,18 @@
 # IntentLock Changelog
 
+## [1.4.0] - 2026-06-22
+
+### Added
+- In-page intervention overlay (shadow DOM) with tab-replacement fallback.
+- Per-page dwell time tracking and SPA navigation detection via module content script.
+- LLM drift response cache (60s TTL) to reduce redundant API calls.
+- Dwell-aware heuristic drift scoring for extended time on unrelated pages.
+- Shared `DRIFT_CONFIDENCE_THRESHOLD` (0.7) for heuristic and LLM drift checks.
+
+### Changed
+- LLM drift now requires confidence ≥ 0.7 before triggering intervention.
+- Active session view shows monitoring hint for drift detection behavior.
+
 ## [1.2.1] - 2026-06-17
 
 ### Added
