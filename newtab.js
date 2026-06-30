@@ -501,6 +501,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     container.appendChild(stats);
 
+    // Top drifted domains
+    const domainCounts = {};
+    events.filter(e => e.actionType === 'OVERRIDE' && e.url).forEach(e => {
+      try {
+        const domain = new URL(e.url).hostname.replace(/^www\./, '').toLowerCase();
+        domainCounts[domain] = (domainCounts[domain] || 0) + 1;
+      } catch { /* skip invalid URLs */ }
+    });
+    const topDomains = Object.entries(domainCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    if (topDomains.length > 0) {
+      const driftSection = document.createElement('div');
+      driftSection.className = 'plan-section';
+      const driftTitle = document.createElement('h3');
+      driftTitle.className = 'plan-heading';
+      driftTitle.textContent = 'Top drift sites';
+      driftSection.appendChild(driftTitle);
+      topDomains.forEach(([domain, count]) => {
+        const row = document.createElement('div');
+        row.className = 'stat-row';
+        const domainSpan = document.createElement('span');
+        domainSpan.className = 'stat-label';
+        domainSpan.textContent = domain;
+        const countSpan = document.createElement('span');
+        countSpan.className = 'stat-value';
+        countSpan.textContent = `${count} override${count !== 1 ? 's' : ''}`;
+        row.append(domainSpan, countSpan);
+        driftSection.appendChild(row);
+      });
+      container.appendChild(driftSection);
+    }
+
     // Intent recall
     const intentBox = document.createElement('div');
     intentBox.className = 'intent-display';
@@ -534,6 +567,15 @@ document.addEventListener('DOMContentLoaded', () => {
     skipBtn.textContent = 'Start new session';
     skipBtn.addEventListener('click', () => showNewSessionForm(container));
     container.appendChild(skipBtn);
+
+    const histLink = document.createElement('button');
+    histLink.className = 'popup-link';
+    histLink.style.cssText = 'background:none;border:none;cursor:pointer;font-size:0.75rem;color:#888;margin-top:8px;';
+    histLink.textContent = 'View in history';
+    histLink.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
+    });
+    container.appendChild(histLink);
   }
 
   // ── Onboarding wizard ────────────────────────────────────────────────
