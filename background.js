@@ -636,11 +636,11 @@ function evaluateDrift(url, tabId) {
               chrome.tabs.get(tabId, (tab) => {
                 if (chrome.runtime.lastError || !tab) return;
                 if (tab.url === url) {
-                  triggerIntervention(`The AI has detected drift (Confidence: ${Math.round(res.confidence * 100)}%)`, tabId);
+                  triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
                 }
               });
             } else {
-              triggerIntervention(`The AI has detected drift (Confidence: ${Math.round(res.confidence * 100)}%)`, tabId);
+              triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
             }
           }
         });
