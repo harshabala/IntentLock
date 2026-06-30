@@ -5,7 +5,11 @@ import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { getEffectiveDistractionSites, DEFAULT_DISTRACTION_SITES } from './distraction-sites.js';
-import { clearLlmBackoff } from './llm-backoff.js';
+import { clearLlmBackoff, getQuotaBackoffUntil, registerBackoffCallback, setQuotaBackoff } from './llm-backoff.js';
+
+registerBackoffCallback((until) => {
+  chrome.storage.local.set({ llmBackoffUntil: until });
+});
 
 let currentSession = null;
 let timeBudgetAlarmName = 'intentlock-budget-alarm';
@@ -208,7 +212,7 @@ function loadConfig() {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
-      'overrideCooldowns', 'heuristicPolicy'
+      'overrideCooldowns', 'heuristicPolicy', 'llmBackoffUntil'
     ], (result) => {
       const data = result || {};
       if (data.activeSession && data.activeSession.isActive) {
@@ -267,6 +271,9 @@ function loadConfig() {
         });
       } else {
         overrideCooldowns.clear();
+      }
+      if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
+        setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
       }
       resolve();
     });
@@ -345,6 +352,7 @@ function handleSessionStart(session) {
   currentSession = session;
   clearDriftCache();
   clearLlmBackoff();
+  chrome.storage.local.remove(['llmBackoffUntil']);
   overrideCooldowns.clear(); // clear cooldowns on new session
   chrome.storage.local.remove(['overrideCooldowns']);
 

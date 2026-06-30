@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
-  chrome.storage.local.get(['activeSession'], (result) => {
+  chrome.storage.local.get(['activeSession', 'llmBackoffUntil'], (result) => {
     const session = result.activeSession;
 
     if (!session || !session.isActive) {
@@ -78,6 +78,17 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
     content.appendChild(btn);
+
+    const backoffUntil = result.llmBackoffUntil || 0;
+    const isBackedOff = backoffUntil > Date.now();
+    if (isBackedOff) {
+      const notice = document.createElement('p');
+      notice.className = 'no-session';
+      notice.style.cssText = 'font-size:0.7rem;color:#888;margin:4px 0 0;';
+      const minutesLeft = Math.ceil((backoffUntil - Date.now()) / 60000);
+      notice.textContent = `AI check paused (~${minutesLeft} min). Heuristics still active.`;
+      content.appendChild(notice);
+    }
 
     addFooterLinks(content);
   });

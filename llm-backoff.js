@@ -4,6 +4,7 @@ export const DEFAULT_QUOTA_BACKOFF_MS = 30 * 60 * 1000;
 
 let quotaBackoffUntil = 0;
 let lastQuotaLogAt = 0;
+let _backoffCallback = null;
 
 export function isLlmBackedOff(now = Date.now()) {
   return now < quotaBackoffUntil;
@@ -28,6 +29,8 @@ export function parseRetryAfterMs(bodyText = '', now = Date.now()) {
 
 export function setQuotaBackoff({ retryAfterMs = DEFAULT_QUOTA_BACKOFF_MS, now = Date.now() } = {}) {
   quotaBackoffUntil = Math.max(quotaBackoffUntil, now + retryAfterMs);
+  lastQuotaLogAt = lastQuotaLogAt || now;
+  if (_backoffCallback) _backoffCallback(quotaBackoffUntil);
 }
 
 export function shouldLogQuotaError(now = Date.now()) {
@@ -36,4 +39,12 @@ export function shouldLogQuotaError(now = Date.now()) {
   }
   lastQuotaLogAt = now;
   return true;
+}
+
+export function registerBackoffCallback(fn) {
+  _backoffCallback = fn;
+}
+
+export function _resetBackoffCallbackForTest() {
+  _backoffCallback = null;
 }
