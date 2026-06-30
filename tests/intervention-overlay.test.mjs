@@ -11,3 +11,11 @@ test('buildOverlayStyles includes core intervention layout rules', () => {
 test('createInterventionOverlay is exported factory function', () => {
   assert.equal(typeof createInterventionOverlay, 'function');
 });
+
+test('createInterventionOverlay accepts onEndSession callback', () => {
+  let called = false;
+  // The factory function signature should accept onEndSession without throwing
+  assert.doesNotThrow(() => {
+    createInterventionOverlay({ onEndSession: () => { called = true; } });
+  });
+});

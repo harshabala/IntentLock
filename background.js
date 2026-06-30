@@ -133,7 +133,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR',
-    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'TEST_INTERVENTION'
+    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'OVERLAY_END_SESSION', 'TEST_INTERVENTION'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -194,6 +194,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
       sendResponse({ status: 'ok' });
+    } else if (message.type === 'OVERLAY_END_SESSION') {
+      endActiveSession(null, (endedSession) => {
+        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+          void chrome.runtime.lastError;
+        });
+        sendResponse({ status: 'ok', session: endedSession });
+      });
+      return true;
     } else if (message.type === 'TEST_INTERVENTION') {
       chrome.storage.local.get(['activeSession'], (result) => {
         const session = result.activeSession;

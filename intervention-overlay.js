@@ -105,10 +105,24 @@ export function buildOverlayStyles() {
       color: #000000;
       border: 1px solid #ffffff;
     }
+    .end-session-btn {
+      background: transparent;
+      border: 1px solid #444;
+      color: #888;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      margin-top: 4px;
+    }
+    .end-session-btn:hover {
+      border-color: #666;
+      color: #aaa;
+    }
   `;
 }
 
-export function createInterventionOverlay({ onOverride, onDismiss } = {}) {
+export function createInterventionOverlay({ onOverride, onDismiss, onEndSession } = {}) {
   let host = null;
   let shadow = null;
   let reflectionInput = null;
@@ -170,6 +184,19 @@ export function createInterventionOverlay({ onOverride, onDismiss } = {}) {
     });
 
     actions.append(dismissBtn, overrideBtn);
+
+    if (typeof onEndSession === 'function') {
+      const endBtn = document.createElement('button');
+      endBtn.type = 'button';
+      endBtn.className = 'end-session-btn';
+      endBtn.textContent = 'End session';
+      endBtn.addEventListener('click', () => {
+        hide();
+        onEndSession();
+      });
+      actions.appendChild(endBtn);
+    }
+
     panel.append(reflectionInput, actions);
     shadow.append(backdrop, panel);
     document.documentElement.appendChild(host);
