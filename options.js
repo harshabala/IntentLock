@@ -159,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const CATEGORY_GROUPS = [
       {
         label: 'Potentially distracting',
-        ids: ['social_media', 'short_video', 'streaming', 'gaming', 'memes', 'gambling', 'adult', 'news', 'forums', 'sports'],
+        ids: ['social_media', 'short_video', 'streaming', 'gaming', 'memes', 'gambling', 'news', 'forums', 'sports'],
       },
       {
         label: 'Work tools',
