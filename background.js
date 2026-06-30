@@ -24,14 +24,22 @@ let configPromise = null;
 
 function createHistoryEntry(session) {
   const events = Array.isArray(session.events) ? session.events : [];
+  const overrides = events
+    .filter(e => e.actionType === 'OVERRIDE')
+    .map(e => ({
+      timestamp: e.timestamp || 0,
+      url: e.url || null,
+      reflection: e.reflection || null,
+    }));
   return {
     id: session.id,
     intent: session.intent,
     startTime: session.startTime,
     endTime: session.endTime,
     timeBudget: session.timeBudget,
-    driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
-    totalEvents: events.length
+    driftCount: overrides.length,
+    totalEvents: events.length,
+    overrides,
   };
 }
 
@@ -759,5 +767,5 @@ export function getInMemoryState() {
   };
 }
 
-export { reloadConfig };
+export { reloadConfig, createHistoryEntry };
 

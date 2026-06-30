@@ -85,7 +85,7 @@ globalThis.chrome = {
 };
 
 // Import background.js to execute its loadConfig
-const { getInMemoryState, reloadConfig } = await import('../background.js');
+const { getInMemoryState, reloadConfig, createHistoryEntry } = await import('../background.js');
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
   // Verify initially loaded values (non-defaults)
@@ -128,4 +128,26 @@ test('migrateLlmStorage migrates legacy key to llmApiKey in session storage on l
   assert.equal(sessionStorageData.llmApiKey, 'test-migration-key');
   assert.equal(sessionStorageData.openaiApiKey, undefined);
   assert.equal(storageData.openaiApiKey, undefined);
+});
+
+test('createHistoryEntry includes overrides array with reflection text', () => {
+  const session = {
+    id: 'abc123',
+    intent: 'write report',
+    startTime: 1000,
+    endTime: 2000,
+    timeBudget: null,
+    events: [
+      { actionType: 'PAGE_LOAD', url: 'https://github.com', timestamp: 1100 },
+      { actionType: 'OVERRIDE', url: 'https://reddit.com', timestamp: 1200, reflection: 'needed a break' },
+      { actionType: 'OVERRIDE', url: 'https://twitter.com', timestamp: 1300, reflection: null },
+    ],
+  };
+  const entry = createHistoryEntry(session);
+  assert.equal(entry.driftCount, 2);
+  assert.ok(Array.isArray(entry.overrides), 'overrides should be an array');
+  assert.equal(entry.overrides.length, 2);
+  assert.equal(entry.overrides[0].url, 'https://reddit.com');
+  assert.equal(entry.overrides[0].reflection, 'needed a break');
+  assert.equal(entry.overrides[1].reflection, null);
 });

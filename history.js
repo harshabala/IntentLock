@@ -129,6 +129,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
       card.appendChild(meta);
 
+      const overrides = Array.isArray(session.overrides) ? session.overrides : [];
+      const reflections = overrides.filter(o => o.reflection);
+      if (reflections.length > 0) {
+        const reflSection = document.createElement('div');
+        reflSection.className = 'history-reflections';
+
+        reflections.forEach(o => {
+          const item = document.createElement('div');
+          item.className = 'reflection-item';
+
+          const quote = document.createElement('p');
+          quote.className = 'reflection-text';
+          quote.textContent = `"${o.reflection}"`;
+
+          item.appendChild(quote);
+
+          if (o.url) {
+            const urlNote = document.createElement('p');
+            urlNote.className = 'reflection-url';
+            try {
+              urlNote.textContent = new URL(o.url).hostname.replace(/^www\./, '');
+            } catch {
+              urlNote.textContent = o.url;
+            }
+            item.appendChild(urlNote);
+          }
+
+          reflSection.appendChild(item);
+        });
+
+        card.appendChild(reflSection);
+      }
+
       historyList.appendChild(card);
     });
   }
