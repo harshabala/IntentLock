@@ -156,40 +156,69 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function buildCategoryGrid(policy) {
+    const CATEGORY_GROUPS = [
+      {
+        label: 'Potentially distracting',
+        ids: ['social_media', 'short_video', 'streaming', 'gaming', 'memes', 'gambling', 'adult', 'news', 'forums', 'sports'],
+      },
+      {
+        label: 'Work tools',
+        ids: ['email', 'messaging', 'job_boards', 'professional_network', 'documentation', 'code_forge', 'ai_tools', 'productivity'],
+      },
+      {
+        label: 'Neutral / personal',
+        ids: ['shopping', 'finance', 'health', 'travel'],
+      },
+    ];
+
     const grid = document.getElementById('category-grid');
     if (!grid) return;
     grid.textContent = '';
 
-    SITE_CATEGORIES.forEach(cat => {
-      const currentPolicy = policy.categoryPolicies?.[cat.id] || cat.defaultPolicy;
+    const currentPolicy = (policy?.version === 1 && policy.categoryPolicies) ? policy.categoryPolicies : {};
 
-      const row = document.createElement('div');
-      row.className = 'category-row';
+    CATEGORY_GROUPS.forEach(group => {
+      const groupHeader = document.createElement('h3');
+      groupHeader.className = 'category-group-header';
+      groupHeader.textContent = group.label;
+      grid.appendChild(groupHeader);
 
-      const nameEl = document.createElement('span');
-      nameEl.className = 'category-name';
-      nameEl.textContent = cat.label;
+      group.ids.forEach(catId => {
+        const cat = SITE_CATEGORIES.find(c => c.id === catId);
+        if (!cat) return;
+        const current = currentPolicy[cat.id] || cat.defaultPolicy || 'warn';
 
-      const controls = document.createElement('div');
-      controls.className = 'category-controls';
+        const row = document.createElement('div');
+        row.className = 'category-row';
 
-      ['block', 'warn', 'allow'].forEach(choice => {
         const labelEl = document.createElement('label');
-        labelEl.className = 'category-choice';
+        labelEl.className = 'category-label';
+        labelEl.textContent = cat.label;
+        row.appendChild(labelEl);
 
-        const radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = `cat-${cat.id}`;
-        radio.value = choice;
-        radio.checked = choice === currentPolicy;
-        radio.setAttribute('aria-label', `${cat.label}: ${choice}`);
+        const radioGroup = document.createElement('div');
+        radioGroup.className = 'category-radios';
+        radioGroup.setAttribute('role', 'group');
+        radioGroup.setAttribute('aria-label', `${cat.label} policy`);
 
-        labelEl.append(radio, document.createTextNode(choice));
-        controls.appendChild(labelEl);
+        ['block', 'warn', 'allow'].forEach(val => {
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = `cat-${cat.id}`;
+          radio.value = val;
+          radio.id = `cat-${cat.id}-${val}`;
+          if (current === val) radio.checked = true;
+
+          const radioLabel = document.createElement('label');
+          radioLabel.setAttribute('for', `cat-${cat.id}-${val}`);
+          radioLabel.textContent = val;
+
+          radioGroup.append(radio, radioLabel);
+        });
+
+        row.appendChild(radioGroup);
+        grid.appendChild(row);
       });
-
-      row.append(nameEl, controls);
-      grid.appendChild(row);
     });
   }
 

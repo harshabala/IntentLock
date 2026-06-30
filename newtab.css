@@ -685,6 +685,16 @@ body.options {
   letter-spacing: 0.05em;
 }
 
+.category-group-header {
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 16px 0 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
 /* ==========================================================================
    Popup overrides
    ========================================================================== */
