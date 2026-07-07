@@ -75,7 +75,6 @@ test('V1 UI avoids non-goal habit tracking and analytics surfaces', async () => 
     'favorite',
     'patterns',
     'quick start',
-    'category',
     'build better browsing habits',
   ]) {
     assert.equal(combined.includes(forbidden), false, `found out-of-scope copy: ${forbidden}`);

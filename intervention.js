@@ -1,3 +1,18 @@
+// Load and apply theme override as early as possible
+chrome.storage.local.get(['theme'], (result) => {
+  const theme = result.theme || 'auto';
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.classList.remove('theme-light');
+    root.classList.add('theme-dark');
+  } else if (theme === 'light') {
+    root.classList.remove('theme-dark');
+    root.classList.add('theme-light');
+  } else {
+    root.classList.remove('theme-dark', 'theme-light');
+  }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   const reasonText = document.getElementById('reason-text');
   const currentIntent = document.getElementById('current-intent');

@@ -5,7 +5,11 @@ import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { getEffectiveDistractionSites, DEFAULT_DISTRACTION_SITES } from './distraction-sites.js';
-import { clearLlmBackoff } from './llm-backoff.js';
+import { clearLlmBackoff, getQuotaBackoffUntil, registerBackoffCallback, setQuotaBackoff } from './llm-backoff.js';
+
+registerBackoffCallback((until) => {
+  chrome.storage.local.set({ llmBackoffUntil: until });
+});
 
 let currentSession = null;
 let timeBudgetAlarmName = 'intentlock-budget-alarm';
@@ -20,14 +24,22 @@ let configPromise = null;
 
 function createHistoryEntry(session) {
   const events = Array.isArray(session.events) ? session.events : [];
+  const overrides = events
+    .filter(e => e.actionType === 'OVERRIDE')
+    .map(e => ({
+      timestamp: e.timestamp || 0,
+      url: e.url || null,
+      reflection: e.reflection || null,
+    }));
   return {
     id: session.id,
     intent: session.intent,
     startTime: session.startTime,
     endTime: session.endTime,
     timeBudget: session.timeBudget,
-    driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
-    totalEvents: events.length
+    driftCount: overrides.length,
+    totalEvents: events.length,
+    overrides,
   };
 }
 
@@ -121,7 +133,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR',
-    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'TEST_INTERVENTION'
+    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'OVERLAY_END_SESSION', 'TEST_INTERVENTION'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -154,6 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ungroupTabs();
       currentSession = null;
       clearDriftCache();
+      clearLlmBackoff();
       overrideCooldowns.clear();
       chrome.storage.local.remove(['overrideCooldowns']);
       chrome.alarms.clear(timeBudgetAlarmName);
@@ -182,6 +195,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
       sendResponse({ status: 'ok' });
+    } else if (message.type === 'OVERLAY_END_SESSION') {
+      endActiveSession(null, (endedSession) => {
+        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+          void chrome.runtime.lastError;
+        });
+        sendResponse({ status: 'ok', session: endedSession });
+      });
+      return true;
     } else if (message.type === 'TEST_INTERVENTION') {
       chrome.storage.local.get(['activeSession'], (result) => {
         const session = result.activeSession;
@@ -208,7 +229,7 @@ function loadConfig() {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
-      'overrideCooldowns', 'heuristicPolicy'
+      'overrideCooldowns', 'heuristicPolicy', 'llmBackoffUntil'
     ], (result) => {
       const data = result || {};
       if (data.activeSession && data.activeSession.isActive) {
@@ -267,6 +288,9 @@ function loadConfig() {
         });
       } else {
         overrideCooldowns.clear();
+      }
+      if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
+        setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
       }
       resolve();
     });
@@ -345,6 +369,7 @@ function handleSessionStart(session) {
   currentSession = session;
   clearDriftCache();
   clearLlmBackoff();
+  chrome.storage.local.remove(['llmBackoffUntil']);
   overrideCooldowns.clear(); // clear cooldowns on new session
   chrome.storage.local.remove(['overrideCooldowns']);
 
@@ -628,11 +653,11 @@ function evaluateDrift(url, tabId) {
               chrome.tabs.get(tabId, (tab) => {
                 if (chrome.runtime.lastError || !tab) return;
                 if (tab.url === url) {
-                  triggerIntervention(`The AI has detected drift (Confidence: ${Math.round(res.confidence * 100)}%)`, tabId);
+                  triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
                 }
               });
             } else {
-              triggerIntervention(`The AI has detected drift (Confidence: ${Math.round(res.confidence * 100)}%)`, tabId);
+              triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
             }
           }
         });
@@ -751,5 +776,5 @@ export function getInMemoryState() {
   };
 }
 
-export { reloadConfig };
+export { reloadConfig, createHistoryEntry };
 

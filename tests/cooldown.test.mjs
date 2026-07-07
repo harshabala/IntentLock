@@ -264,7 +264,7 @@ test('Subdomain Matching matches subdomains bidirectionally', async () => {
       startTime: Date.now(),
       events: []
     },
-    customDistractionSites: ['facebook.com', 'reddit.com'],
+    customDistractionSites: ['facebook.com', 'instagram.com'],
     trackingEnabled: true
   };
   await reloadConfig();
@@ -292,11 +292,11 @@ test('Subdomain Matching matches subdomains bidirectionally', async () => {
   await sleep(20);
   assert.equal(tabsUpdateCalls.length, 0, 'Cooldown for m.facebook.com should bypass intervention on facebook.com');
 
-  // Scenario C: Cooldown does not affect unrelated domains (e.g. reddit.com)
+  // Scenario C: Cooldown does not affect unrelated domains (e.g. instagram.com)
   tabsUpdateCalls = [];
-  triggerTabUpdate(1, { status: 'complete' }, { url: 'https://www.reddit.com/' });
+  triggerTabUpdate(1, { status: 'complete' }, { url: 'https://www.instagram.com/' });
   await sleep(20);
-  assert.equal(tabsUpdateCalls.length, 1, 'Cooldown for m.facebook.com should not bypass intervention on reddit.com');
+  assert.equal(tabsUpdateCalls.length, 1, 'Cooldown for m.facebook.com should not bypass intervention on instagram.com');
 });
 
 test('Session Reset Cleanup clears active cooldowns on SESSION_STARTED and SESSION_CLEARED', async () => {

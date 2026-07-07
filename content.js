@@ -44,6 +44,11 @@ function ensureOverlay() {
           void chrome.runtime.lastError;
         });
       },
+      onEndSession: () => {
+        chrome.runtime.sendMessage({ type: 'OVERLAY_END_SESSION' }, () => {
+          void chrome.runtime.lastError;
+        });
+      },
     });
   }
   return overlay;

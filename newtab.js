@@ -1,3 +1,18 @@
+// Load and apply theme override as early as possible
+chrome.storage.local.get(['theme'], (result) => {
+  const theme = result.theme || 'auto';
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.classList.remove('theme-light');
+    root.classList.add('theme-dark');
+  } else if (theme === 'light') {
+    root.classList.remove('theme-dark');
+    root.classList.add('theme-light');
+  } else {
+    root.classList.remove('theme-dark', 'theme-light');
+  }
+});
+
 import { generateIntentPlan } from './llm.js';
 import {
   PROVIDER_LIST,
@@ -163,7 +178,26 @@ document.addEventListener('DOMContentLoaded', () => {
           timerInterval = null;
         }
         document.querySelectorAll('.confirm-overlay').forEach(el => el.remove());
-        showNewSessionForm(document.querySelector('.lock-container'));
+        
+        const oldSession = changes.activeSession.oldValue;
+        if (oldSession && oldSession.isActive) {
+          chrome.storage.local.get(['sessionHistory'], (result) => {
+            const history = result.sessionHistory || [];
+            const lastSession = history.find(h => h.id === oldSession.id);
+            if (lastSession) {
+              const endedSession = {
+                ...oldSession,
+                isActive: false,
+                endTime: lastSession.endTime || Date.now()
+              };
+              showSummary(document.querySelector('.lock-container'), endedSession);
+            } else {
+              showNewSessionForm(document.querySelector('.lock-container'));
+            }
+          });
+        } else {
+          showNewSessionForm(document.querySelector('.lock-container'));
+        }
       }
     }
   });
@@ -501,6 +535,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     container.appendChild(stats);
 
+    // Top drifted domains
+    const domainCounts = {};
+    events.filter(e => e.actionType === 'OVERRIDE' && e.url).forEach(e => {
+      try {
+        const domain = new URL(e.url).hostname.replace(/^www\./, '').toLowerCase();
+        domainCounts[domain] = (domainCounts[domain] || 0) + 1;
+      } catch { /* skip invalid URLs */ }
+    });
+    const topDomains = Object.entries(domainCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    if (topDomains.length > 0) {
+      const driftSection = document.createElement('div');
+      driftSection.className = 'plan-section';
+      const driftTitle = document.createElement('h3');
+      driftTitle.className = 'plan-heading';
+      driftTitle.textContent = 'Top drift sites';
+      driftSection.appendChild(driftTitle);
+      topDomains.forEach(([domain, count]) => {
+        const row = document.createElement('div');
+        row.className = 'stat-row';
+        const domainSpan = document.createElement('span');
+        domainSpan.className = 'stat-label';
+        domainSpan.textContent = domain;
+        const countSpan = document.createElement('span');
+        countSpan.className = 'stat-value';
+        countSpan.textContent = `${count} override${count !== 1 ? 's' : ''}`;
+        row.append(domainSpan, countSpan);
+        driftSection.appendChild(row);
+      });
+      container.appendChild(driftSection);
+    }
+
     // Intent recall
     const intentBox = document.createElement('div');
     intentBox.className = 'intent-display';
@@ -534,6 +601,15 @@ document.addEventListener('DOMContentLoaded', () => {
     skipBtn.textContent = 'Start new session';
     skipBtn.addEventListener('click', () => showNewSessionForm(container));
     container.appendChild(skipBtn);
+
+    const histLink = document.createElement('button');
+    histLink.className = 'popup-link';
+    histLink.style.cssText = 'background:none;border:none;cursor:pointer;font-size:0.75rem;color:#888;margin-top:8px;';
+    histLink.textContent = 'View in history';
+    histLink.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
+    });
+    container.appendChild(histLink);
   }
 
   // ── Onboarding wizard ────────────────────────────────────────────────
@@ -1097,8 +1173,9 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           notice.append(noticeText, diagBtn);
           const form = document.getElementById('intent-form');
-          if (form && form.parentNode) {
-            form.parentNode.insertBefore(notice, form.nextSibling);
+          const container = document.querySelector('.lock-container');
+          if (form && container && form.parentNode === container) {
+            container.insertBefore(notice, form.nextSibling);
           }
         }
 

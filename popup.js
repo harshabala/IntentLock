@@ -1,20 +1,24 @@
+// Load and apply theme override as early as possible
+chrome.storage.local.get(['theme'], (result) => {
+  const theme = result.theme || 'auto';
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.classList.remove('theme-light');
+    root.classList.add('theme-dark');
+  } else if (theme === 'light') {
+    root.classList.remove('theme-dark');
+    root.classList.add('theme-light');
+  } else {
+    root.classList.remove('theme-dark', 'theme-light');
+  }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   const content = document.getElementById('content');
 
-  function createHistoryEntry(session) {
-    const events = Array.isArray(session.events) ? session.events : [];
-    return {
-      id: session.id,
-      intent: session.intent,
-      startTime: session.startTime,
-      endTime: session.endTime,
-      timeBudget: session.timeBudget,
-      driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
-      totalEvents: events.length
-    };
-  }
 
-  chrome.storage.local.get(['activeSession'], (result) => {
+
+  chrome.storage.local.get(['activeSession', 'llmBackoffUntil'], (result) => {
     const session = result.activeSession;
 
     if (!session || !session.isActive) {
@@ -78,6 +82,17 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
     content.appendChild(btn);
+
+    const backoffUntil = result.llmBackoffUntil || 0;
+    const isBackedOff = backoffUntil > Date.now();
+    if (isBackedOff) {
+      const notice = document.createElement('p');
+      notice.className = 'no-session';
+      notice.style.cssText = 'font-size:0.7rem;color:#888;margin:4px 0 0;';
+      const minutesLeft = Math.ceil((backoffUntil - Date.now()) / 60000);
+      notice.textContent = `AI check paused (~${minutesLeft} min). Heuristics still active.`;
+      content.appendChild(notice);
+    }
 
     addFooterLinks(content);
   });
