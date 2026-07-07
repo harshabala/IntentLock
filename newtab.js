@@ -1,3 +1,18 @@
+// Load and apply theme override as early as possible
+chrome.storage.local.get(['theme'], (result) => {
+  const theme = result.theme || 'auto';
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.classList.remove('theme-light');
+    root.classList.add('theme-dark');
+  } else if (theme === 'light') {
+    root.classList.remove('theme-dark');
+    root.classList.add('theme-light');
+  } else {
+    root.classList.remove('theme-dark', 'theme-light');
+  }
+});
+
 import { generateIntentPlan } from './llm.js';
 import {
   PROVIDER_LIST,
@@ -163,7 +178,26 @@ document.addEventListener('DOMContentLoaded', () => {
           timerInterval = null;
         }
         document.querySelectorAll('.confirm-overlay').forEach(el => el.remove());
-        showNewSessionForm(document.querySelector('.lock-container'));
+        
+        const oldSession = changes.activeSession.oldValue;
+        if (oldSession && oldSession.isActive) {
+          chrome.storage.local.get(['sessionHistory'], (result) => {
+            const history = result.sessionHistory || [];
+            const lastSession = history.find(h => h.id === oldSession.id);
+            if (lastSession) {
+              const endedSession = {
+                ...oldSession,
+                isActive: false,
+                endTime: lastSession.endTime || Date.now()
+              };
+              showSummary(document.querySelector('.lock-container'), endedSession);
+            } else {
+              showNewSessionForm(document.querySelector('.lock-container'));
+            }
+          });
+        } else {
+          showNewSessionForm(document.querySelector('.lock-container'));
+        }
       }
     }
   });
@@ -1139,8 +1173,9 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           notice.append(noticeText, diagBtn);
           const form = document.getElementById('intent-form');
-          if (form && form.parentNode) {
-            form.parentNode.insertBefore(notice, form.nextSibling);
+          const container = document.querySelector('.lock-container');
+          if (form && container && form.parentNode === container) {
+            container.insertBefore(notice, form.nextSibling);
           }
         }
 

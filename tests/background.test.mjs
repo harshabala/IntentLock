@@ -14,6 +14,8 @@ let storageData = {
   overrideCooldowns: [['cooldown-site.com', 99999]]
 };
 
+let messageListener = null;
+
 globalThis.chrome = {
   idle: {
     setDetectionInterval: () => {},
@@ -23,7 +25,7 @@ globalThis.chrome = {
     onCommand: { addListener: () => {} }
   },
   runtime: {
-    onMessage: { addListener: () => {} },
+    onMessage: { addListener: (fn) => { messageListener = fn; } },
     getURL: (path) => `chrome-extension://mock/${path}`
   },
   alarms: {
@@ -150,4 +152,36 @@ test('createHistoryEntry includes overrides array with reflection text', () => {
   assert.equal(entry.overrides[0].url, 'https://reddit.com');
   assert.equal(entry.overrides[0].reflection, 'needed a break');
   assert.equal(entry.overrides[1].reflection, null);
+});
+
+test('SESSION_CLEARED message resets background in-memory variables and clears LLM backoff', async () => {
+  assert.ok(messageListener, 'messageListener should be registered');
+
+  const { setQuotaBackoff, isLlmBackedOff } = await import('../llm-backoff.js');
+  setQuotaBackoff({ retryAfterMs: 100000 });
+  assert.ok(isLlmBackedOff(), 'LLM should be backed off initially');
+
+  storageData.activeSession = { id: 'session-456', intent: 'code', isActive: true };
+  storageData.overrideCooldowns = [['some-site.com', 8888]];
+  await reloadConfig();
+
+  const stateBefore = getInMemoryState();
+  assert.equal(stateBefore.currentSession?.id, 'session-456');
+
+  storageData = {};
+
+  let response = null;
+  await new Promise((resolve) => {
+    messageListener({ type: 'SESSION_CLEARED' }, {}, (res) => {
+      response = res;
+      resolve();
+    });
+  });
+
+  assert.deepEqual(response, { status: 'ok' });
+
+  const stateAfter = getInMemoryState();
+  assert.equal(stateAfter.currentSession, null);
+  assert.equal(stateAfter.overrideCooldowns.size, 0);
+  assert.equal(isLlmBackedOff(), false, 'LLM backoff should be cleared');
 });

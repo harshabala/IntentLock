@@ -29,7 +29,6 @@ export function parseRetryAfterMs(bodyText = '', now = Date.now()) {
 
 export function setQuotaBackoff({ retryAfterMs = DEFAULT_QUOTA_BACKOFF_MS, now = Date.now() } = {}) {
   quotaBackoffUntil = Math.max(quotaBackoffUntil, now + retryAfterMs);
-  lastQuotaLogAt = lastQuotaLogAt || now;
   if (_backoffCallback) _backoffCallback(quotaBackoffUntil);
 }
 

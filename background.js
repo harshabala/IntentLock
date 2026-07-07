@@ -166,6 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ungroupTabs();
       currentSession = null;
       clearDriftCache();
+      clearLlmBackoff();
       overrideCooldowns.clear();
       chrome.storage.local.remove(['overrideCooldowns']);
       chrome.alarms.clear(timeBudgetAlarmName);

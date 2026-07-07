@@ -511,9 +511,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (allowInput) allowInput.value = '';
         apiKeyInput.value = '';
         trackingToggle.checked = true;
-        chrome.storage.local.set({ llmProviderConfig: getDefaultProviderConfig() });
+        chrome.storage.local.set({ llmProviderConfig: getDefaultProviderConfig() }, () => {
+          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
+        });
         showStatus(dataStatus, 'All data deleted.');
-        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
         document.querySelectorAll('.theme-btn').forEach((btn) => {
           btn.classList.toggle('active', btn.dataset.theme === 'auto');
         });
