@@ -1,0 +1,78 @@
+/* Heartbeat Pulse for .lock-container */
+@keyframes heartbeat-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 20px rgba(244, 63, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
+  }
+}
+
+.lock-container {
+  animation: heartbeat-pulse 2.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Backdrop Snap for overlay */
+@keyframes backdrop-snap {
+  0% {
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+  100% {
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+}
+
+body.intervention::before {
+  animation: backdrop-snap 0.25s ease-out forwards;
+}
+
+/* Staggered entrances for form elements */
+@keyframes slide-up-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stagger-1, .stagger-2, .stagger-3 {
+  opacity: 0;
+  animation: slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.stagger-1 {
+  animation-delay: 0.1s;
+}
+
+.stagger-2 {
+  animation-delay: 0.2s;
+}
+
+.stagger-3 {
+  animation-delay: 0.3s;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .lock-container {
+    animation: none;
+  }
+  body.intervention::before {
+    animation: none;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  .stagger-1, .stagger-2, .stagger-3 {
+    animation: none;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
