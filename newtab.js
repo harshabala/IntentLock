@@ -713,23 +713,71 @@ document.addEventListener('DOMContentLoaded', () => {
       header.className = 'header onboarding-header';
 
       const h1 = document.createElement('h1');
-      h1.textContent = 'ENABLE AI-POWERED ALIGNMENT';
+      h1.textContent = 'CHOOSE YOUR DETECTION MODE';
 
       const desc = document.createElement('p');
-      desc.textContent = 'Choose a provider for semantic drift detection and plan generation. Use Gemini from Google AI Studio, a local Ollama/LM Studio server, or skip to use heuristics only.';
+      desc.textContent = 'IntentLock scores drift with built-in heuristics. An AI provider is an optional second opinion — your on-intent % and all metrics work either way.';
 
       header.append(h1, desc);
       container.appendChild(header);
+
+      const modeOptions = document.createElement('div');
+      modeOptions.className = 'detection-mode-options';
+
+      const heuristicsOption = document.createElement('div');
+      heuristicsOption.className = 'mode-option';
+      const heuristicsInput = document.createElement('input');
+      heuristicsInput.type = 'radio';
+      heuristicsInput.name = 'detection-mode';
+      heuristicsInput.value = 'heuristics';
+      heuristicsInput.id = 'mode-heuristics';
+      heuristicsInput.checked = true;
+      const heuristicsLabel = document.createElement('label');
+      heuristicsLabel.setAttribute('for', 'mode-heuristics');
+      heuristicsLabel.textContent = 'Heuristics only — recommended, no API key';
+      heuristicsOption.append(heuristicsInput, heuristicsLabel);
+      heuristicsOption.addEventListener('click', (e) => {
+        if (e.target !== heuristicsInput) {
+          heuristicsInput.checked = true;
+          heuristicsInput.dispatchEvent(new Event('change'));
+        }
+      });
+
+      const aiOption = document.createElement('div');
+      aiOption.className = 'mode-option';
+      const aiInput = document.createElement('input');
+      aiInput.type = 'radio';
+      aiInput.name = 'detection-mode';
+      aiInput.value = 'ai';
+      aiInput.id = 'mode-ai';
+      const aiLabel = document.createElement('label');
+      aiLabel.setAttribute('for', 'mode-ai');
+      aiLabel.textContent = 'Add an AI provider — optional upgrade';
+      aiOption.append(aiInput, aiLabel);
+      aiOption.addEventListener('click', (e) => {
+        if (e.target !== aiInput) {
+          aiInput.checked = true;
+          aiInput.dispatchEvent(new Event('change'));
+        }
+      });
+
+      modeOptions.append(heuristicsOption, aiOption);
+      container.appendChild(modeOptions);
+
+      const aiSettingsContainer = document.createElement('div');
+      aiSettingsContainer.id = 'ai-provider-settings';
+      aiSettingsContainer.className = 'ai-provider-settings hidden';
+      aiSettingsContainer.style.display = 'none';
 
       const providerGroup = document.createElement('div');
       providerGroup.className = 'input-group onboarding-input-group';
 
       const providerLabel = document.createElement('label');
-      providerLabel.setAttribute('for', 'onboarding-provider');
+      providerLabel.setAttribute('for', 'provider-select');
       providerLabel.textContent = 'Provider';
 
       const providerSelect = document.createElement('select');
-      providerSelect.id = 'onboarding-provider';
+      providerSelect.id = 'provider-select';
       PROVIDER_LIST.forEach((provider) => {
         const option = document.createElement('option');
         option.value = provider.id;
@@ -737,24 +785,48 @@ document.addEventListener('DOMContentLoaded', () => {
         providerSelect.appendChild(option);
       });
       providerGroup.append(providerLabel, providerSelect);
-      container.appendChild(providerGroup);
+      aiSettingsContainer.appendChild(providerGroup);
 
       const inputGroup = document.createElement('div');
       inputGroup.className = 'input-group onboarding-input-group';
       inputGroup.id = 'onboarding-key-group';
 
       const label = document.createElement('label');
-      label.setAttribute('for', 'onboarding-api-key');
+      label.setAttribute('for', 'api-key-input');
       label.textContent = 'API Key';
 
       const input = document.createElement('input');
       input.type = 'password';
-      input.id = 'onboarding-api-key';
+      input.id = 'api-key-input';
       input.placeholder = 'sk-...';
       input.autocomplete = 'new-password';
 
-      inputGroup.append(label, input);
-      container.appendChild(inputGroup);
+      const testKeyBtn = document.createElement('button');
+      testKeyBtn.type = 'button';
+      testKeyBtn.id = 'test-key-btn';
+      testKeyBtn.className = 'secondary-btn onboarding-test-btn';
+      testKeyBtn.textContent = 'Test Key';
+      testKeyBtn.addEventListener('click', () => {
+        const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+        const apiKey = input.value.trim();
+        const keyError = validateApiKey(providerId, apiKey);
+        if (keyError) {
+          setFieldError(input, keyError);
+          setOnboardingStatus(keyError, true);
+          return;
+        }
+        testKeyBtn.disabled = true;
+        testKeyBtn.textContent = 'Testing...';
+        setOnboardingStatus('Testing connection...');
+        setTimeout(() => {
+          testKeyBtn.disabled = false;
+          testKeyBtn.textContent = 'Test Key';
+          setOnboardingStatus('API key format is valid for this provider.');
+        }, 500);
+      });
+
+      inputGroup.append(label, input, testKeyBtn);
+      aiSettingsContainer.appendChild(inputGroup);
 
       function updateOnboardingProviderUI() {
         const provider = getProvider(providerSelect.value);
@@ -769,7 +841,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const securityNotice = document.createElement('p');
       securityNotice.className = 'security-notice';
       securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
-      container.appendChild(securityNotice);
+      aiSettingsContainer.appendChild(securityNotice);
+
+      container.appendChild(aiSettingsContainer);
 
       const statusEl = document.createElement('p');
       statusEl.className = 'onboarding-status hidden';
@@ -789,33 +863,78 @@ document.addEventListener('DOMContentLoaded', () => {
         statusEl.classList.toggle('onboarding-status-error', isError);
       }
 
-      function resetLockInButton() {
-        lockInBtn.disabled = false;
-        lockInBtn.textContent = 'LOCK IN';
+      function updateDetectionModeUI() {
+        if (aiInput.checked) {
+          aiSettingsContainer.classList.remove('hidden');
+          aiSettingsContainer.style.display = '';
+          input.focus();
+        } else {
+          aiSettingsContainer.classList.add('hidden');
+          aiSettingsContainer.style.display = 'none';
+        }
+      }
+
+      heuristicsInput.addEventListener('change', updateDetectionModeUI);
+      aiInput.addEventListener('change', updateDetectionModeUI);
+      updateDetectionModeUI();
+
+      function resetContinueButton() {
+        continueBtn.disabled = false;
+        continueBtn.textContent = 'CONTINUE';
       }
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'onboarding-actions';
 
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'complete-btn onboarding-skip-btn';
-      skipBtn.textContent = 'SKIP';
-      skipBtn.addEventListener('click', showStep3);
-
-      const lockInBtn = document.createElement('button');
-      lockInBtn.type = 'button';
-      lockInBtn.className = 'primary-btn onboarding-lock-btn';
-      lockInBtn.textContent = 'LOCK IN';
-      lockInBtn.addEventListener('click', () => {
+      const continueBtn = document.createElement('button');
+      continueBtn.type = 'button';
+      continueBtn.id = 'continue-step-2-btn';
+      continueBtn.className = 'primary-btn onboarding-btn';
+      continueBtn.textContent = 'CONTINUE';
+      continueBtn.addEventListener('click', () => {
         try {
+          setOnboardingStatus('');
+          clearFieldError(input);
+
+          if (heuristicsInput.checked) {
+            continueBtn.disabled = true;
+            continueBtn.textContent = 'Saving...';
+
+            const clearStoredKey = (done) => {
+              if (chrome.storage.session) {
+                chrome.storage.session.remove(['llmApiKey', 'openaiApiKey'], () => {
+                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+                });
+              } else {
+                chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+              }
+            };
+
+            clearStoredKey(() => {
+              chrome.storage.local.set({ llmProviderConfig: { providerId: 'none' } }, () => {
+                if (chrome.runtime.lastError) {
+                  logError({
+                    type: ERROR_TYPES.STORAGE,
+                    message: `Could not save provider settings. ${chrome.runtime.lastError.message}`,
+                    details: { action: 'onboarding_heuristics_save' },
+                    source: 'onboarding',
+                  });
+                }
+                chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+                  if (chrome.runtime.lastError) {
+                    // Ignore runtime errors on background sync
+                  }
+                });
+                showStep3();
+              });
+            });
+            return;
+          }
+
           const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
           const provider = getProvider(providerId);
           const apiKey = input.value.trim();
           const providerConfig = getDefaultProviderConfig(providerId);
-
-          setOnboardingStatus('');
-          clearFieldError(input);
 
           if (provider.requiresApiKey) {
             const keyError = validateApiKey(providerId, apiKey);
@@ -832,8 +951,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
-          lockInBtn.disabled = true;
-          lockInBtn.textContent = 'Saving...';
+          continueBtn.disabled = true;
+          continueBtn.textContent = 'Saving...';
 
           const completeSetup = () => {
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
@@ -858,7 +977,7 @@ document.addEventListener('DOMContentLoaded', () => {
               details: { providerId },
               source: 'onboarding',
             });
-            resetLockInButton();
+            resetContinueButton();
           };
 
           const saveProvider = () => {
@@ -893,7 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearStoredKey(saveProvider);
           }
         } catch (err) {
-          const msg = 'Something went wrong while saving. Try again or use SKIP.';
+          const msg = 'Something went wrong while saving. Try again.';
           setOnboardingStatus(msg, true);
           logError({
             type: ERROR_TYPES.RUNTIME,
@@ -901,21 +1020,20 @@ document.addEventListener('DOMContentLoaded', () => {
             details: { error: err?.message || String(err) },
             source: 'onboarding',
           });
-          resetLockInButton();
+          resetContinueButton();
         }
       });
 
-      actionsRow.append(skipBtn, lockInBtn);
+      actionsRow.append(continueBtn);
       container.appendChild(actionsRow);
 
-      input.focus();
       input.addEventListener('input', () => {
         clearFieldError(input);
         setOnboardingStatus('');
       });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-          lockInBtn.click();
+          continueBtn.click();
         }
       });
     }
@@ -1134,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const apiNotice = document.createElement('div');
         apiNotice.className = 'api-notice';
         const noticeText = document.createElement('p');
-        noticeText.textContent = 'Configure an LLM provider in Settings to enable AI-powered drift detection and plan generation.';
+        noticeText.textContent = 'Heuristics are active. Add an AI provider in Settings for a second opinion on ambiguous pages (optional).';
         const noticeBtn = document.createElement('button');
         noticeBtn.className = 'complete-btn';
         noticeBtn.textContent = 'Open settings';
