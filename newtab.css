@@ -1,7 +1,5 @@
-/* ==========================================================================
    IntentLock Premium Design System
    Sleek glassmorphism, deep dark aesthetics, responsive layouts, & micro-interactions.
-   ========================================================================== */
 
 :root {
   /* Color Palette (Deep Indigo & Slate Dark Theme - Default) */
@@ -417,9 +415,7 @@ button:disabled {
   animation: fadeIn 0.2s ease-out;
 }
 
-/* ==========================================================================
    Active session state
-   ========================================================================== */
 
 .intent-active-label {
   color: var(--text-muted);
@@ -583,9 +579,7 @@ button:disabled {
   font-weight: 600;
 }
 
-/* ==========================================================================
    Intervention page overrides
-   ========================================================================== */
 
 body.intervention {
   background-color: var(--bg);
@@ -685,9 +679,7 @@ body.intervention .header::after {
   box-shadow: none;
 }
 
-/* ==========================================================================
    Options page overrides
-   ========================================================================== */
 
 body.options {
   height: auto;
@@ -927,9 +919,7 @@ body.options {
   color: #ffffff;
 }
 
-/* ==========================================================================
    Popup overrides
-   ========================================================================== */
 
 body.popup {
   width: 340px;
@@ -1003,9 +993,7 @@ body.popup .header::after {
   line-height: 1.6;
 }
 
-/* ==========================================================================
    Session timer
-   ========================================================================== */
 
 .session-timer {
   text-align: center;
@@ -1061,9 +1049,7 @@ body.popup .header::after {
   }
 }
 
-/* ==========================================================================
    Session summary stats
-   ========================================================================== */
 
 .summary-stats {
   background-color: var(--bg-elevated);
@@ -1097,9 +1083,7 @@ body.popup .header::after {
   font-family: var(--font-mono);
 }
 
-/* ==========================================================================
    Reflection text
-   ========================================================================== */
 
 .reflection-text {
   font-size: 0.85rem;
@@ -1174,9 +1158,7 @@ body.popup .header::after {
   transform: scale(1.05);
 }
 
-/* ==========================================================================
    History page
-   ========================================================================== */
 
 .history-card {
   cursor: default;
@@ -1218,9 +1200,7 @@ body.popup .header::after {
   font-weight: 700;
 }
 
-/* ==========================================================================
    Popup footer
-   ========================================================================== */
 
 .popup-footer {
   display: flex;
@@ -1269,9 +1249,7 @@ body.popup .header::after {
   display: inline-flex;
 }
 
-/* ==========================================================================
    Confirmation dialog
-   ========================================================================== */
 
 .confirm-overlay {
   position: fixed;
@@ -1335,9 +1313,7 @@ body.popup .header::after {
   flex: 1;
 }
 
-/* ==========================================================================
    Session stats overlay / grid
-   ========================================================================== */
 
 .session-stats {
   display: grid;
@@ -1375,9 +1351,7 @@ body.popup .header::after {
   font-weight: 600;
 }
 
-/* ==========================================================================
    Keyboard shortcuts modal
-   ========================================================================== */
 
 .shortcuts-modal {
   position: fixed;
@@ -1454,9 +1428,7 @@ body.popup .header::after {
   color: var(--text-secondary);
 }
 
-/* ==========================================================================
    Theme toggle
-   ========================================================================== */
 
 .theme-toggle {
   display: flex;
@@ -1501,9 +1473,7 @@ body.popup .header::after {
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 
-/* ==========================================================================
    History filters & Search
-   ========================================================================== */
 
 .history-controls {
   margin-bottom: 24px;
@@ -1574,9 +1544,7 @@ body.popup .header::after {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* ==========================================================================
    Animations
-   ========================================================================== */
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); filter: blur(4px); }
@@ -1621,9 +1589,7 @@ body.popup .header::after {
   }
 }
 
-/* ==========================================================================
    Onboarding Wizard
-   ========================================================================== */
 
 .onboarding-header h1 {
   font-size: 1.15rem;
@@ -1689,9 +1655,7 @@ body.popup .header::after {
   margin-bottom: 16px;
 }
 
-/* ==========================================================================
    Diagnostics Log styles
-   ========================================================================== */
 
 .diagnostics-actions {
   display: flex;
@@ -1777,4 +1741,83 @@ body.popup .header::after {
   color: var(--text-secondary);
   margin-top: 4px;
   margin-bottom: 8px;
+   Popup Weekly Glance
+
+.week-glance {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.week-glance h2,
+.week-glance h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.glance-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+
+.glance-row:last-of-type {
+  border-bottom: none;
+}
+
+.glance-label {
+  color: var(--text-secondary);
+}
+
+.glance-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+.export-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  margin-bottom: 12px;
+}
+
+#export-week-btn {
+  width: 100%;
+  margin-bottom: 0;
+  cursor: pointer;
+}
+
+.export-status {
+  font-size: 0.7rem;
+  color: var(--accent);
+  min-height: 14px;
+}
+
+.method-caveat {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 12px 0 6px;
+  text-align: center;
+}
+
+.privacy-copy {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 6px 0 0;
+  text-align: center;
+  font-style: italic;
 }
