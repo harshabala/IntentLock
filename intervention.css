@@ -1,13 +1,15 @@
 /* Heartbeat Pulse for .lock-container */
+/* Compose the base var(--shadow) in the 0%/100% frames so it is never
+   overwritten mid-cycle (fixes visible flicker on each animation loop). */
 @keyframes heartbeat-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.3);
+    box-shadow: var(--shadow), 0 0 0 0 rgba(244, 63, 94, 0.3);
   }
   50% {
-    box-shadow: 0 0 0 20px rgba(244, 63, 94, 0);
+    box-shadow: var(--shadow), 0 0 0 20px rgba(244, 63, 94, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
+    box-shadow: var(--shadow), 0 0 0 0 rgba(244, 63, 94, 0);
   }
 }
 
@@ -16,6 +18,9 @@
 }
 
 /* Backdrop Snap for overlay */
+/* Apply to body.intervention, not ::before — the pseudo-element is a
+   decorative scan-line texture (z-index 999); backdrop-filter there would
+   blur the texture itself, not the page content behind it. */
 @keyframes backdrop-snap {
   0% {
     backdrop-filter: blur(0px);
@@ -27,7 +32,7 @@
   }
 }
 
-body.intervention::before {
+body.intervention {
   animation: backdrop-snap 0.25s ease-out forwards;
 }
 
@@ -65,7 +70,7 @@ body.intervention::before {
   .lock-container {
     animation: none;
   }
-  body.intervention::before {
+  body.intervention {
     animation: none;
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
