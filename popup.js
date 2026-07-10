@@ -72,13 +72,10 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.textContent = 'End session';
     btn.addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION' }, () => {
-        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-        content.textContent = '';
-        const p = document.createElement('p');
-        p.className = 'no-session';
-        p.textContent = 'Session ended.';
-        content.appendChild(p);
-        addFooterLinks(content);
+        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+          chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+          window.close();
+        });
       });
     });
     content.appendChild(btn);

@@ -682,6 +682,31 @@ function isCategoryAligned(hostname, intentCategoryId) {
   return aligned.includes(siteCat.categoryId);
 }
 
+/**
+ * Same alignment rules as evaluatePolicyDrift, plus optional "mark related" hostnames (IL-3).
+ * relatedHostnames: bare hostnames the user marked as work-related during override.
+ */
+export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
+  const parsed = parseUrl(url);
+  if (!parsed) return false;
+  const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
+    ? policy
+    : buildDefaultPolicy('deep_work', 'balanced');
+  const terms = intentTerms(intent);
+  const keywordAligned = isKeywordAligned(url, terms);
+  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
+  if (keywordAligned || categoryAligned) return true;
+
+  const related = Array.isArray(relatedHostnames) ? relatedHostnames : [];
+  const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+  for (const raw of related) {
+    const r = String(raw || '').replace(/^www\./, '').toLowerCase();
+    if (!r) continue;
+    if (host === r || host.endsWith(`.${r}`)) return true;
+  }
+  return false;
+}
+
 const REASON_LABELS = {
   blocked_category:          'You visited a site your session has blocked.',
   extended_unrelated_dwell:  "You've spent a long time on an unrelated site.",
@@ -691,7 +716,14 @@ const REASON_LABELS = {
   low_confidence:            'Browsing pattern is drifting from your declared intent.',
 };
 
-export function evaluatePolicyDrift({ intent, url, events = [], policy, now = Date.now() }) {
+export function evaluatePolicyDrift({
+  intent,
+  url,
+  events = [],
+  policy,
+  now = Date.now(),
+  relatedHostnames = [],
+}) {
   const parsed = parseUrl(url);
   if (!parsed) {
     return { shouldIntervene: false, score: 0, reason: 'invalid_url', reasonLabel: '', signals: [] };
@@ -707,17 +739,23 @@ export function evaluatePolicyDrift({ intent, url, events = [], policy, now = Da
   const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
   const keywordAligned = isKeywordAligned(url, terms);
   const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
-  const isAligned = keywordAligned || categoryAligned;
+  const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)
+    && !keywordAligned && !categoryAligned;
+  const isAligned = keywordAligned || categoryAligned || relatedAligned;
 
   // Immediate block: domain is in a blocked category and not aligned with intent
   if (domainDecision === 'block' && !isAligned) {
     const siteCat = getSiteCategory(parsed.hostname);
     signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');
+    const intentCat = INTENT_CATEGORIES.find(c => c.id === safePolicy.intentCategoryId);
+    const reasonLabel = (siteCat && intentCat)
+      ? `This looks like ${siteCat.label} during ${intentCat.label} (heuristic).`
+      : REASON_LABELS.blocked_category;
     return {
       shouldIntervene: true,
       score: 0.95,
       reason: 'blocked_category',
-      reasonLabel: REASON_LABELS.blocked_category,
+      reasonLabel,
       signals,
     };
   }

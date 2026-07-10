@@ -28,6 +28,10 @@ import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
 } from './heuristic-policy.js';
+import {
+  ON_INTENT_METHOD_COPY,
+  PRIVACY_COPY,
+} from './session-metrics.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -157,13 +161,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let timerInterval = null;
 
-  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding'], (result) => {
+  const wantReport = new URLSearchParams(location.search).get('report') === 'last';
+
+  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory'], (result) => {
+    const container = document.querySelector('.lock-container');
     if (result.activeSession && result.activeSession.isActive) {
       showActiveState(result.activeSession);
-    } else if (!result.hasSeenOnboarding) {
-      showOnboardingWizard(document.querySelector('.lock-container'));
+      return;
+    }
+    if (wantReport) {
+      const history = result.sessionHistory || [];
+      const last = history.length > 0 ? history[history.length - 1] : null;
+      if (last) {
+        showSummary(container, last);
+        return;
+      }
+    }
+    if (!result.hasSeenOnboarding) {
+      showOnboardingWizard(container);
     } else {
-      showNewSessionForm(document.querySelector('.lock-container'));
+      showNewSessionForm(container);
     }
   });
 
@@ -493,34 +510,87 @@ document.addEventListener('DOMContentLoaded', () => {
     const header = document.createElement('div');
     header.className = 'header';
     const h1 = document.createElement('h1');
-    h1.textContent = 'Session complete';
+    h1.textContent = 'Session report';
     header.appendChild(h1);
     container.appendChild(header);
+
+    // Intent
+    const intentBox = document.createElement('div');
+    intentBox.className = 'intent-display';
+    const intentText = document.createElement('p');
+    intentText.className = 'intent-text';
+    intentText.textContent = session.intent || '—';
+    intentBox.appendChild(intentText);
+    container.appendChild(intentBox);
+
+    const events = Array.isArray(session.events) ? session.events : [];
+    const durationMin = Math.max(
+      0,
+      Math.round(((session.endTime || Date.now()) - (session.startTime || Date.now())) / 60000)
+    );
+    const ratio =
+      typeof session.onIntentRatio === 'number'
+        ? session.onIntentRatio
+        : null;
+    const activeMin = Math.round((session.activeMs || 0) / 60000);
+    const alignedMin = Math.round((session.alignedActiveMs || 0) / 60000);
+    const interventions =
+      typeof session.interventionCount === 'number'
+        ? session.interventionCount
+        : 0;
+    const overridesCount =
+      typeof session.overrideCount === 'number'
+        ? session.overrideCount
+        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+
+    // Hero on-intent %
+    const hero = document.createElement('div');
+    hero.className = 'summary-stats';
+    hero.style.textAlign = 'center';
+    const heroValue = document.createElement('div');
+    heroValue.className = 'stat-value';
+    heroValue.style.fontSize = '2.4rem';
+    heroValue.style.fontWeight = '600';
+    heroValue.textContent = ratio == null ? '—' : `${Math.round(ratio * 100)}%`;
+    const heroLabel = document.createElement('div');
+    heroLabel.className = 'stat-label';
+    heroLabel.textContent = 'On-intent';
+    const heroLine = document.createElement('p');
+    heroLine.className = 'field-hint';
+    heroLine.style.marginTop = '8px';
+    if (ratio == null) {
+      heroLine.textContent =
+        'Not enough activity data to score this session.';
+    } else {
+      heroLine.textContent = `You stayed on track ${alignedMin} of ${activeMin} minutes.`;
+    }
+    const method = document.createElement('p');
+    method.className = 'field-hint';
+    method.style.fontSize = '0.75rem';
+    method.style.opacity = '0.8';
+    method.textContent = ON_INTENT_METHOD_COPY;
+    hero.append(heroValue, heroLabel, heroLine, method);
+    container.appendChild(hero);
 
     // Stats
     const stats = document.createElement('div');
     stats.className = 'summary-stats';
 
-    const events = Array.isArray(session.events) ? session.events : [];
-    const duration = Math.round((session.endTime - session.startTime) / 60000);
-    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
-    const pageLoads = events.filter(e => e.actionType === 'PAGE_LOAD').length;
-
     const statItems = [
-      { label: 'Duration', value: `${duration} min` },
-      { label: 'Pages visited', value: String(pageLoads) },
-      { label: 'Drift overrides', value: String(drifts) },
+      { label: 'Duration', value: `${durationMin} min` },
+      { label: 'Interventions', value: String(interventions) },
+      { label: 'Overrides', value: String(overridesCount) },
     ];
 
     if (session.timeBudget) {
-      const diff = duration - session.timeBudget;
+      const diff = durationMin - session.timeBudget;
       statItems.push({
         label: 'Budget',
-        value: diff <= 0 ? `${Math.abs(diff)} min under` : `${diff} min over`
+        value: diff <= 0 ? `${Math.abs(diff)} min under` : `${diff} min over`,
       });
     }
 
-    statItems.forEach(item => {
+    statItems.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'stat-row';
       const label = document.createElement('span');
@@ -532,50 +602,48 @@ document.addEventListener('DOMContentLoaded', () => {
       row.append(label, value);
       stats.appendChild(row);
     });
-
     container.appendChild(stats);
 
-    // Top drifted domains
-    const domainCounts = {};
-    events.filter(e => e.actionType === 'OVERRIDE' && e.url).forEach(e => {
-      try {
-        const domain = new URL(e.url).hostname.replace(/^www\./, '').toLowerCase();
-        domainCounts[domain] = (domainCounts[domain] || 0) + 1;
-      } catch { /* skip invalid URLs */ }
-    });
-    const topDomains = Object.entries(domainCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-    if (topDomains.length > 0) {
-      const driftSection = document.createElement('div');
-      driftSection.className = 'plan-section';
-      const driftTitle = document.createElement('h3');
-      driftTitle.className = 'plan-heading';
-      driftTitle.textContent = 'Top drift sites';
-      driftSection.appendChild(driftTitle);
-      topDomains.forEach(([domain, count]) => {
+    // Top domains from metrics (prefer) or override fallback
+    const domains =
+      Array.isArray(session.topDomains) && session.topDomains.length > 0
+        ? session.topDomains
+        : null;
+    if (domains) {
+      const section = document.createElement('div');
+      section.className = 'plan-section';
+      const title = document.createElement('h3');
+      title.className = 'plan-heading';
+      title.textContent = 'Top domains';
+      section.appendChild(title);
+      domains.forEach((d) => {
         const row = document.createElement('div');
         row.className = 'stat-row';
-        const domainSpan = document.createElement('span');
-        domainSpan.className = 'stat-label';
-        domainSpan.textContent = domain;
-        const countSpan = document.createElement('span');
-        countSpan.className = 'stat-value';
-        countSpan.textContent = `${count} override${count !== 1 ? 's' : ''}`;
-        row.append(domainSpan, countSpan);
-        driftSection.appendChild(row);
+        const name = document.createElement('span');
+        name.className = 'stat-label';
+        name.textContent = d.hostname;
+        const val = document.createElement('span');
+        val.className = 'stat-value';
+        const mins = Math.max(1, Math.round((d.activeMs || 0) / 60000));
+        val.textContent = `${mins}m · ${d.aligned ? 'aligned' : 'drift'}`;
+        row.append(name, val);
+        section.appendChild(row);
       });
-      container.appendChild(driftSection);
+      container.appendChild(section);
     }
 
-    // Intent recall
-    const intentBox = document.createElement('div');
-    intentBox.className = 'intent-display';
-    const intentText = document.createElement('p');
-    intentText.className = 'intent-text';
-    intentText.textContent = session.intent;
-    intentBox.appendChild(intentText);
-    container.appendChild(intentBox);
+    const privacy = document.createElement('p');
+    privacy.className = 'field-hint';
+    privacy.style.marginTop = '12px';
+    privacy.textContent = PRIVACY_COPY;
+    container.appendChild(privacy);
+
+    // Mark report viewed → activation metric
+    if (session.id) {
+      chrome.runtime.sendMessage({ type: 'REPORT_VIEWED', sessionId: session.id }, () => {
+        void chrome.runtime.lastError;
+      });
+    }
 
     // Override reflections (if any)
     const overrides = events.filter(e => e.actionType === 'OVERRIDE' && e.reflection);
