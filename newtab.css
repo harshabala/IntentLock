@@ -15,8 +15,9 @@
   --border-hover: rgba(255, 255, 255, 0.16);
   --border-focus: #6366f1;
   --accent: #6366f1;
+  --accent-rgb: 99, 102, 241;
   --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7);
-  --accent-glow: rgba(99, 102, 241, 0.25);
+  --accent-glow: rgba(var(--accent-rgb), 0.25);
   --error: #f87171;
   --error-glow: rgba(248, 113, 113, 0.2);
   --success: #34d399;
@@ -44,8 +45,9 @@
     --border-hover: rgba(15, 23, 42, 0.16);
     --border-focus: #4f46e5;
     --accent: #4f46e5;
+    --accent-rgb: 79, 70, 229;
     --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
-    --accent-glow: rgba(79, 70, 229, 0.12);
+    --accent-glow: rgba(var(--accent-rgb), 0.12);
     --error: #ef4444;
     --error-glow: rgba(239, 68, 68, 0.15);
     --success: #10b981;
@@ -69,8 +71,9 @@
   --border-hover: rgba(255, 255, 255, 0.16);
   --border-focus: #6366f1;
   --accent: #6366f1;
+  --accent-rgb: 99, 102, 241;
   --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7);
-  --accent-glow: rgba(99, 102, 241, 0.25);
+  --accent-glow: rgba(var(--accent-rgb), 0.25);
   --error: #f87171;
   --error-glow: rgba(248, 113, 113, 0.2);
   --success: #34d399;
@@ -90,8 +93,9 @@
   --border-hover: rgba(15, 23, 42, 0.16);
   --border-focus: #4f46e5;
   --accent: #4f46e5;
+  --accent-rgb: 79, 70, 229;
   --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
-  --accent-glow: rgba(79, 70, 229, 0.12);
+  --accent-glow: rgba(var(--accent-rgb), 0.12);
   --error: #ef4444;
   --error-glow: rgba(239, 68, 68, 0.15);
   --success: #10b981;
@@ -361,7 +365,8 @@ input[type="text"]:focus {
   outline: none;
   border-color: transparent;
   box-shadow: none;
-  background: padding-box var(--bg-elevated), border-box conic-gradient(from var(--spin-angle), var(--accent), var(--bg-elevated) 20%, var(--accent) 50%, var(--bg-elevated) 80%, var(--accent));
+  background: linear-gradient(var(--bg-elevated), var(--bg-elevated)) padding-box, 
+              conic-gradient(from var(--spin-angle), var(--accent), var(--bg-elevated) 20%, var(--accent) 50%, var(--bg-elevated) 80%, var(--accent)) border-box;
   animation: intentSpin 3s linear infinite;
 }
 
@@ -404,9 +409,9 @@ button:active {
 }
 
 @keyframes subtlePulse {
-  0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
-  70% { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(var(--accent-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
 }
 
 #start-btn {
@@ -417,6 +422,15 @@ button:active {
 #start-btn:active {
   transform: scale(0.96) !important;
   animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #intent-input:focus, #start-btn, .glance-row {
+    animation: none !important;
+  }
+  .glance-row {
+    opacity: 1; /* Prevent invisible content */
+  }
 }
 
 button:focus-visible,
