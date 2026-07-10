@@ -1028,7 +1028,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── New session form (post-session) ─────────────────────────────────
 
-  function showNewSessionForm(container) {
+  function showNewSessionForm(container, session, policies) {
     if (timerInterval) clearInterval(timerInterval);
     container.textContent = '';
 
@@ -1058,6 +1058,54 @@ document.addEventListener('DOMContentLoaded', () => {
     intentInput.maxLength = 250;
     intentGroup.append(intentLabel, intentInput);
 
+    const presetGroup = document.createElement('div');
+    presetGroup.className = 'input-group';
+    const presetLabel = document.createElement('label');
+    presetLabel.setAttribute('for', 'intent-preset');
+    presetLabel.textContent = 'Preset';
+    const presetSelect = document.createElement('select');
+    presetSelect.id = 'intent-preset';
+    INTENT_CATEGORIES.forEach((cat) => {
+      const opt = document.createElement('option');
+      opt.value = cat.id;
+      opt.textContent = cat.label;
+      presetSelect.appendChild(opt);
+    });
+    presetGroup.append(presetLabel, presetSelect);
+
+    const strictnessGroup = document.createElement('div');
+    strictnessGroup.className = 'input-group';
+    const strictnessLabel = document.createElement('label');
+    strictnessLabel.setAttribute('for', 'session-strictness');
+    strictnessLabel.textContent = 'Strictness';
+    const strictnessSelect = document.createElement('select');
+    strictnessSelect.id = 'session-strictness';
+    ['relaxed', 'balanced', 'strict'].forEach((level) => {
+      const opt = document.createElement('option');
+      opt.value = level;
+      opt.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+      strictnessSelect.appendChild(opt);
+    });
+    strictnessGroup.append(strictnessLabel, strictnessSelect);
+
+    const initialPreset = policies?.heuristic?.intentCategoryId || policies?.intentCategoryId || 'job_search';
+    const initialStrictness = policies?.heuristic?.strictness || policies?.strictness || 'balanced';
+    presetSelect.value = initialPreset;
+    strictnessSelect.value = initialStrictness;
+
+    if (!policies) {
+      chrome.storage.local.get(['heuristicPolicy'], (res) => {
+        if (res.heuristicPolicy) {
+          if (presetSelect) presetSelect.value = res.heuristicPolicy.intentCategoryId || 'job_search';
+          if (strictnessSelect) strictnessSelect.value = res.heuristicPolicy.strictness || 'balanced';
+        }
+      });
+    }
+
+    const expectationHint = document.createElement('p');
+    expectationHint.className = 'field-hint';
+    expectationHint.textContent = 'We’ll show your on-intent % when you finish.';
+
     const timeGroup = document.createElement('div');
     timeGroup.className = 'input-group';
     const timeLabel = document.createElement('label');
@@ -1078,7 +1126,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    form.append(intentGroup, timeGroup, btn);
+    form.append(intentGroup, presetGroup, strictnessGroup, expectationHint, timeGroup, btn);
     container.appendChild(form);
 
     getLlmConfig().then((config) => {
@@ -1214,6 +1262,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
       startBtn.disabled = true;
       startBtn.textContent = 'Generating plan...';
+
+      const presetInput = document.getElementById('intent-preset');
+      const strictnessInput = document.getElementById('session-strictness');
+      if (presetInput && strictnessInput) {
+        const selectedPreset = presetInput.value;
+        const selectedStrictness = strictnessInput.value;
+        chrome.storage.local.get(['heuristicPolicy'], (res) => {
+          const existingPolicy = res.heuristicPolicy || null;
+          if (!existingPolicy || existingPolicy.intentCategoryId !== selectedPreset || existingPolicy.strictness !== selectedStrictness) {
+            const updatedPolicy = buildDefaultPolicy(selectedPreset, selectedStrictness);
+            if (existingPolicy && existingPolicy.customBlockDomains) {
+              updatedPolicy.customBlockDomains = existingPolicy.customBlockDomains;
+            }
+            if (existingPolicy && existingPolicy.customAllowDomains) {
+              updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
+            }
+            chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
+            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
+          }
+        });
+      }
 
       const sessionData = {
         id: crypto.randomUUID(),
