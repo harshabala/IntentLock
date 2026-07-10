@@ -121,9 +121,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const items = [
         dateStr,
-        `${duration} min`,
-        `${session.driftCount || 0} drift${(session.driftCount || 0) !== 1 ? 's' : ''}`
+        `${duration} min`
       ];
+      if (session.onIntentRatio != null) {
+        items.push(`${Math.round(session.onIntentRatio * 100)}% on-intent`);
+      }
+      items.push(`${session.driftCount || 0} drift${(session.driftCount || 0) !== 1 ? 's' : ''}`);
 
       if (session.timeBudget) {
         const diff = duration - session.timeBudget;
@@ -160,13 +163,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
           item.appendChild(quote);
 
-          if (o.url) {
+          if (o.hostname || o.url) {
             const urlNote = document.createElement('p');
             urlNote.className = 'reflection-url';
-            try {
-              urlNote.textContent = new URL(o.url).hostname.replace(/^www\./, '');
-            } catch {
-              urlNote.textContent = o.url;
+            if (o.hostname) {
+              urlNote.textContent = o.hostname.replace(/^www\./, '');
+            } else {
+              try {
+                urlNote.textContent = new URL(o.url).hostname.replace(/^www\./, '');
+              } catch {
+                urlNote.textContent = o.url;
+              }
             }
             item.appendChild(urlNote);
           }

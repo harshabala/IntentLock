@@ -4,7 +4,7 @@ Source: `~/Desktop/product-flow-metrics-task-list.md` · Branch: `feat/flow-metr
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| IL-1 | End-of-session report + on-intent metrics | **In progress** | `session-metrics.js`, dwell deltas, history fields, report UI, REPORT_VIEWED |
+| IL-1 | End-of-session report + on-intent metrics | Done | `session-metrics.js`, dwell deltas, history fields, report UI, REPORT_VIEWED |
 | IL-2 | Session form: preset + strictness + expectation copy | Pending | |
 | IL-3 | Teach overlay + mark related | Partial | `isUrlAligned` + relatedHostnames in policy; overlay UI pending |
 | IL-4 | Weekly glance in popup + export | Pending | Helpers in `session-metrics.js` |

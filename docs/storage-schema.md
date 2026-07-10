@@ -26,10 +26,20 @@ The currently running session. Absent when no session is active.
     dwellMs?: number,      // PAGE_DWELL only — active milliseconds on page
     reflection?: string,   // OVERRIDE only — user's written reflection
   }>,
+  metrics?: {
+    activeMs: number,
+    alignedActiveMs: number,
+    interventionCount: number,
+    overrideCount: number,
+    domains: { [hostname: string]: { activeMs: number, alignedMs: number } },
+  },
 }
 ```
 
+During an active session, `activeSession.metrics` accumulates real-time tracking data for the current session.
+
 ---
+
 
 ### `heuristicPolicy`
 
@@ -72,10 +82,32 @@ Array<{
   timeBudget: number | null,
   driftCount: number,    // number of OVERRIDE events
   totalEvents: number,
+  activeMs?: number,
+  alignedActiveMs?: number,
+  onIntentRatio?: number | null,    // 0.0 to 1.0, or null if tracking off / no activity
+  interventionCount?: number,
+  overrideCount?: number,
+  topDomains?: Array<{ hostname: string, activeMs: number, aligned: boolean }>,
+  reportViewed?: boolean,
+  overrides?: Array<{ timestamp: number, url?: string, hostname?: string, reflection?: string }>,
 }>
 ```
 
 Exportable as JSON via Settings → Export session history.
+Note: `overrides[].hostname` replaces `overrides[].url` per privacy rules (only hostname is stored).
+
+---
+
+### `activationState`
+
+Written when the user views the session report for a session lasting ≥ 10 minutes (`REPORT_VIEWED` message). Represents the single activation event (`ACTIVATION_EVENT`).
+
+```js
+{
+  activatedAt: number | null,   // Date.now() when first activated
+  sessionId: string | null,     // ID of the qualifying session
+}
+```
 
 ---
 
