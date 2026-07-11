@@ -149,9 +149,13 @@ test('createHistoryEntry includes overrides array with reflection text', () => {
   assert.equal(entry.driftCount, 2);
   assert.ok(Array.isArray(entry.overrides), 'overrides should be an array');
   assert.equal(entry.overrides.length, 2);
-  assert.equal(entry.overrides[0].url, 'https://reddit.com');
+  // Privacy: history stores hostname only (not full URL)
+  assert.equal(entry.overrides[0].hostname, 'reddit.com');
   assert.equal(entry.overrides[0].reflection, 'needed a break');
+  assert.equal(entry.overrides[1].hostname, 'twitter.com');
   assert.equal(entry.overrides[1].reflection, null);
+  assert.equal(entry.reportViewed, false);
+  assert.ok('onIntentRatio' in entry);
 });
 
 test('SESSION_CLEARED message resets background in-memory variables and clears LLM backoff', async () => {

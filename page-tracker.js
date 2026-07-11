@@ -37,6 +37,7 @@ export function createPageTracker({
 
   let activeMs = 0;
   let lastTick = now();
+  let lastReportedActiveMs = 0;
   let currentUrl = getLocation();
   let intervalId = null;
   let started = false;
@@ -60,11 +61,14 @@ export function createPageTracker({
 
   function report(actionType, extra = {}) {
     const data = snapshot();
+    const dwellDeltaMs = Math.max(0, data.dwellMs - lastReportedActiveMs);
+    lastReportedActiveMs = data.dwellMs;
     onReport({
       actionType,
       url: data.url,
       pageTitle: data.pageTitle,
       dwellMs: data.dwellMs,
+      dwellDeltaMs,
       ...extra,
     });
   }
@@ -72,6 +76,7 @@ export function createPageTracker({
   function resetForUrl(nextUrl) {
     activeMs = 0;
     lastTick = now();
+    lastReportedActiveMs = 0;
     currentUrl = nextUrl;
   }
 

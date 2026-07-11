@@ -28,6 +28,10 @@ import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
 } from './heuristic-policy.js';
+import {
+  ON_INTENT_METHOD_COPY,
+  PRIVACY_COPY,
+} from './session-metrics.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -157,13 +161,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let timerInterval = null;
 
-  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding'], (result) => {
+  const wantReport = new URLSearchParams(location.search).get('report') === 'last';
+
+  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory'], (result) => {
+    const container = document.querySelector('.lock-container');
     if (result.activeSession && result.activeSession.isActive) {
       showActiveState(result.activeSession);
-    } else if (!result.hasSeenOnboarding) {
-      showOnboardingWizard(document.querySelector('.lock-container'));
+      return;
+    }
+    if (wantReport) {
+      const history = result.sessionHistory || [];
+      const last = history.length > 0 ? history[history.length - 1] : null;
+      if (last) {
+        showSummary(container, last);
+        return;
+      }
+    }
+    if (!result.hasSeenOnboarding) {
+      showOnboardingWizard(container);
     } else {
-      showNewSessionForm(document.querySelector('.lock-container'));
+      showNewSessionForm(container);
     }
   });
 
@@ -493,34 +510,87 @@ document.addEventListener('DOMContentLoaded', () => {
     const header = document.createElement('div');
     header.className = 'header';
     const h1 = document.createElement('h1');
-    h1.textContent = 'Session complete';
+    h1.textContent = 'Session report';
     header.appendChild(h1);
     container.appendChild(header);
+
+    // Intent
+    const intentBox = document.createElement('div');
+    intentBox.className = 'intent-display';
+    const intentText = document.createElement('p');
+    intentText.className = 'intent-text';
+    intentText.textContent = session.intent || '—';
+    intentBox.appendChild(intentText);
+    container.appendChild(intentBox);
+
+    const events = Array.isArray(session.events) ? session.events : [];
+    const durationMin = Math.max(
+      0,
+      Math.round(((session.endTime || Date.now()) - (session.startTime || Date.now())) / 60000)
+    );
+    const ratio =
+      typeof session.onIntentRatio === 'number'
+        ? session.onIntentRatio
+        : null;
+    const activeMin = Math.round((session.activeMs || 0) / 60000);
+    const alignedMin = Math.round((session.alignedActiveMs || 0) / 60000);
+    const interventions =
+      typeof session.interventionCount === 'number'
+        ? session.interventionCount
+        : 0;
+    const overridesCount =
+      typeof session.overrideCount === 'number'
+        ? session.overrideCount
+        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+
+    // Hero on-intent %
+    const hero = document.createElement('div');
+    hero.className = 'summary-stats';
+    hero.style.textAlign = 'center';
+    const heroValue = document.createElement('div');
+    heroValue.className = 'stat-value';
+    heroValue.style.fontSize = '2.4rem';
+    heroValue.style.fontWeight = '600';
+    heroValue.textContent = ratio == null ? '—' : `${Math.round(ratio * 100)}%`;
+    const heroLabel = document.createElement('div');
+    heroLabel.className = 'stat-label';
+    heroLabel.textContent = 'On-intent';
+    const heroLine = document.createElement('p');
+    heroLine.className = 'field-hint';
+    heroLine.style.marginTop = '8px';
+    if (ratio == null) {
+      heroLine.textContent =
+        'Not enough activity data to score this session.';
+    } else {
+      heroLine.textContent = `You stayed on track ${alignedMin} of ${activeMin} minutes.`;
+    }
+    const method = document.createElement('p');
+    method.className = 'field-hint';
+    method.style.fontSize = '0.75rem';
+    method.style.opacity = '0.8';
+    method.textContent = ON_INTENT_METHOD_COPY;
+    hero.append(heroValue, heroLabel, heroLine, method);
+    container.appendChild(hero);
 
     // Stats
     const stats = document.createElement('div');
     stats.className = 'summary-stats';
 
-    const events = Array.isArray(session.events) ? session.events : [];
-    const duration = Math.round((session.endTime - session.startTime) / 60000);
-    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
-    const pageLoads = events.filter(e => e.actionType === 'PAGE_LOAD').length;
-
     const statItems = [
-      { label: 'Duration', value: `${duration} min` },
-      { label: 'Pages visited', value: String(pageLoads) },
-      { label: 'Drift overrides', value: String(drifts) },
+      { label: 'Duration', value: `${durationMin} min` },
+      { label: 'Interventions', value: String(interventions) },
+      { label: 'Overrides', value: String(overridesCount) },
     ];
 
     if (session.timeBudget) {
-      const diff = duration - session.timeBudget;
+      const diff = durationMin - session.timeBudget;
       statItems.push({
         label: 'Budget',
-        value: diff <= 0 ? `${Math.abs(diff)} min under` : `${diff} min over`
+        value: diff <= 0 ? `${Math.abs(diff)} min under` : `${diff} min over`,
       });
     }
 
-    statItems.forEach(item => {
+    statItems.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'stat-row';
       const label = document.createElement('span');
@@ -532,50 +602,48 @@ document.addEventListener('DOMContentLoaded', () => {
       row.append(label, value);
       stats.appendChild(row);
     });
-
     container.appendChild(stats);
 
-    // Top drifted domains
-    const domainCounts = {};
-    events.filter(e => e.actionType === 'OVERRIDE' && e.url).forEach(e => {
-      try {
-        const domain = new URL(e.url).hostname.replace(/^www\./, '').toLowerCase();
-        domainCounts[domain] = (domainCounts[domain] || 0) + 1;
-      } catch { /* skip invalid URLs */ }
-    });
-    const topDomains = Object.entries(domainCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-    if (topDomains.length > 0) {
-      const driftSection = document.createElement('div');
-      driftSection.className = 'plan-section';
-      const driftTitle = document.createElement('h3');
-      driftTitle.className = 'plan-heading';
-      driftTitle.textContent = 'Top drift sites';
-      driftSection.appendChild(driftTitle);
-      topDomains.forEach(([domain, count]) => {
+    // Top domains from metrics (prefer) or override fallback
+    const domains =
+      Array.isArray(session.topDomains) && session.topDomains.length > 0
+        ? session.topDomains
+        : null;
+    if (domains) {
+      const section = document.createElement('div');
+      section.className = 'plan-section';
+      const title = document.createElement('h3');
+      title.className = 'plan-heading';
+      title.textContent = 'Top domains';
+      section.appendChild(title);
+      domains.forEach((d) => {
         const row = document.createElement('div');
         row.className = 'stat-row';
-        const domainSpan = document.createElement('span');
-        domainSpan.className = 'stat-label';
-        domainSpan.textContent = domain;
-        const countSpan = document.createElement('span');
-        countSpan.className = 'stat-value';
-        countSpan.textContent = `${count} override${count !== 1 ? 's' : ''}`;
-        row.append(domainSpan, countSpan);
-        driftSection.appendChild(row);
+        const name = document.createElement('span');
+        name.className = 'stat-label';
+        name.textContent = d.hostname;
+        const val = document.createElement('span');
+        val.className = 'stat-value';
+        const mins = Math.max(1, Math.round((d.activeMs || 0) / 60000));
+        val.textContent = `${mins}m · ${d.aligned ? 'aligned' : 'drift'}`;
+        row.append(name, val);
+        section.appendChild(row);
       });
-      container.appendChild(driftSection);
+      container.appendChild(section);
     }
 
-    // Intent recall
-    const intentBox = document.createElement('div');
-    intentBox.className = 'intent-display';
-    const intentText = document.createElement('p');
-    intentText.className = 'intent-text';
-    intentText.textContent = session.intent;
-    intentBox.appendChild(intentText);
-    container.appendChild(intentBox);
+    const privacy = document.createElement('p');
+    privacy.className = 'field-hint';
+    privacy.style.marginTop = '12px';
+    privacy.textContent = PRIVACY_COPY;
+    container.appendChild(privacy);
+
+    // Mark report viewed → activation metric
+    if (session.id) {
+      chrome.runtime.sendMessage({ type: 'REPORT_VIEWED', sessionId: session.id }, () => {
+        void chrome.runtime.lastError;
+      });
+    }
 
     // Override reflections (if any)
     const overrides = events.filter(e => e.actionType === 'OVERRIDE' && e.reflection);
@@ -645,23 +713,71 @@ document.addEventListener('DOMContentLoaded', () => {
       header.className = 'header onboarding-header';
 
       const h1 = document.createElement('h1');
-      h1.textContent = 'ENABLE AI-POWERED ALIGNMENT';
+      h1.textContent = 'CHOOSE YOUR DETECTION MODE';
 
       const desc = document.createElement('p');
-      desc.textContent = 'Choose a provider for semantic drift detection and plan generation. Use Gemini from Google AI Studio, a local Ollama/LM Studio server, or skip to use heuristics only.';
+      desc.textContent = 'IntentLock scores drift with built-in heuristics. An AI provider is an optional second opinion — your on-intent % and all metrics work either way.';
 
       header.append(h1, desc);
       container.appendChild(header);
+
+      const modeOptions = document.createElement('div');
+      modeOptions.className = 'detection-mode-options';
+
+      const heuristicsOption = document.createElement('div');
+      heuristicsOption.className = 'mode-option';
+      const heuristicsInput = document.createElement('input');
+      heuristicsInput.type = 'radio';
+      heuristicsInput.name = 'detection-mode';
+      heuristicsInput.value = 'heuristics';
+      heuristicsInput.id = 'mode-heuristics';
+      heuristicsInput.checked = true;
+      const heuristicsLabel = document.createElement('label');
+      heuristicsLabel.setAttribute('for', 'mode-heuristics');
+      heuristicsLabel.textContent = 'Heuristics only — recommended, no API key';
+      heuristicsOption.append(heuristicsInput, heuristicsLabel);
+      heuristicsOption.addEventListener('click', (e) => {
+        if (e.target !== heuristicsInput) {
+          heuristicsInput.checked = true;
+          heuristicsInput.dispatchEvent(new Event('change'));
+        }
+      });
+
+      const aiOption = document.createElement('div');
+      aiOption.className = 'mode-option';
+      const aiInput = document.createElement('input');
+      aiInput.type = 'radio';
+      aiInput.name = 'detection-mode';
+      aiInput.value = 'ai';
+      aiInput.id = 'mode-ai';
+      const aiLabel = document.createElement('label');
+      aiLabel.setAttribute('for', 'mode-ai');
+      aiLabel.textContent = 'Add an AI provider — optional upgrade';
+      aiOption.append(aiInput, aiLabel);
+      aiOption.addEventListener('click', (e) => {
+        if (e.target !== aiInput) {
+          aiInput.checked = true;
+          aiInput.dispatchEvent(new Event('change'));
+        }
+      });
+
+      modeOptions.append(heuristicsOption, aiOption);
+      container.appendChild(modeOptions);
+
+      const aiSettingsContainer = document.createElement('div');
+      aiSettingsContainer.id = 'ai-provider-settings';
+      aiSettingsContainer.className = 'ai-provider-settings hidden';
+      aiSettingsContainer.style.display = 'none';
 
       const providerGroup = document.createElement('div');
       providerGroup.className = 'input-group onboarding-input-group';
 
       const providerLabel = document.createElement('label');
-      providerLabel.setAttribute('for', 'onboarding-provider');
+      providerLabel.setAttribute('for', 'provider-select');
       providerLabel.textContent = 'Provider';
 
       const providerSelect = document.createElement('select');
-      providerSelect.id = 'onboarding-provider';
+      providerSelect.id = 'provider-select';
       PROVIDER_LIST.forEach((provider) => {
         const option = document.createElement('option');
         option.value = provider.id;
@@ -669,24 +785,48 @@ document.addEventListener('DOMContentLoaded', () => {
         providerSelect.appendChild(option);
       });
       providerGroup.append(providerLabel, providerSelect);
-      container.appendChild(providerGroup);
+      aiSettingsContainer.appendChild(providerGroup);
 
       const inputGroup = document.createElement('div');
       inputGroup.className = 'input-group onboarding-input-group';
       inputGroup.id = 'onboarding-key-group';
 
       const label = document.createElement('label');
-      label.setAttribute('for', 'onboarding-api-key');
+      label.setAttribute('for', 'api-key-input');
       label.textContent = 'API Key';
 
       const input = document.createElement('input');
       input.type = 'password';
-      input.id = 'onboarding-api-key';
+      input.id = 'api-key-input';
       input.placeholder = 'sk-...';
       input.autocomplete = 'new-password';
 
-      inputGroup.append(label, input);
-      container.appendChild(inputGroup);
+      const testKeyBtn = document.createElement('button');
+      testKeyBtn.type = 'button';
+      testKeyBtn.id = 'test-key-btn';
+      testKeyBtn.className = 'secondary-btn onboarding-test-btn';
+      testKeyBtn.textContent = 'Test Key';
+      testKeyBtn.addEventListener('click', () => {
+        const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+        const apiKey = input.value.trim();
+        const keyError = validateApiKey(providerId, apiKey);
+        if (keyError) {
+          setFieldError(input, keyError);
+          setOnboardingStatus(keyError, true);
+          return;
+        }
+        testKeyBtn.disabled = true;
+        testKeyBtn.textContent = 'Testing...';
+        setOnboardingStatus('Testing connection...');
+        setTimeout(() => {
+          testKeyBtn.disabled = false;
+          testKeyBtn.textContent = 'Test Key';
+          setOnboardingStatus('API key format is valid for this provider.');
+        }, 500);
+      });
+
+      inputGroup.append(label, input, testKeyBtn);
+      aiSettingsContainer.appendChild(inputGroup);
 
       function updateOnboardingProviderUI() {
         const provider = getProvider(providerSelect.value);
@@ -701,7 +841,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const securityNotice = document.createElement('p');
       securityNotice.className = 'security-notice';
       securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
-      container.appendChild(securityNotice);
+      aiSettingsContainer.appendChild(securityNotice);
+
+      container.appendChild(aiSettingsContainer);
 
       const statusEl = document.createElement('p');
       statusEl.className = 'onboarding-status hidden';
@@ -721,33 +863,78 @@ document.addEventListener('DOMContentLoaded', () => {
         statusEl.classList.toggle('onboarding-status-error', isError);
       }
 
-      function resetLockInButton() {
-        lockInBtn.disabled = false;
-        lockInBtn.textContent = 'LOCK IN';
+      function updateDetectionModeUI() {
+        if (aiInput.checked) {
+          aiSettingsContainer.classList.remove('hidden');
+          aiSettingsContainer.style.display = '';
+          input.focus();
+        } else {
+          aiSettingsContainer.classList.add('hidden');
+          aiSettingsContainer.style.display = 'none';
+        }
+      }
+
+      heuristicsInput.addEventListener('change', updateDetectionModeUI);
+      aiInput.addEventListener('change', updateDetectionModeUI);
+      updateDetectionModeUI();
+
+      function resetContinueButton() {
+        continueBtn.disabled = false;
+        continueBtn.textContent = 'CONTINUE';
       }
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'onboarding-actions';
 
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'complete-btn onboarding-skip-btn';
-      skipBtn.textContent = 'SKIP';
-      skipBtn.addEventListener('click', showStep3);
-
-      const lockInBtn = document.createElement('button');
-      lockInBtn.type = 'button';
-      lockInBtn.className = 'primary-btn onboarding-lock-btn';
-      lockInBtn.textContent = 'LOCK IN';
-      lockInBtn.addEventListener('click', () => {
+      const continueBtn = document.createElement('button');
+      continueBtn.type = 'button';
+      continueBtn.id = 'continue-step-2-btn';
+      continueBtn.className = 'primary-btn onboarding-btn';
+      continueBtn.textContent = 'CONTINUE';
+      continueBtn.addEventListener('click', () => {
         try {
+          setOnboardingStatus('');
+          clearFieldError(input);
+
+          if (heuristicsInput.checked) {
+            continueBtn.disabled = true;
+            continueBtn.textContent = 'Saving...';
+
+            const clearStoredKey = (done) => {
+              if (chrome.storage.session) {
+                chrome.storage.session.remove(['llmApiKey', 'openaiApiKey'], () => {
+                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+                });
+              } else {
+                chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+              }
+            };
+
+            clearStoredKey(() => {
+              chrome.storage.local.set({ llmProviderConfig: { providerId: 'none' } }, () => {
+                if (chrome.runtime.lastError) {
+                  logError({
+                    type: ERROR_TYPES.STORAGE,
+                    message: `Could not save provider settings. ${chrome.runtime.lastError.message}`,
+                    details: { action: 'onboarding_heuristics_save' },
+                    source: 'onboarding',
+                  });
+                }
+                chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+                  if (chrome.runtime.lastError) {
+                    // Ignore runtime errors on background sync
+                  }
+                });
+                showStep3();
+              });
+            });
+            return;
+          }
+
           const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
           const provider = getProvider(providerId);
           const apiKey = input.value.trim();
           const providerConfig = getDefaultProviderConfig(providerId);
-
-          setOnboardingStatus('');
-          clearFieldError(input);
 
           if (provider.requiresApiKey) {
             const keyError = validateApiKey(providerId, apiKey);
@@ -764,8 +951,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
-          lockInBtn.disabled = true;
-          lockInBtn.textContent = 'Saving...';
+          continueBtn.disabled = true;
+          continueBtn.textContent = 'Saving...';
 
           const completeSetup = () => {
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
@@ -790,7 +977,7 @@ document.addEventListener('DOMContentLoaded', () => {
               details: { providerId },
               source: 'onboarding',
             });
-            resetLockInButton();
+            resetContinueButton();
           };
 
           const saveProvider = () => {
@@ -825,7 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearStoredKey(saveProvider);
           }
         } catch (err) {
-          const msg = 'Something went wrong while saving. Try again or use SKIP.';
+          const msg = 'Something went wrong while saving. Try again.';
           setOnboardingStatus(msg, true);
           logError({
             type: ERROR_TYPES.RUNTIME,
@@ -833,21 +1020,20 @@ document.addEventListener('DOMContentLoaded', () => {
             details: { error: err?.message || String(err) },
             source: 'onboarding',
           });
-          resetLockInButton();
+          resetContinueButton();
         }
       });
 
-      actionsRow.append(skipBtn, lockInBtn);
+      actionsRow.append(continueBtn);
       container.appendChild(actionsRow);
 
-      input.focus();
       input.addEventListener('input', () => {
         clearFieldError(input);
         setOnboardingStatus('');
       });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-          lockInBtn.click();
+          continueBtn.click();
         }
       });
     }
@@ -960,7 +1146,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── New session form (post-session) ─────────────────────────────────
 
-  function showNewSessionForm(container) {
+  function showNewSessionForm(container, session, policies) {
     if (timerInterval) clearInterval(timerInterval);
     container.textContent = '';
 
@@ -990,6 +1176,54 @@ document.addEventListener('DOMContentLoaded', () => {
     intentInput.maxLength = 250;
     intentGroup.append(intentLabel, intentInput);
 
+    const presetGroup = document.createElement('div');
+    presetGroup.className = 'input-group';
+    const presetLabel = document.createElement('label');
+    presetLabel.setAttribute('for', 'intent-preset');
+    presetLabel.textContent = 'Preset';
+    const presetSelect = document.createElement('select');
+    presetSelect.id = 'intent-preset';
+    INTENT_CATEGORIES.forEach((cat) => {
+      const opt = document.createElement('option');
+      opt.value = cat.id;
+      opt.textContent = cat.label;
+      presetSelect.appendChild(opt);
+    });
+    presetGroup.append(presetLabel, presetSelect);
+
+    const strictnessGroup = document.createElement('div');
+    strictnessGroup.className = 'input-group';
+    const strictnessLabel = document.createElement('label');
+    strictnessLabel.setAttribute('for', 'session-strictness');
+    strictnessLabel.textContent = 'Strictness';
+    const strictnessSelect = document.createElement('select');
+    strictnessSelect.id = 'session-strictness';
+    ['relaxed', 'balanced', 'strict'].forEach((level) => {
+      const opt = document.createElement('option');
+      opt.value = level;
+      opt.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+      strictnessSelect.appendChild(opt);
+    });
+    strictnessGroup.append(strictnessLabel, strictnessSelect);
+
+    const initialPreset = policies?.heuristic?.intentCategoryId || policies?.intentCategoryId || 'job_search';
+    const initialStrictness = policies?.heuristic?.strictness || policies?.strictness || 'balanced';
+    presetSelect.value = initialPreset;
+    strictnessSelect.value = initialStrictness;
+
+    if (!policies) {
+      chrome.storage.local.get(['heuristicPolicy'], (res) => {
+        if (res.heuristicPolicy) {
+          if (presetSelect) presetSelect.value = res.heuristicPolicy.intentCategoryId || 'job_search';
+          if (strictnessSelect) strictnessSelect.value = res.heuristicPolicy.strictness || 'balanced';
+        }
+      });
+    }
+
+    const expectationHint = document.createElement('p');
+    expectationHint.className = 'field-hint';
+    expectationHint.textContent = 'We’ll show your on-intent % when you finish.';
+
     const timeGroup = document.createElement('div');
     timeGroup.className = 'input-group';
     const timeLabel = document.createElement('label');
@@ -1010,7 +1244,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    form.append(intentGroup, timeGroup, btn);
+    form.append(intentGroup, presetGroup, strictnessGroup, expectationHint, timeGroup, btn);
     container.appendChild(form);
 
     getLlmConfig().then((config) => {
@@ -1018,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const apiNotice = document.createElement('div');
         apiNotice.className = 'api-notice';
         const noticeText = document.createElement('p');
-        noticeText.textContent = 'Configure an LLM provider in Settings to enable AI-powered drift detection and plan generation.';
+        noticeText.textContent = 'Heuristics are active. Add an AI provider in Settings for a second opinion on ambiguous pages (optional).';
         const noticeBtn = document.createElement('button');
         noticeBtn.className = 'complete-btn';
         noticeBtn.textContent = 'Open settings';
@@ -1146,6 +1380,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
       startBtn.disabled = true;
       startBtn.textContent = 'Generating plan...';
+
+      const presetInput = document.getElementById('intent-preset');
+      const strictnessInput = document.getElementById('session-strictness');
+      if (presetInput && strictnessInput) {
+        const selectedPreset = presetInput.value;
+        const selectedStrictness = strictnessInput.value;
+        chrome.storage.local.get(['heuristicPolicy'], (res) => {
+          const existingPolicy = res.heuristicPolicy || null;
+          if (!existingPolicy || existingPolicy.intentCategoryId !== selectedPreset || existingPolicy.strictness !== selectedStrictness) {
+            const updatedPolicy = buildDefaultPolicy(selectedPreset, selectedStrictness);
+            if (existingPolicy && existingPolicy.customBlockDomains) {
+              updatedPolicy.customBlockDomains = existingPolicy.customBlockDomains;
+            }
+            if (existingPolicy && existingPolicy.customAllowDomains) {
+              updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
+            }
+            chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
+            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
+          }
+        });
+      }
 
       const sessionData = {
         id: crypto.randomUUID(),

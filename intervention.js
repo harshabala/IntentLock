@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const currentIntent = document.getElementById('current-intent');
   const reflectionInput = document.getElementById('reflection-input');
   const returnBtn = document.getElementById('return-btn');
+  const overrideBtn = document.getElementById('override-btn');
   const reflectionForm = document.getElementById('reflection-form');
 
   chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
@@ -47,24 +48,20 @@ document.addEventListener('DOMContentLoaded', () => {
   reflectionForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const reflection = reflectionInput.value.trim();
+    const markRelated = document.getElementById('intentlock-mark-related').checked;
     if (!reflection) return;
 
     chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
       if (result.activeSession) {
         const originalUrl = result.interventionState ? result.interventionState.originalUrl : null;
-        result.activeSession.events = Array.isArray(result.activeSession.events) ? result.activeSession.events : [];
-        result.activeSession.events.push({
-          timestamp: Date.now(),
-          actionType: 'OVERRIDE',
-          url: originalUrl,
-          reflection: reflection
+        
+        chrome.runtime.sendMessage({ 
+          type: 'OVERLAY_OVERRIDE', 
+          payload: { reflection, url: originalUrl, markRelated } 
         });
 
-        chrome.storage.local.set({ activeSession: result.activeSession }, () => {
-          chrome.runtime.sendMessage({ type: 'OVERRIDE_INTERVENTION', sessionData: result.activeSession });
-
-          chrome.storage.local.remove(['interventionState'], () => {
-            if (originalUrl) {
+        chrome.storage.local.remove(['interventionState'], () => {
+          if (originalUrl) {
               window.location.href = originalUrl;
             } else {
               const container = document.querySelector('.lock-container');
@@ -85,7 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
               container.appendChild(hint);
             }
           });
-        });
       }
     });
   });

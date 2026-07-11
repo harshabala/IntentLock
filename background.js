@@ -1,11 +1,24 @@
 // background.js
 import { DRIFT_CONFIDENCE_THRESHOLD } from './drift.js';
-import { evaluatePolicyDrift, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
+import {
+  evaluatePolicyDrift,
+  buildDefaultPolicy,
+  migrateLegacyDistractionSites,
+  isUrlAligned,
+} from './heuristic-policy.js';
 import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { getEffectiveDistractionSites, DEFAULT_DISTRACTION_SITES } from './distraction-sites.js';
 import { clearLlmBackoff, getQuotaBackoffUntil, registerBackoffCallback, setQuotaBackoff } from './llm-backoff.js';
+import {
+  applyDwellDelta,
+  computeOnIntentRatio,
+  createSessionMetrics,
+  ensureMetrics,
+  qualifiesForActivation,
+  topDomains,
+} from './session-metrics.js';
 
 registerBackoffCallback((until) => {
   chrome.storage.local.set({ llmBackoffUntil: until });
@@ -17,18 +30,25 @@ let trackingEnabled = true;
 let customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
 let sessionTabGroupId = null;
 let heuristicPolicy = null;
+/** @type {Record<string, { count: number, lastMarkedAt: number }>} */
+let relatedDomainMarks = {};
 
 const OVERRIDE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const overrideCooldowns = new Map(); // domain -> cooldown expiry timestamp
 let configPromise = null;
 
+function relatedHostnamesList() {
+  return Object.keys(relatedDomainMarks || {});
+}
+
 function createHistoryEntry(session) {
   const events = Array.isArray(session.events) ? session.events : [];
+  const metrics = ensureMetrics(session);
   const overrides = events
     .filter(e => e.actionType === 'OVERRIDE')
     .map(e => ({
       timestamp: e.timestamp || 0,
-      url: e.url || null,
+      hostname: e.hostname || extractDomain(e.url) || null,
       reflection: e.reflection || null,
     }));
   return {
@@ -40,6 +60,13 @@ function createHistoryEntry(session) {
     driftCount: overrides.length,
     totalEvents: events.length,
     overrides,
+    activeMs: metrics.activeMs || 0,
+    alignedActiveMs: metrics.alignedActiveMs || 0,
+    onIntentRatio: computeOnIntentRatio(metrics),
+    interventionCount: metrics.interventionCount || 0,
+    overrideCount: metrics.overrideCount || overrides.length,
+    topDomains: topDomains(metrics, 5),
+    reportViewed: false,
   };
 }
 
@@ -75,6 +102,38 @@ function extractDomain(url) {
   }
 }
 
+function openSessionReportTab() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+}
+
+function handleReportViewed(sessionId, sendResponse) {
+  chrome.storage.local.get(['sessionHistory', 'activationState'], (result) => {
+    const history = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
+    let updated = false;
+    let activationState = result.activationState || { activatedAt: null, sessionId: null };
+
+    for (const entry of history) {
+      if (entry.id === sessionId) {
+        entry.reportViewed = true;
+        updated = true;
+        if (qualifiesForActivation(entry) && !activationState.activatedAt) {
+          activationState = { activatedAt: Date.now(), sessionId: entry.id };
+        }
+        break;
+      }
+    }
+
+    if (!updated) {
+      sendResponse?.({ status: 'ok', found: false });
+      return;
+    }
+
+    chrome.storage.local.set({ sessionHistory: history, activationState }, () => {
+      sendResponse?.({ status: 'ok', found: true, activationState });
+    });
+  });
+}
+
 // Centralized Session Ending Logic
 function endActiveSession(reflection = null, callback = null) {
   chrome.storage.local.get(['activeSession', 'sessionHistory'], (result) => {
@@ -82,6 +141,7 @@ function endActiveSession(reflection = null, callback = null) {
     if (session && session.isActive) {
       session.isActive = false;
       session.endTime = Date.now();
+      ensureMetrics(session);
       if (reflection) {
         session.events = Array.isArray(session.events) ? session.events : [];
         session.events.push({
@@ -89,11 +149,20 @@ function endActiveSession(reflection = null, callback = null) {
           actionType: 'OVERRIDE',
           reflection: reflection
         });
+        session.metrics.overrideCount = (session.metrics.overrideCount || 0) + 1;
       }
 
       const history = result.sessionHistory || [];
-      history.push(createHistoryEntry(session));
+      const entry = createHistoryEntry(session);
+      history.push(entry);
       if (history.length > 100) history.shift();
+
+      session.onIntentRatio = entry.onIntentRatio;
+      session.activeMs = entry.activeMs;
+      session.alignedActiveMs = entry.alignedActiveMs;
+      session.interventionCount = entry.interventionCount;
+      session.overrideCount = entry.overrideCount;
+      session.topDomains = entry.topDomains;
 
       chrome.storage.local.set({ sessionHistory: history }, () => {
         chrome.storage.local.remove(['activeSession', 'interventionState', 'overrideCooldowns'], () => {
@@ -119,6 +188,7 @@ chrome.commands.onCommand.addListener((command) => {
       if (session && session.isActive) {
         endActiveSession(null, () => {
           chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
+          openSessionReportTab();
         });
       } else {
         chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') });
@@ -133,7 +203,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handledMessages = [
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'END_ACTIVE_SESSION', 'LOG_ERROR',
-    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'OVERLAY_END_SESSION', 'TEST_INTERVENTION'
+    'CONTENT_EVENT', 'OVERLAY_OVERRIDE', 'OVERLAY_DISMISS', 'OVERLAY_END_SESSION',
+    'TEST_INTERVENTION', 'REPORT_VIEWED'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -177,6 +248,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       endActiveSession(message.reflection, (endedSession) => {
         sendResponse({ status: 'ok', session: endedSession });
       });
+    } else if (message.type === 'REPORT_VIEWED') {
+      handleReportViewed(message.sessionId, sendResponse);
     } else if (message.type === 'LOG_ERROR') {
       logError(message.payload || {}).then(() => {
         sendResponse({ status: 'ok' });
@@ -200,6 +273,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
           void chrome.runtime.lastError;
         });
+        openSessionReportTab();
         sendResponse({ status: 'ok', session: endedSession });
       });
       return true;
@@ -229,11 +303,13 @@ function loadConfig() {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
-      'overrideCooldowns', 'heuristicPolicy', 'llmBackoffUntil'
+      'overrideCooldowns', 'heuristicPolicy', 'llmBackoffUntil',
+      'relatedDomainMarks'
     ], (result) => {
       const data = result || {};
       if (data.activeSession && data.activeSession.isActive) {
         currentSession = data.activeSession;
+        ensureMetrics(currentSession);
 
         // Restore time budget alarm if session has a time budget
         if (currentSession.timeBudget) {
@@ -291,6 +367,11 @@ function loadConfig() {
       }
       if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
         setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
+      }
+      if (data.relatedDomainMarks && typeof data.relatedDomainMarks === 'object') {
+        relatedDomainMarks = data.relatedDomainMarks;
+      } else {
+        relatedDomainMarks = {};
       }
       resolve();
     });
@@ -366,12 +447,17 @@ migrateLlmStorage();
 // ── Session start ──────────────────────────────────────────────────────
 
 function handleSessionStart(session) {
+  ensureMetrics(session);
+  if (!session.metrics || session.metrics.activeMs == null) {
+    session.metrics = createSessionMetrics();
+  }
   currentSession = session;
   clearDriftCache();
   clearLlmBackoff();
   chrome.storage.local.remove(['llmBackoffUntil']);
   overrideCooldowns.clear(); // clear cooldowns on new session
   chrome.storage.local.remove(['overrideCooldowns']);
+  chrome.storage.local.set({ activeSession: session });
 
   chrome.alarms.clear(timeBudgetAlarmName);
 
@@ -519,7 +605,36 @@ function handleContentEvent(payload, tabId) {
   const extras = {};
   if (payload.pageTitle) extras.pageTitle = payload.pageTitle;
   if (typeof payload.dwellMs === 'number') extras.dwellMs = payload.dwellMs;
+  if (typeof payload.dwellDeltaMs === 'number') extras.dwellDeltaMs = payload.dwellDeltaMs;
   if (payload.previousUrl) extras.previousUrl = payload.previousUrl;
+
+  // Accumulate on-intent metrics from dwell deltas (not reconstructable from capped events)
+  if (
+    (payload.actionType === 'PAGE_DWELL' || payload.actionType === 'SPA_NAVIGATION') &&
+    typeof payload.dwellDeltaMs === 'number' &&
+    payload.dwellDeltaMs > 0
+  ) {
+    chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      if (result.trackingEnabled === false) return;
+      const session = result.activeSession;
+      if (!session?.isActive) return;
+      ensureMetrics(session);
+      const hostname = extractDomain(payload.url);
+      const aligned = isUrlAligned(
+        session.intent,
+        payload.url,
+        heuristicPolicy,
+        relatedHostnamesList()
+      );
+      session.metrics = applyDwellDelta(session.metrics, {
+        hostname,
+        deltaMs: payload.dwellDeltaMs,
+        aligned,
+      });
+      chrome.storage.local.set({ activeSession: session });
+      currentSession = session;
+    });
+  }
 
   logEvent(payload.actionType, payload.url, extras);
 
@@ -529,20 +644,43 @@ function handleContentEvent(payload, tabId) {
 }
 
 function handleOverlayOverride(payload, tabId) {
-  chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
+  chrome.storage.local.get(['activeSession', 'interventionState', 'relatedDomainMarks'], (result) => {
     const session = result.activeSession;
     if (!session || !session.isActive) return;
 
     const originalUrl = payload?.url || result.interventionState?.originalUrl || null;
+    ensureMetrics(session);
+    session.metrics.overrideCount = (session.metrics.overrideCount || 0) + 1;
+
     session.events = Array.isArray(session.events) ? session.events : [];
     session.events.push({
       timestamp: Date.now(),
       actionType: 'OVERRIDE',
       url: originalUrl,
+      hostname: extractDomain(originalUrl),
       reflection: payload?.reflection || '',
       pageTitle: payload?.pageTitle || null,
       source: 'overlay',
     });
+
+    if (payload?.markRelated) {
+      const host = extractDomain(originalUrl);
+      if (host) {
+        const marks = { ...(result.relatedDomainMarks || relatedDomainMarks || {}) };
+        const prev = marks[host] || { count: 0, lastMarkedAt: 0 };
+        marks[host] = { count: (prev.count || 0) + 1, lastMarkedAt: Date.now() };
+        // Cap at 200 hostnames
+        const keys = Object.keys(marks);
+        if (keys.length > 200) {
+          keys
+            .sort((a, b) => (marks[a].lastMarkedAt || 0) - (marks[b].lastMarkedAt || 0))
+            .slice(0, keys.length - 200)
+            .forEach((k) => delete marks[k]);
+        }
+        relatedDomainMarks = marks;
+        chrome.storage.local.set({ relatedDomainMarks: marks });
+      }
+    }
 
     chrome.storage.local.set({ activeSession: session }, () => {
       handleOverride(session);
@@ -617,6 +755,7 @@ function evaluateDrift(url, tabId) {
       events: session.events,
       policy: activePolicy,
       now: Date.now(),
+      relatedHostnames: relatedHostnamesList(),
     });
 
     if (policyDrift.shouldIntervene) {
@@ -669,6 +808,17 @@ function evaluateDrift(url, tabId) {
 // ── Intervention ───────────────────────────────────────────────────────
 
 function triggerIntervention(reason, tabId = null) {
+  // Increment intervention counter for override_rate metric
+  chrome.storage.local.get(['activeSession'], (result) => {
+    const session = result.activeSession;
+    if (session?.isActive) {
+      ensureMetrics(session);
+      session.metrics.interventionCount = (session.metrics.interventionCount || 0) + 1;
+      chrome.storage.local.set({ activeSession: session });
+      currentSession = session;
+    }
+  });
+
   const showTabReplacement = (targetTabId, originalUrl) => {
     chrome.storage.local.set({
       interventionState: { reason, timestamp: Date.now(), originalTabId: targetTabId, originalUrl }
