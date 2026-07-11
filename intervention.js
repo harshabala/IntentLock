@@ -20,11 +20,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const returnBtn = document.getElementById('return-btn');
   const overrideBtn = document.getElementById('override-btn');
   const reflectionForm = document.getElementById('reflection-form');
-  const inputGroup = document.querySelector('.input-group');
-
-  if (inputGroup) inputGroup.classList.add('stagger-1');
-  if (returnBtn) returnBtn.classList.add('stagger-2');
-  if (overrideBtn) overrideBtn.classList.add('stagger-3');
 
   chrome.storage.local.get(['activeSession', 'interventionState'], (result) => {
     if (result.activeSession && result.activeSession.isActive) {

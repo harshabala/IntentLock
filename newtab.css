@@ -19,6 +19,7 @@
   --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7);
   --accent-glow: rgba(var(--accent-rgb), 0.25);
   --error: #f87171;
+  --error-rgb: 248, 113, 113;
   --error-glow: rgba(248, 113, 113, 0.2);
   --success: #34d399;
   --radius: 12px;
@@ -49,6 +50,7 @@
     --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
     --accent-glow: rgba(var(--accent-rgb), 0.12);
     --error: #ef4444;
+    --error-rgb: 239, 68, 68;
     --error-glow: rgba(239, 68, 68, 0.15);
     --success: #10b981;
     --radius: 12px;
@@ -75,6 +77,7 @@
   --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7);
   --accent-glow: rgba(var(--accent-rgb), 0.25);
   --error: #f87171;
+  --error-rgb: 248, 113, 113;
   --error-glow: rgba(248, 113, 113, 0.2);
   --success: #34d399;
   --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5), 0 1px 0px rgba(255, 255, 255, 0.05) inset;
@@ -97,6 +100,7 @@
   --accent-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
   --accent-glow: rgba(var(--accent-rgb), 0.12);
   --error: #ef4444;
+  --error-rgb: 239, 68, 68;
   --error-glow: rgba(239, 68, 68, 0.15);
   --success: #10b981;
   --shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.1), 0 1px 0px rgba(255, 255, 255, 0.6) inset;
@@ -425,11 +429,12 @@ button:active {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #intent-input:focus, #start-btn, .glance-row {
+  #intent-input:focus, #start-btn, .glance-row, .lock-container, body.popup .header::after {
     animation: none !important;
   }
-  .glance-row {
-    opacity: 1; /* Prevent invisible content */
+  .glance-row, body.popup .header::after {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 
@@ -1942,4 +1947,14 @@ body.popup .header::after {
   color: var(--text-secondary);
   font-size: var(--font-size-xs);
   line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #intent-input:focus, #start-btn, .glance-row, .lock-container, body.popup .header::after {
+    animation: none !important;
+  }
+  .glance-row, body.popup .header::after {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
