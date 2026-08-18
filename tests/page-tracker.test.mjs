@@ -219,9 +219,12 @@ test('failed dwell persistence keeps the delta available for a retry', async () 
   await assert.rejects(tracker.flush(), /persistence failed/);
   await tracker.flush();
 
-  assert.equal(reports.length, 2);
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.notEqual(reports[1].reportId, reports[2].reportId);
   assert.equal(reports[0].dwellDeltaMs, 5_000);
   assert.equal(reports[1].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 0);
   tracker.stop();
 });
 
@@ -497,6 +500,66 @@ test('all queued periodic reports rebase after SPA navigation retry', async () =
   tracker.stop({ discard: true });
 });
 
+test('failed SPA navigations queue in order and preserve later dwell', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/page-one';
+  let now = 0;
+  const navigationAttempts = new Map();
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.actionType === 'SPA_NAVIGATION') {
+        const attempts = (navigationAttempts.get(payload.navigationUrl) || 0) + 1;
+        navigationAttempts.set(payload.navigationUrl, attempts);
+        return attempts === 1
+          ? Promise.reject(new Error('navigation persistence failed'))
+          : Promise.resolve({ response: { status: 'ok' }, error: null });
+      }
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  href = 'https://example.com/page-two';
+  pageTrackerRuntime.history.pushState({}, '', '/page-two');
+  now = 6_000;
+  href = 'https://example.com/page-three';
+  pageTrackerRuntime.history.pushState({}, '', '/page-three');
+
+  now = 8_000;
+  await assert.rejects(tracker.report('PAGE_DWELL'), /navigation persistence failed/);
+  now = 9_000;
+  await tracker.report('PAGE_DWELL');
+
+  const navigationReports = reports.filter((payload) => payload.actionType === 'SPA_NAVIGATION');
+  assert.deepEqual(
+    Object.fromEntries(navigationAttempts),
+    {
+      'https://example.com/page-two': 2,
+      'https://example.com/page-three': 2,
+    },
+  );
+  assert.deepEqual(
+    navigationReports.map((payload) => payload.navigationUrl),
+    [
+      'https://example.com/page-two',
+      'https://example.com/page-two',
+      'https://example.com/page-three',
+      'https://example.com/page-three',
+    ],
+  );
+  const laterDwell = reports.at(-1);
+  assert.equal(laterDwell.actionType, 'PAGE_DWELL');
+  assert.equal(laterDwell.url, 'https://example.com/page-three');
+  assert.equal(laterDwell.dwellDeltaMs, 1_000);
+  tracker.stop({ discard: true });
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];
@@ -530,6 +593,39 @@ test('overlapping reports serialize so each active interval is counted once', as
   tracker.stop();
 });
 
+test('normal dwell retries reuse the failed report receipt before later dwell', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let attempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('normal dwell write failed'))
+        : Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => 'https://example.com/normal-retry',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.report('PAGE_DWELL'), /normal dwell write failed/);
+  now = 6_000;
+  await tracker.report('PAGE_DWELL');
+
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.notEqual(reports[1].reportId, reports[2].reportId);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[1].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 1_000);
+  tracker.stop({ discard: true });
+});
+
 test('normal report write failures reject and leave the full interval for retry', async () => {
   installBrowserMocks();
   const reports = [];
@@ -557,9 +653,13 @@ test('normal report write failures reject and leave the full interval for retry'
   now = 6_000;
   await tracker.report('PAGE_DWELL');
 
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.notEqual(reports[1].reportId, reports[2].reportId);
   assert.equal(reports[0].dwellDeltaMs, 5_000);
-  assert.equal(reports[1].dwellDeltaMs, 6_000);
-  tracker.stop();
+  assert.equal(reports[1].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 1_000);
+  tracker.stop({ discard: true });
 });
 
 test('classic page tracker refuses a pre-existing global API property', async () => {

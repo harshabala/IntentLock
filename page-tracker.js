@@ -51,7 +51,9 @@
     let reportQueueEpoch = 0;
     let reportSequence = 0;
     let pendingFinalFlushJob = null;
-    let pendingNavigationJob = null;
+    let pendingNormalReportJob = null;
+    let pendingNavigationJobs = [];
+    let pendingNavigationRetryPromise = null;
     let queuedReportsCanRebase = true;
     const cleanups = [];
 
@@ -119,9 +121,13 @@
         dwellDeltaMs,
         ...job.extra,
       };
-      if (job.isFinalFlush) payload.reportId = job.reportId;
+      payload.reportId = job.reportId;
       const handleFailure = (error) => {
-        if (job.isFinalFlush) pendingFinalFlushJob = job;
+        if (job.isFinalFlush) {
+          pendingFinalFlushJob = job;
+        } else if (job.actionType === 'PAGE_DWELL') {
+          pendingNormalReportJob = job;
+        }
         throw error;
       };
       const result = onReport(payload);
@@ -132,6 +138,7 @@
           lastReportedActiveMs = Math.max(lastReportedActiveMs, job.data.dwellMs);
         }
         if (pendingFinalFlushJob === job) pendingFinalFlushJob = null;
+        if (pendingNormalReportJob === job) pendingNormalReportJob = null;
         return value;
       };
       const settleReport = (value) => {
@@ -153,22 +160,48 @@
       reportTail = Promise.resolve();
     }
 
+    function completeNavigation(pending) {
+      if (pendingNavigationJobs[0] !== pending) return false;
+      const projectedActiveMs = accumulateDwell({
+        activeMs,
+        lastTick,
+        isVisible: isActive(),
+        now: now(),
+      }).activeMs;
+      const carriedActiveMs = Math.max(0, projectedActiveMs - pending.job.data.dwellMs);
+      pendingNavigationJobs.shift();
+      resetForUrl(pending.nextUrl, carriedActiveMs);
+      return true;
+    }
+
     function retryPendingNavigation() {
-      const pending = pendingNavigationJob;
-      if (!pending) return Promise.resolve({ result: undefined, rebased: false });
-      return Promise.resolve(sendReport(pending.job)).then((result) => {
-        if (pendingNavigationJob !== pending) return { result, rebased: false };
-        const projectedActiveMs = accumulateDwell({
-          activeMs,
-          lastTick,
-          isVisible: isActive(),
-          now: now(),
-        }).activeMs;
-        const carriedActiveMs = Math.max(0, projectedActiveMs - pending.job.data.dwellMs);
-        pendingNavigationJob = null;
-        resetForUrl(pending.nextUrl, carriedActiveMs);
-        return { result, rebased: true };
+      if (pendingNavigationRetryPromise) return pendingNavigationRetryPromise;
+      let retryPromise;
+      retryPromise = (async () => {
+        let lastResult;
+        let rebased = false;
+        while (pendingNavigationJobs.length > 0) {
+          const pending = pendingNavigationJobs[0];
+          if (!pending.job) {
+            pending.job = createReportJob(
+              'SPA_NAVIGATION',
+              { previousUrl: currentUrl, navigationUrl: pending.nextUrl },
+              currentUrl,
+            );
+          }
+          const result = await sendReport(pending.job);
+          if (!completeNavigation(pending)) continue;
+          lastResult = result;
+          rebased = true;
+        }
+        return { result: lastResult, rebased };
+      })().finally(() => {
+        if (pendingNavigationRetryPromise === retryPromise) {
+          pendingNavigationRetryPromise = null;
+        }
       });
+      pendingNavigationRetryPromise = retryPromise;
+      return retryPromise;
     }
 
     function rebaseQueuedReport(job) {
@@ -182,15 +215,26 @@
     }
 
     function sendQueuedReport(job) {
-      if (job.isFinalFlush) return sendReport(job);
       if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
         pendingFinalFlushJob = null;
       }
       let prerequisite = null;
+      if (job.isFinalFlush) {
+        if (pendingNormalReportJob && pendingNormalReportJob !== job) {
+          prerequisite = Promise.resolve(sendReport(pendingNormalReportJob));
+        }
+        return prerequisite ? prerequisite.then(() => sendReport(job)) : sendReport(job);
+      }
+      if (pendingNormalReportJob && pendingNormalReportJob.reportGeneration !== pageGeneration) {
+        pendingNormalReportJob = null;
+      }
       if (pendingFinalFlushJob) {
         prerequisite = Promise.resolve(sendReport(pendingFinalFlushJob));
       }
-      if (pendingNavigationJob && pendingNavigationJob.job !== job) {
+      if (pendingNormalReportJob && pendingNormalReportJob !== job) {
+        prerequisite = (prerequisite || Promise.resolve()).then(() => sendReport(pendingNormalReportJob));
+      }
+      if (pendingNavigationJobs.length > 0 && pendingNavigationJobs[0].job !== job) {
         prerequisite = (prerequisite || Promise.resolve()).then(() => retryPendingNavigation())
           .then(({ result }) => result);
       }
@@ -268,7 +312,7 @@
           null,
           retryJob,
         );
-        const initialReport = retryJob || !pendingNavigationJob
+        const initialReport = retryJob || pendingNavigationJobs.length === 0
           ? sendFinal()
           : Promise.resolve(retryNavigation()).then(sendFinal);
         flushPromise = Promise.resolve(initialReport)
@@ -301,24 +345,28 @@
       lastTick = now();
       lastReportedActiveMs = 0;
       pageGeneration += 1;
+      pendingNormalReportJob = null;
       queuedReportsCanRebase = true;
       currentUrl = nextUrl;
     }
 
     function handleSpaNavigation(nextUrl) {
       if (!shouldReportSpaNavigation(currentUrl, nextUrl)) return;
+      if (pendingNavigationJobs.length > 0) {
+        pendingNavigationJobs.push({ job: null, nextUrl });
+        return;
+      }
       const job = createReportJob(
         'SPA_NAVIGATION',
         { previousUrl: currentUrl, navigationUrl: nextUrl },
         currentUrl,
       );
       const pending = { job, nextUrl };
-      pendingNavigationJob = pending;
+      pendingNavigationJobs.push(pending);
       const result = enqueueReportJob(job);
       const complete = () => {
-        if (pendingNavigationJob === pending) {
-          pendingNavigationJob = null;
-          resetForUrl(nextUrl);
+        if (completeNavigation(pending) && pendingNavigationJobs.length > 0) {
+          void retryPendingNavigation().catch(() => {});
         }
       };
       if (result && typeof result.then === 'function') {
@@ -430,7 +478,9 @@
         lastReportedActiveMs = 0;
         lastTick = now();
         pendingFinalFlushJob = null;
-        pendingNavigationJob = null;
+        pendingNormalReportJob = null;
+        pendingNavigationJobs = [];
+        pendingNavigationRetryPromise = null;
         reportQueueVersion += 1;
         reportQueuePending = false;
         reportTail = Promise.resolve();

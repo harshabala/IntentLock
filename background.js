@@ -1684,6 +1684,26 @@ function getFlushMetadata(payload) {
   };
 }
 
+function getNormalReportMetadata(payload) {
+  if (payload?.reportId === undefined) return null;
+  const context = getSessionContext(payload);
+  if (
+    !context ||
+    context.invalid ||
+    payload?.flushRequestId !== undefined ||
+    typeof payload.reportId !== 'string' ||
+    payload.reportId.length === 0 ||
+    payload.reportId.length > 300
+  ) {
+    return { invalid: true };
+  }
+  return {
+    sessionId: context.sessionId,
+    generation: context.generation,
+    requestId: payload.reportId,
+  };
+}
+
 function flushEventResult(metadata, persisted, message = '') {
   return {
     flushAck: {
@@ -1699,9 +1719,11 @@ function flushEventResult(metadata, persisted, message = '') {
 function handleContentEvent(payload, tabId, expectedGeneration = getStorageGeneration()) {
   const sessionContext = getSessionContext(payload);
   const flushMetadata = getFlushMetadata(payload);
-  if (sessionContext?.invalid || flushMetadata?.invalid) {
+  const normalReportMetadata = getNormalReportMetadata(payload);
+  if (sessionContext?.invalid || flushMetadata?.invalid || normalReportMetadata?.invalid) {
     return Promise.resolve(flushEventResult(flushMetadata, false, 'Invalid final dwell metadata.'));
   }
+  const reportMetadata = flushMetadata || normalReportMetadata;
   if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') {
     return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
   }
@@ -1755,7 +1777,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     extras.generation = flushMetadata.generation;
     extras.flushRequestId = flushMetadata.requestId;
   }
-  const receiptKey = flushMetadata ? flushReceiptKey(flushMetadata, tabId) : null;
+  const receiptKey = reportMetadata ? flushReceiptKey(reportMetadata, tabId) : null;
 
   // Accumulate on-intent metrics from dwell deltas (not reconstructable from capped events)
   let metricWrite = Promise.resolve();

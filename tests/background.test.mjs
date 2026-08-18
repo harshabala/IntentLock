@@ -758,6 +758,75 @@ test('normal content-event write failures are not acknowledged as success', asyn
   assert.equal(storageData.activeSession.metrics, undefined);
 });
 
+test('normal dwell retries reuse a receipt after a one-sided metric write', async () => {
+  const url = 'https://docs.example.com/normal-dwell-receipt';
+  const sessionId = 'normal-dwell-receipt-session';
+  const generation = getStorageGeneration();
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession(sessionId, 'coding the new feature'),
+  };
+  await reloadConfig();
+  storageSetFailures = 1;
+
+  const payload = {
+    actionType: 'PAGE_DWELL',
+    url,
+    dwellMs: 5_000,
+    dwellDeltaMs: 5_000,
+    sessionId,
+    generation,
+    reportId: 'normal-dwell-report-1',
+  };
+  const first = await requestMessage({ type: 'CONTENT_EVENT', payload }, { tab: { id: 1 } });
+  storageSetFailures = 0;
+  const second = await requestMessage({ type: 'CONTENT_EVENT', payload }, { tab: { id: 1 } });
+
+  assert.equal(first.status, 'error');
+  assert.equal(second.status, 'ok');
+  assert.equal(storageData.activeSession.metrics.activeMs, 5_000);
+  assert.equal(
+    storageData.activeSession.events.filter((event) => event.actionType === 'PAGE_DWELL').length,
+    1,
+  );
+});
+
+test('normal SPA navigation retries reuse a receipt after a one-sided metric write', async () => {
+  const previousUrl = 'https://docs.example.com/normal-spa-old';
+  const navigationUrl = 'https://docs.example.com/normal-spa-new';
+  const sessionId = 'normal-spa-receipt-session';
+  const generation = getStorageGeneration();
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession(sessionId, 'coding the new feature'),
+  };
+  await reloadConfig();
+  storageSetFailures = 1;
+
+  const payload = {
+    actionType: 'SPA_NAVIGATION',
+    url: previousUrl,
+    previousUrl,
+    navigationUrl,
+    dwellMs: 5_000,
+    dwellDeltaMs: 5_000,
+    sessionId,
+    generation,
+    reportId: 'normal-spa-report-1',
+  };
+  const first = await requestMessage({ type: 'CONTENT_EVENT', payload }, { tab: { id: 1 } });
+  storageSetFailures = 0;
+  const second = await requestMessage({ type: 'CONTENT_EVENT', payload }, { tab: { id: 1 } });
+
+  assert.equal(first.status, 'error');
+  assert.equal(second.status, 'ok');
+  assert.equal(storageData.activeSession.metrics.activeMs, 5_000);
+  assert.equal(
+    storageData.activeSession.events.filter((event) => event.actionType === 'SPA_NAVIGATION').length,
+    1,
+  );
+});
+
 test('PAGE_DWELL does not call the configured provider for every snapshot', async () => {
   const url = 'https://dwell-provider-check.example/work';
   const previousFetch = globalThis.fetch;
