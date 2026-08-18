@@ -213,4 +213,8 @@ test('content tracking is recreated and stale reports are rejected at a session 
   );
   assert.equal(contentEvents.length, 0);
   assert.equal(runtimeMessageListeners.length, 1);
+
+  runtimeMessageListeners[0]({ type: 'DATA_DELETION_STARTED' });
+  assert.equal(trackers[1].stops.at(-1).discard, true);
+  assert.equal(trackers[1].stops.at(-1).reportFinal, false);
 });

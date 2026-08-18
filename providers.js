@@ -8,7 +8,13 @@ import {
   shouldLogQuotaError,
 } from './llm-backoff.js';
 import { redactSecrets } from './privacy-utils.js';
-import { isStorageDeletionActive } from './storage-queue.js';
+import {
+  getStorageGeneration,
+  isPersistedStorageWriteAllowed,
+  isStorageDeletionActive,
+  registerStorageDeletionStartHandler,
+  registerStorageDeletionWaiter,
+} from './storage-queue.js';
 
 export const DEFAULT_PROVIDER_ID = 'openai';
 
@@ -95,6 +101,19 @@ const MAX_PROMPT_LENGTH = 16_000;
 const PROVIDER_TIMEOUT_MS = 10_000;
 const inFlightRequests = new Map();
 const activeProviderControllers = new Set();
+const activeProviderWork = new Set();
+
+function dataDeletionError(providerId) {
+  const error = new Error('LLM calls are disabled while data deletion is in progress.');
+  error.code = 'data_deletion';
+  error.providerId = providerId;
+  return error;
+}
+
+registerStorageDeletionStartHandler(() => {
+  activeProviderControllers.forEach((controller) => controller.abort());
+});
+registerStorageDeletionWaiter(() => Promise.all(Array.from(activeProviderWork)));
 
 if (typeof chrome !== 'undefined') {
   chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
@@ -116,12 +135,10 @@ function trackingDisabledResult(providerId) {
 
 async function assertTrackingEnabled(providerId) {
   if (isStorageDeletionActive()) {
-    const error = new Error('LLM calls are disabled while data deletion is in progress.');
-    error.code = 'data_deletion';
-    error.providerId = providerId;
-    throw error;
+    throw dataDeletionError(providerId);
   }
   if (await trackingIsDisabled()) {
+    if (isStorageDeletionActive()) throw dataDeletionError(providerId);
     const error = new Error('LLM calls are disabled while tracking is off.');
     error.code = 'tracking_disabled';
     error.providerId = providerId;
@@ -130,16 +147,21 @@ async function assertTrackingEnabled(providerId) {
 }
 
 async function fetchWithTimeout(url, options, timeoutMs = PROVIDER_TIMEOUT_MS) {
+  if (!await isPersistedStorageWriteAllowed(getStorageGeneration())) {
+    throw dataDeletionError(options.providerId);
+  }
   const controller = options.controller
     || (typeof AbortController === 'function' ? new AbortController() : null);
   const requestOptions = { ...options };
   delete requestOptions.controller;
+  delete requestOptions.providerId;
   if (controller) activeProviderControllers.add(controller);
   const timer = setTimeout(() => controller?.abort(), timeoutMs);
   try {
     return await fetch(url, controller ? { ...requestOptions, signal: controller.signal } : requestOptions);
   } catch (error) {
     if (error?.name === 'AbortError') {
+      if (isStorageDeletionActive()) throw dataDeletionError(options.providerId);
       const timeoutError = new Error('Provider request timed out.');
       timeoutError.code = 'provider_timeout';
       throw timeoutError;
@@ -310,7 +332,7 @@ export async function getLlmConfig() {
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(['llmProviderConfig', 'llmApiKey', 'openaiApiKey'], (localRes) => {
+    chrome.storage.local.get(['llmProviderConfig'], (localRes) => {
       const stored = { ...getDefaultProviderConfig(), ...(localRes?.llmProviderConfig || {}) };
       const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
       const provider = getProvider(providerId);
@@ -336,13 +358,11 @@ export async function getLlmConfig() {
         chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionRes) => {
           const apiKey = sessionRes?.llmApiKey
             || sessionRes?.openaiApiKey
-            || localRes?.llmApiKey
-            || localRes?.openaiApiKey
             || null;
           finish(apiKey);
         });
       } else {
-        finish(localRes?.llmApiKey || localRes?.openaiApiKey || null);
+        finish(null);
       }
     });
   });
@@ -386,6 +406,7 @@ async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, 
     headers,
     body: JSON.stringify(body),
     controller,
+    providerId,
   });
 
   if (!response.ok) {
@@ -423,6 +444,7 @@ async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     controller,
+    providerId,
   });
 
   if (!response.ok) {
@@ -456,6 +478,7 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     controller,
+    providerId,
   });
 
   if (!response.ok) {
@@ -573,6 +596,9 @@ async function chatCompletionInternal(prompt, options = {}) {
     if (error?.code === 'tracking_disabled') {
       return trackingDisabledResult(error.providerId || config.providerId);
     }
+    if (error?.code === 'data_deletion') {
+      return { ok: false, error: { code: 'data_deletion', message: error.message, providerId: error.providerId || config.providerId } };
+    }
     const bodyText = error.bodyText || error.message || '';
     const apiError = error.apiError || classifyApiError(error.status || 0, bodyText, config.providerId);
 
@@ -617,6 +643,11 @@ export async function chatCompletion(prompt, options = {}) {
     maxTokens: Math.max(1, Math.min(Number.isFinite(options.maxTokens) ? options.maxTokens : 100, 500)),
   });
   inFlightRequests.set(key, request);
+  activeProviderWork.add(request);
+  request.then(
+    () => activeProviderWork.delete(request),
+    () => activeProviderWork.delete(request),
+  );
   try {
     return await request;
   } finally {

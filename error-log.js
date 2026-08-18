@@ -9,8 +9,10 @@ import {
 import {
   enqueueStorageMutation,
   getStorageGeneration,
+  isPersistedStorageWriteAllowed,
   isStorageDeletionActive,
 } from './storage-queue.js';
+import { endStorageDeletion } from './storage-queue.js';
 
 export const ERROR_TYPES = {
   API: 'api',
@@ -22,6 +24,14 @@ export const ERROR_TYPES = {
 };
 
 export const MAX_LOG_ENTRIES = MAX_ERROR_LOG_ENTRIES;
+
+if (typeof chrome !== 'undefined') {
+  chrome.runtime?.onMessage?.addListener?.((message) => {
+    if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
+      endStorageDeletion(message.generation);
+    }
+  });
+}
 
 export function classifyApiError(status, bodyText = '', providerId = 'unknown') {
   const body = typeof bodyText === 'string' ? bodyText : '';
@@ -50,31 +60,12 @@ export function classifyApiError(status, bodyText = '', providerId = 'unknown') 
     message = 'Could not reach the API. Check your network or local server (Ollama/LM Studio).';
   }
 
-  let providerMessage = null;
-  try {
-    const parsed = JSON.parse(body);
-    providerMessage = parsed?.error?.message
-      || parsed?.error?.message
-      || parsed?.message
-      || parsed?.[0]?.error?.message
-      || null;
-  } catch {
-    if (body.length > 0 && body.length < 500) {
-      providerMessage = body.trim();
-    }
-  }
-
-  if (providerMessage) {
-    providerMessage = redactSecrets(providerMessage);
-    message = `${message} Provider says: ${providerMessage}`;
-  }
-
   return {
     code,
     message,
     status: status || null,
     providerId,
-    providerMessage,
+    providerMessage: null,
   };
 }
 
@@ -82,7 +73,7 @@ export function formatErrorLogForExport(entries = []) {
   const recentEntries = pruneByRetention(
     Array.isArray(entries) ? entries : [],
     { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
-  ).map((entry) => redactSecrets(entry));
+  ).map(sanitizeDiagnosticEntry).filter(Boolean);
   const lines = [
     'IntentLock Diagnostic Log',
     `Exported: ${new Date().toISOString()}`,
@@ -105,9 +96,27 @@ export function formatErrorLogForExport(entries = []) {
   return lines.join('\n');
 }
 
+const PRIVATE_DIAGNOSTIC_KEY_RE = /^(body|bodyText|response|responseBody|prompt|url|uri|request|raw|content|text|providerMessage)$/i;
+
 function sanitizeDetails(details) {
-  if (!details || typeof details !== 'object') return {};
-  return redactSecrets(details);
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {};
+  const safe = {};
+  Object.entries(details).forEach(([key, value]) => {
+    if (PRIVATE_DIAGNOSTIC_KEY_RE.test(key)) return;
+    safe[key] = value && typeof value === 'object'
+      ? sanitizeDetails(value)
+      : value;
+  });
+  return redactSecrets(safe);
+}
+
+function sanitizeDiagnosticEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  return {
+    ...entry,
+    message: redactSecrets(entry.message || ''),
+    details: sanitizeDetails(entry.details),
+  };
 }
 
 export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }) {
@@ -115,14 +124,14 @@ export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, 
 
   const generation = getStorageGeneration();
 
-  const entry = {
+  const entry = sanitizeDiagnosticEntry({
     id: crypto.randomUUID(),
     timestamp: Date.now(),
     type,
     message: redactSecrets(message),
     details: sanitizeDetails(details),
     source,
-  };
+  });
 
   console.error(`[IntentLock:${type}] ${entry.message}`, entry.details || '');
 
@@ -132,15 +141,24 @@ export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, 
 
   return enqueueStorageMutation(() => {
     if (generation !== getStorageGeneration() || isStorageDeletionActive()) return null;
-    return new Promise((resolve) => {
-      chrome.storage.local.get(['errorLog'], (result) => {
-        const log = pruneByRetention(
-          Array.isArray(result?.errorLog) ? result.errorLog : [],
-          { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
-        );
-        log.unshift(entry);
-        if (log.length > MAX_LOG_ENTRIES) log.length = MAX_LOG_ENTRIES;
-        chrome.storage.local.set({ errorLog: log }, () => resolve(entry));
+    return isPersistedStorageWriteAllowed(generation).then((allowed) => {
+      if (!allowed) return null;
+      return new Promise((resolve) => {
+        chrome.storage.local.get(['errorLog'], (result) => {
+          const log = pruneByRetention(
+            Array.isArray(result?.errorLog) ? result.errorLog : [],
+            { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
+          );
+          log.unshift(entry);
+          if (log.length > MAX_LOG_ENTRIES) log.length = MAX_LOG_ENTRIES;
+          void isPersistedStorageWriteAllowed(generation).then((stillAllowed) => {
+            if (!stillAllowed) {
+              resolve(null);
+              return;
+            }
+            chrome.storage.local.set({ errorLog: log }, () => resolve(entry));
+          });
+        });
       });
     });
   });
@@ -153,14 +171,23 @@ export function getErrorLog() {
   const generation = getStorageGeneration();
   return enqueueStorageMutation(() => {
     if (generation !== getStorageGeneration() || isStorageDeletionActive()) return [];
-    return new Promise((resolve) => {
-    chrome.storage.local.get(['errorLog'], (result) => {
-      const log = pruneByRetention(
-        Array.isArray(result?.errorLog) ? result.errorLog : [],
-        { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
-      ).map((entry) => redactSecrets(entry));
-      chrome.storage.local.set({ errorLog: log }, () => resolve(log));
-    });
+    return isPersistedStorageWriteAllowed(generation).then((allowed) => {
+      if (!allowed) return [];
+      return new Promise((resolve) => {
+        chrome.storage.local.get(['errorLog'], (result) => {
+          const log = pruneByRetention(
+            Array.isArray(result?.errorLog) ? result.errorLog : [],
+            { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
+          ).map(sanitizeDiagnosticEntry).filter(Boolean);
+          void isPersistedStorageWriteAllowed(generation).then((stillAllowed) => {
+            if (!stillAllowed) {
+              resolve([]);
+              return;
+            }
+            chrome.storage.local.set({ errorLog: log }, () => resolve(log));
+          });
+        });
+      });
     });
   });
 }
@@ -172,8 +199,11 @@ export function clearErrorLog() {
   const generation = getStorageGeneration();
   return enqueueStorageMutation(() => {
     if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-    return new Promise((resolve) => {
-    chrome.storage.local.set({ errorLog: [] }, () => resolve());
+    return isPersistedStorageWriteAllowed(generation).then((allowed) => {
+      if (!allowed) return;
+      return new Promise((resolve) => {
+        chrome.storage.local.set({ errorLog: [] }, () => resolve());
+      });
     });
   });
 }

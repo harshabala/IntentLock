@@ -1,6 +1,7 @@
 // privacy-utils.js — bounded retention and redaction helpers
 
 export const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const ACTIVE_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const ERROR_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 export const MAX_SESSION_HISTORY = 100;
 export const MAX_ERROR_LOG_ENTRIES = 200;

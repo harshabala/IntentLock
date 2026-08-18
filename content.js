@@ -11,6 +11,7 @@ let lastFlushRequestId = null;
 let lastFlushPromise = null;
 let trackerSessionKey = null;
 let trackerToken = null;
+let dataDeletionInProgress = false;
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -195,14 +196,14 @@ function getTrackerSessionKey(session) {
 function startTracking(session) {
   const nextSessionKey = getTrackerSessionKey(session);
   if (trackingActive && trackerSessionKey === nextSessionKey) return;
-  if (pageTracker) stopTracking({ discard: true });
+  if (pageTracker) stopTracking({ discard: true, reportFinal: false });
   trackerSessionKey = nextSessionKey;
   trackerToken = { sessionId: session.id, generation: session.generation };
   trackingActive = true;
   ensureTracker(trackerToken).start();
 }
 
-function stopTracking({ discard = false } = {}) {
+function stopTracking({ discard = false, reportFinal = true } = {}) {
   if (!trackingActive && !pageTracker) return;
   const tracker = pageTracker;
   trackingActive = false;
@@ -213,7 +214,7 @@ function stopTracking({ discard = false } = {}) {
     lastFlushRequestId = null;
     lastFlushPromise = null;
   }
-  if (tracker) tracker.stop(discard ? { discard: true } : undefined);
+  if (tracker) tracker.stop(discard ? { discard: true, reportFinal: false } : { reportFinal });
   if (!discard) {
     pageTracker = null;
     trackerSessionKey = null;
@@ -224,11 +225,15 @@ function stopTracking({ discard = false } = {}) {
 }
 
 function syncSessionState() {
+  if (dataDeletionInProgress) {
+    stopTracking({ discard: true, reportFinal: false });
+    return;
+  }
   chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
     if (result.activeSession?.isActive && result.trackingEnabled !== false) {
       startTracking(result.activeSession);
     } else {
-      stopTracking({ discard: true });
+      stopTracking({ discard: true, reportFinal: false });
     }
 
     if (result.trackingEnabled === false) {
@@ -252,8 +257,9 @@ function syncSessionState() {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
+  if (dataDeletionInProgress) return;
   if (changes.trackingEnabled && changes.trackingEnabled.newValue === false) {
-    stopTracking({ discard: true });
+    stopTracking({ discard: true, reportFinal: false });
     if (overlay) overlay.hide();
     pendingIntervention = null;
     return;
@@ -264,6 +270,24 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'DATA_DELETION_STARTED') {
+    dataDeletionInProgress = true;
+    stopTracking({ discard: true, reportFinal: false });
+    if (overlay) overlay.hide();
+    pendingIntervention = null;
+    sendResponse?.({ status: 'ok' });
+    return true;
+  }
+
+  if (message.type === 'DATA_DELETED' || message.type === 'DATA_DELETION_FAILED') {
+    dataDeletionInProgress = false;
+    stopTracking({ discard: true, reportFinal: false });
+    if (message.type === 'DATA_DELETED' && overlay) overlay.hide();
+    pendingIntervention = null;
+    sendResponse?.({ status: 'ok' });
+    return true;
+  }
+
   if (message.type === 'SHOW_INTERVENTION') {
     chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
       if (result.trackingEnabled === false || !result.activeSession?.isActive) {

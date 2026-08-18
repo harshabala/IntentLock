@@ -15,11 +15,17 @@ import {
   normalizeCustomDomainRules,
 } from './heuristic-policy.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import {
+  beginStorageDeletion,
+  endStorageDeletion,
+  guardedStorageRemove,
+  guardedStorageSet,
+} from './storage-queue.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const providerSelect = document.getElementById('provider-select');
   const providerDescription = document.getElementById('provider-description');
+  const privacyNote = document.querySelector('.privacy-note');
   const customProviderFields = document.getElementById('custom-provider-fields');
   const customLabelInput = document.getElementById('custom-label');
   const apiStyleSelect = document.getElementById('api-style-select');
@@ -57,11 +63,16 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'DATA_DELETION_STARTED') {
       deletionInProgress = true;
-      beginStorageDeletion();
+      beginStorageDeletion(message.generation);
     }
-    if (message?.type === 'DATA_DELETED') {
+    if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
       deletionInProgress = false;
-      endStorageDeletion();
+      endStorageDeletion(message.generation);
+      if (message.type === 'DATA_DELETION_FAILED') {
+        deleteDataBtn.disabled = false;
+        deleteDataBtn.textContent = 'Delete all data';
+        showStatus(dataStatus, message.message || 'Could not delete all data.');
+      }
     }
   });
 
@@ -94,6 +105,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const provider = getProvider(providerId);
     const cloudProvider = isCloudProvider(providerId);
     providerDescription.textContent = provider.description;
+    if (privacyNote) {
+      privacyNote.textContent = provider.authType === 'query'
+        ? 'When AI is enabled, your verbatim declared intent and minimized origin-only browsing context are sent directly to your chosen provider. Query-auth authentication places the API key in the provider URL; data is not sent through IntentLock servers.'
+        : 'When AI is enabled, your verbatim declared intent and minimized origin-only browsing context are sent directly to your chosen provider. Data is not sent through IntentLock servers.';
+    }
     customProviderFields.classList.toggle('hidden', providerId !== 'custom');
 
     providerAdvancedDisclosure.classList.toggle('hidden', !cloudProvider);
@@ -126,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? 'Key saved — enter new key to replace'
       : provider.keyPlaceholder;
     apiKeyHint.textContent = needsKey
-      ? `${provider.keyHint}. Stored in session memory and cleared when the browser closes.`
+      ? `${provider.keyHint}. ${chrome.storage.session ? 'Stored in transient session memory and cleared when the browser closes.' : 'Session storage is unavailable; the key stays memory-only and must be entered again after reload.'}`
       : provider.keyHint;
   }
 
@@ -157,7 +173,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (chrome.storage.session) {
-      chrome.storage.session.remove(['llmApiKey'], finishProviderSwitch);
+      void guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
+        .then(finishProviderSwitch);
     } else {
       finishProviderSwitch();
     }
@@ -243,35 +260,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   chrome.storage.local.get([
-    'llmProviderConfig', 'llmApiKey', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
+    'llmProviderConfig', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
-    const localApiKey = localResult.llmApiKey || localResult.openaiApiKey || null;
     const processSettings = (sessionApiKey) => {
-      const migratedKey = sessionApiKey || localApiKey;
-
-      if (!sessionApiKey && localApiKey && chrome.storage.session) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (latestSession) => {
-          if (deletionInProgress) return;
-          const persistMigration = () => {
-            if (deletionInProgress) return;
-            chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], () => {
-              if (deletionInProgress) return;
-            showStatus(providerStatus, 'Legacy API key migrated to secure session storage.');
-            });
-          };
-          if (latestSession?.llmApiKey || latestSession?.openaiApiKey) {
-            persistMigration();
-            return;
-          }
-          chrome.storage.session.set({ llmApiKey: localApiKey }, persistMigration);
-        });
-      }
-
-      hasSavedApiKey = Boolean(migratedKey);
+      hasSavedApiKey = Boolean(sessionApiKey);
       applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
 
       if (!localResult.llmProviderConfig && !deletionInProgress) {
-        chrome.storage.local.set({
+        void guardedStorageSet({
           llmProviderConfig: getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
         });
       }
@@ -305,7 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
         processSettings(sessionResult.llmApiKey || sessionResult.openaiApiKey);
       });
     } else {
-      processSettings(localApiKey);
+      processSettings(null);
     }
   });
 
@@ -411,47 +407,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (deletionInProgress) return;
-    chrome.storage.local.set({ llmProviderConfig: config }, () => {
+    if (key && !chrome.storage.session) {
+      const msg = 'This browser does not provide session storage, so API keys are not stored. Re-enter the key after reload.';
+      setFieldError(apiKeyInput, msg, 'api-key-hint');
+      showStatus(providerStatus, msg);
+      return;
+    }
+    const finish = () => {
+      hasSavedApiKey = hasSavedApiKey || Boolean(key);
+      apiKeyInput.value = '';
+      updateProviderUI(config.providerId);
+      showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
+      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+    };
+    void guardedStorageSet({ llmProviderConfig: config }).then((savedConfig) => {
+      if (!savedConfig || deletionInProgress) return;
+      if (key) {
+        return guardedStorageSet({ llmApiKey: key }, chrome.storage.session).then((savedKey) => {
+          if (!savedKey || deletionInProgress) return;
+          finish();
+        });
+      }
+
+      finish();
+    }).catch((error) => {
       if (deletionInProgress) return;
-      if (chrome.runtime.lastError) {
+      {
         const msg = 'Could not save provider settings.';
         showStatus(providerStatus, `${msg} See Diagnostics below.`);
         logError({
           type: ERROR_TYPES.STORAGE,
           message: msg,
-          details: { error: chrome.runtime.lastError.message },
+          details: { error: error?.message },
           source: 'options',
         });
-        return;
-      }
-
-      const finish = () => {
-        hasSavedApiKey = hasSavedApiKey || Boolean(key);
-        apiKeyInput.value = '';
-        updateProviderUI(config.providerId);
-        showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
-        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-      };
-
-      if (key) {
-        const storageArea = chrome.storage.session || chrome.storage.local;
-        storageArea.set({ llmApiKey: key }, () => {
-          if (deletionInProgress) return;
-          if (chrome.runtime.lastError) {
-            const msg = 'Could not save API key to session storage.';
-            setFieldError(apiKeyInput, `${msg} See Diagnostics below.`, 'api-key-hint');
-            logError({
-              type: ERROR_TYPES.STORAGE,
-              message: msg,
-              details: { error: chrome.runtime.lastError.message, providerId: config.providerId },
-              source: 'options',
-            });
-            return;
-          }
-          finish();
-        });
-      } else {
-        finish();
       }
     });
   });
@@ -477,8 +466,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ? result.heuristicPolicy
         : buildDefaultPolicy('deep_work', 'balanced');
       const updated = { ...current, categoryPolicies, customBlockDomains, customAllowDomains, setupCompleted: true };
-      chrome.storage.local.set({ heuristicPolicy: updated }, () => {
-        if (deletionInProgress) return;
+      void guardedStorageSet({ heuristicPolicy: updated }).then((saved) => {
+        if (!saved || deletionInProgress) return;
         showStatus(sitesStatus, 'Site policies saved.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
       });
@@ -491,15 +480,13 @@ document.addEventListener('DOMContentLoaded', () => {
       trackingToggle.checked = !enabled;
       return;
     }
-    chrome.storage.local.set({ trackingEnabled: enabled }, () => {
-      if (deletionInProgress) return;
-      if (chrome.runtime.lastError) {
-        trackingToggle.checked = !enabled;
-        showStatus(dataStatus, `Could not change tracking: ${chrome.runtime.lastError.message}`);
-        return;
-      }
+    void guardedStorageSet({ trackingEnabled: enabled }).then((saved) => {
+      if (!saved || deletionInProgress) return;
       showStatus(dataStatus, enabled ? 'Tracking enabled.' : 'Tracking disabled.');
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+    }).catch((error) => {
+      trackingToggle.checked = !enabled;
+      showStatus(dataStatus, `Could not change tracking: ${error.message}`);
     });
   });
 
@@ -628,8 +615,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const theme = btn.dataset.theme;
       document.querySelectorAll('.theme-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      chrome.storage.local.set({ theme }, () => {
-        if (deletionInProgress) return;
+      void guardedStorageSet({ theme }).then((saved) => {
+        if (!saved || deletionInProgress) return;
         applyTheme(theme, true);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });

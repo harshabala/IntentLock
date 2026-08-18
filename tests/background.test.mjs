@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildDefaultPolicy } from '../heuristic-policy.js';
-import { beginStorageDeletion, endStorageDeletion, getStorageGeneration } from '../storage-queue.js';
+import { ACTIVE_SESSION_RETENTION_MS } from '../privacy-utils.js';
+import {
+  beginStorageDeletion,
+  endStorageDeletion,
+  getStorageGeneration,
+  isPersistedStorageWriteAllowed,
+} from '../storage-queue.js';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
@@ -348,6 +354,41 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
   assert.equal(isLlmBackedOff(), false, 'LLM backoff should be cleared');
 });
 
+test('delete-all leaves a persisted tombstone that rejects stale-context writes', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('tombstone-session') };
+  await reloadConfig();
+
+  const response = await requestMessage({ type: 'DELETE_ALL_DATA' });
+
+  assert.equal(response.status, 'ok');
+  assert.equal(storageData.deletionTombstone.active, false);
+  assert.equal(Number.isInteger(storageData.deletionTombstone.generation), true);
+  assert.equal(
+    await isPersistedStorageWriteAllowed(storageData.deletionTombstone.generation - 1),
+    false,
+  );
+  assert.equal(
+    await isPersistedStorageWriteAllowed(storageData.deletionTombstone.generation),
+    true,
+  );
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('expired active sessions are abandoned instead of retained indefinitely', async () => {
+  storageData = {
+    trackingEnabled: true,
+    activeSession: {
+      ...makeSession('expired-active-session'),
+      startTime: Date.now() - ACTIVE_SESSION_RETENTION_MS - 1,
+    },
+  };
+
+  await reloadConfig();
+
+  assert.equal(getInMemoryState().currentSession, null);
+  assert.equal(storageData.activeSession, undefined);
+});
+
 test('SESSION_STARTED rejects a session while tracking is disabled', async () => {
   storageData = { trackingEnabled: false };
   await reloadConfig();
@@ -593,18 +634,27 @@ test('HTTP and HTTPS content URLs are recorded as session events', async () => {
 
   await requestMessage({
     type: 'CONTENT_EVENT',
-    payload: { actionType: 'PAGE_LOAD', url: 'http://example.com/http' },
+    payload: {
+      actionType: 'PAGE_LOAD',
+      url: 'http://example.com/http/private?token=secret#fragment',
+      pageTitle: 'Private title',
+    },
   }, { tab: { id: 1 } });
   await requestMessage({
     type: 'CONTENT_EVENT',
-    payload: { actionType: 'PAGE_LOAD', url: 'https://example.com/https' },
+    payload: {
+      actionType: 'PAGE_LOAD',
+      url: 'https://example.com/https/private?query=secret#fragment',
+      pageTitle: 'Another private title',
+    },
   }, { tab: { id: 1 } });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.deepEqual(
     storageData.activeSession.events.map((event) => event.url),
-    ['http://example.com/http', 'https://example.com/https'],
+    ['http://example.com', 'https://example.com'],
   );
+  assert.equal(storageData.activeSession.events[0].pageTitle, undefined);
 });
 
 test('history overrides ignore unsupported URLs', () => {
@@ -679,7 +729,7 @@ test('session start drops unsupported event URLs before persistence', async () =
     assert.equal(response.status, 'ok');
     assert.deepEqual(
       storageData.activeSession.events.map((event) => event.url),
-      ['https://example.com/supported'],
+      ['https://example.com'],
       `unsupported URL should be dropped: ${unsupportedUrl}`,
     );
   }

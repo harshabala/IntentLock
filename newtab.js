@@ -33,18 +33,23 @@ import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
 } from './session-metrics.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import {
+  beginStorageDeletion,
+  endStorageDeletion,
+  guardedStorageRemove,
+  guardedStorageSet,
+} from './storage-queue.js';
 
 let dataDeletionInProgress = false;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED') {
     dataDeletionInProgress = true;
-    beginStorageDeletion();
+    beginStorageDeletion(message.generation);
   }
-  if (message?.type === 'DATA_DELETED') {
+  if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
     dataDeletionInProgress = false;
-    endStorageDeletion();
+    endStorageDeletion(message.generation);
   }
 });
 
@@ -905,7 +910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const securityNotice = document.createElement('p');
       securityNotice.className = 'security-notice';
-      securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
+      securityNotice.textContent = 'For security, your verbatim intent may be sent to the selected provider. Keys use secure session memory when available; if session storage is unavailable, the key remains memory-only and must be re-entered.';
       aiSettingsContainer.appendChild(securityNotice);
 
       container.appendChild(aiSettingsContainer);
@@ -971,30 +976,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const clearStoredKey = (done) => {
               if (dataDeletionInProgress) return;
-              if (chrome.storage.session) {
-                chrome.storage.session.remove(['llmApiKey', 'openaiApiKey'], () => {
-                  if (dataDeletionInProgress) return;
-                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
-                });
-              } else {
-                if (!dataDeletionInProgress) {
-                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
-                }
-              }
+              const clear = chrome.storage.session
+                ? guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
+                : Promise.resolve(true);
+              clear.then((cleared) => {
+                if (cleared && !dataDeletionInProgress) done();
+              });
             };
 
             clearStoredKey(() => {
               if (dataDeletionInProgress) return;
-              chrome.storage.local.set({ llmProviderConfig: { providerId: 'none' } }, () => {
-                if (dataDeletionInProgress || chrome.runtime.lastError) {
-                  if (dataDeletionInProgress) return;
-                  logError({
-                    type: ERROR_TYPES.STORAGE,
-                    message: `Could not save provider settings. ${chrome.runtime.lastError.message}`,
-                    details: { action: 'onboarding_heuristics_save' },
-                    source: 'onboarding',
-                  });
-                }
+              void guardedStorageSet({ llmProviderConfig: { providerId: 'none' } }).then((saved) => {
+                if (!saved || dataDeletionInProgress) return;
                 chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
                   if (chrome.runtime.lastError) {
                     // Ignore runtime errors on background sync
@@ -1060,12 +1053,8 @@ document.addEventListener('DOMContentLoaded', () => {
               failSetup('Data deletion is in progress. Please try again afterward.');
               return;
             }
-            chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
-              if (dataDeletionInProgress) return;
-              if (chrome.runtime.lastError) {
-                failSetup(`Could not save provider settings. ${chrome.runtime.lastError.message}`);
-                return;
-              }
+            void guardedStorageSet({ llmProviderConfig: providerConfig }).then((saved) => {
+              if (!saved || dataDeletionInProgress) return;
               completeSetup();
             });
           };
@@ -1075,27 +1064,21 @@ document.addEventListener('DOMContentLoaded', () => {
               failSetup('Data deletion is in progress. Please try again afterward.');
               return;
             }
-            const storageArea = chrome.storage.session || chrome.storage.local;
-            storageArea.set({ llmApiKey: apiKey }, () => {
-              if (dataDeletionInProgress) return;
-              if (chrome.runtime.lastError) {
-                failSetup(`Could not save API key. ${chrome.runtime.lastError.message}`);
-                return;
-              }
-              saveProvider();
+            if (!chrome.storage.session) {
+              failSetup('This browser does not provide session storage, so API keys remain memory-only and must be re-entered.');
+              return;
+            }
+            void guardedStorageSet({ llmApiKey: apiKey }, chrome.storage.session).then((saved) => {
+              if (saved && !dataDeletionInProgress) saveProvider();
             });
           } else {
             const clearStoredKey = (done) => {
-              if (chrome.storage.session) {
-                chrome.storage.session.remove(['llmApiKey'], () => {
-                  if (dataDeletionInProgress) return;
-                  chrome.storage.local.remove(['llmApiKey'], done);
-                });
-              } else {
-                if (!dataDeletionInProgress) {
-                  chrome.storage.local.remove(['llmApiKey'], done);
-                }
-              }
+              const clear = chrome.storage.session
+                ? guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
+                : Promise.resolve(true);
+              clear.then((cleared) => {
+                if (cleared && !dataDeletionInProgress) done();
+              });
             };
             clearStoredKey(saveProvider);
           }
@@ -1128,9 +1111,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function finishOnboarding() {
       if (dataDeletionInProgress) return;
-      chrome.storage.local.set({ hasSeenOnboarding: true }, () => {
-        if (dataDeletionInProgress) return;
-        if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
+      void guardedStorageSet({ hasSeenOnboarding: true }).then((saved) => {
+        if (!saved || dataDeletionInProgress) return;
         showNewSessionForm(container);
       });
     }
@@ -1216,8 +1198,8 @@ document.addEventListener('DOMContentLoaded', () => {
           saveBtn.textContent = 'SAVE POLICY';
           return;
         }
-        chrome.storage.local.set({ heuristicPolicy: policy }, () => {
-          if (dataDeletionInProgress) return;
+        void guardedStorageSet({ heuristicPolicy: policy }).then((saved) => {
+          if (!saved || dataDeletionInProgress) return;
           if (chrome.runtime.lastError) {
             statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
             statusEl.classList.remove('hidden');
@@ -1494,7 +1476,7 @@ document.addEventListener('DOMContentLoaded', () => {
               updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
             }
             if (!dataDeletionInProgress) {
-              chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
+              void guardedStorageSet({ heuristicPolicy: updatedPolicy });
             }
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
           }

@@ -175,6 +175,20 @@ test('delete-all-data flow does not recreate provider configuration', async () =
   assert.doesNotMatch(background, /if \(!localRes\?\.llmProviderConfig\)\s*\{[\s\S]*llmProviderConfig:/);
 });
 
+test('privacy boundary disclosures and key handling match runtime behavior', async () => {
+  const options = await text('options.js');
+  const providers = await text('providers.js');
+  const newtab = await text('newtab.js');
+  const html = await text('options.html');
+
+  assert.doesNotMatch(providers, /localRes\?\.llmApiKey|localRes\?\.openaiApiKey/);
+  assert.doesNotMatch(options, /chrome\.storage\.local\.set\(\{\s*llmApiKey/);
+  assert.doesNotMatch(newtab, /chrome\.storage\.local\.set\(\{\s*llmApiKey/);
+  assert.match(options, /verbatim declared intent/i);
+  assert.match(options, /query-auth/i);
+  assert.match(html, /downloaded exports|clipboard/i);
+});
+
 test('tracking-disabled paths guard content and background work', async () => {
   const content = await text('content.js');
   const background = await text('background.js');

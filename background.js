@@ -20,16 +20,20 @@ import {
   topDomains,
 } from './session-metrics.js';
 import {
+  ACTIVE_SESSION_RETENTION_MS,
   sanitizeSessionHistory,
+  sanitizeUrl,
   SESSION_RETENTION_MS,
   MAX_SESSION_HISTORY,
 } from './privacy-utils.js';
 import {
   beginStorageDeletion,
+  DELETION_TOMBSTONE_KEY,
   endStorageDeletion,
   enqueueStorageMutation,
   getStorageGeneration,
   isStorageDeletionActive,
+  waitForStorageDeletionWork,
 } from './storage-queue.js';
 
 registerBackoffCallback((until) => {
@@ -98,39 +102,29 @@ function storageRemove(keys) {
 }
 
 function storageClear() {
-  if (typeof chrome.storage.local.clear !== 'function') {
-    return storageRemove([
-      'activeSession',
-      'sessionHistory',
-      'trackingEnabled',
-      'customDistractionSites',
-      'sessionTabGroupId',
-      'isCurrentlyIdle',
-      'lastIdleTime',
-      'overrideCooldowns',
-      'interventionStates',
-      'interventionState',
-      'completedInterventionTransitions',
-      'errorLog',
-      'activationState',
-      'llmProviderConfig',
-      'llmApiKey',
-      'openaiApiKey',
-      'llmBackoffUntil',
-      'heuristicPolicy',
-      'relatedDomainMarks',
-      'theme',
-    ]);
-  }
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.clear(() => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
+  return storageRemove([
+    'activeSession',
+    'sessionHistory',
+    'trackingEnabled',
+    'customDistractionSites',
+    'sessionTabGroupId',
+    'isCurrentlyIdle',
+    'lastIdleTime',
+    'overrideCooldowns',
+    'interventionStates',
+    'interventionState',
+    'completedInterventionTransitions',
+    'errorLog',
+    'activationState',
+    'llmProviderConfig',
+    'llmApiKey',
+    'openaiApiKey',
+    'llmBackoffUntil',
+    'heuristicPolicy',
+    'relatedDomainMarks',
+    'theme',
+    'hasSeenOnboarding',
+  ]);
 }
 
 function storageSessionClear() {
@@ -183,7 +177,7 @@ function cloneInterventionStates(value) {
     state && typeof state === 'object'
       ? {
         ...state,
-        originalUrl: isTrackableUrl(state.originalUrl) ? state.originalUrl : null,
+        originalUrl: sanitizeUrl(state.originalUrl),
       }
       : state,
   ]));
@@ -405,7 +399,7 @@ async function persistInterventionStates(states) {
     state && typeof state === 'object'
       ? {
         ...state,
-        originalUrl: isTrackableUrl(state.originalUrl) ? state.originalUrl : null,
+        originalUrl: sanitizeUrl(state.originalUrl),
       }
       : state,
   ]));
@@ -484,20 +478,44 @@ function hasSupportedEventUrls(event) {
   ));
 }
 
+function isAbandonedActiveSession(session, now = Date.now()) {
+  return Boolean(
+    session?.isActive === true
+    && Number.isFinite(session.startTime)
+    && now - session.startTime > ACTIVE_SESSION_RETENTION_MS,
+  );
+}
+
 function sanitizeSessionEvents(session) {
   if (!session || typeof session !== 'object') return session;
+  if (isAbandonedActiveSession(session)) return null;
   const events = Array.isArray(session.events) ? session.events : [];
   return {
     ...session,
     events: events
       .filter(hasSupportedEventUrls)
-      .map((event) => ({ ...event })),
+      .map((event) => {
+        const sanitized = { ...event };
+        ['url', 'previousUrl', 'navigationUrl'].forEach((key) => {
+          if (sanitized[key] !== undefined) sanitized[key] = sanitizeUrl(sanitized[key]);
+        });
+        delete sanitized.pageTitle;
+        delete sanitized.title;
+        return sanitized;
+      }),
   };
 }
 
 function hasUnsupportedSessionEvents(session) {
   return Array.isArray(session?.events)
-    && session.events.some((event) => !hasSupportedEventUrls(event));
+    && session.events.some((event) => (
+      !hasSupportedEventUrls(event)
+      || event.pageTitle !== undefined
+      || event.title !== undefined
+      || ['url', 'previousUrl', 'navigationUrl'].some((key) => (
+        event[key] !== undefined && event[key] !== sanitizeUrl(event[key])
+      ))
+    ));
 }
 
 // Idle tracking
@@ -836,42 +854,69 @@ async function handleInterventionTransition(message, sender, expectedGeneration 
 function handleSessionCleared(sendResponse) {
   // Advance the generation before entering the queue so already-created
   // logging/finalization operations cannot write after this deletion.
-  beginStorageDeletion();
-  chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED' }, () => {
-    void chrome.runtime.lastError;
-  });
-  hideInterventionsFromTabs();
-  enqueueStorageMutation(async () => {
-    try {
-      await storageClear();
-      await storageSessionClear();
-      currentSession = null;
-      trackingEnabled = true;
-      customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
-      sessionTabGroupId = null;
-      heuristicPolicy = null;
-      isCurrentlyIdle = false;
-      lastIdleTime = 0;
-      relatedDomainMarks = {};
-      relatedDomainMarksSessionId = null;
-      overrideCooldowns.clear();
-      contentEventBuckets.clear();
-      clearDriftCache();
-      clearDriftDebounce();
-      clearLlmBackoff();
-      await clearTabGroupState();
-      chrome.alarms.clear(timeBudgetAlarmName);
-      configPromise = null;
-      endStorageDeletion();
-      await loadConfig();
-      chrome.runtime.sendMessage?.({ type: 'DATA_DELETED' }, () => {
-        void chrome.runtime.lastError;
-      });
-      sendResponse({ status: 'ok' });
-    } catch (error) {
-      endStorageDeletion();
-      sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
-    }
+  const generation = beginStorageDeletion();
+  const tombstone = { generation, active: true };
+  storageSet({ [DELETION_TOMBSTONE_KEY]: tombstone }).then(() => {
+    chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED', generation }, () => {
+      void chrome.runtime.lastError;
+    });
+    hideInterventionsFromTabs();
+    enqueueStorageMutation(async () => {
+      try {
+        await waitForStorageDeletionWork();
+        await storageClear();
+        await storageSessionClear();
+        currentSession = null;
+        trackingEnabled = true;
+        customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
+        sessionTabGroupId = null;
+        heuristicPolicy = null;
+        isCurrentlyIdle = false;
+        lastIdleTime = 0;
+        relatedDomainMarks = {};
+        relatedDomainMarksSessionId = null;
+        overrideCooldowns.clear();
+        contentEventBuckets.clear();
+        clearDriftCache();
+        clearDriftDebounce();
+        clearLlmBackoff();
+        await clearTabGroupState();
+        chrome.alarms.clear(timeBudgetAlarmName);
+        configPromise = null;
+        await storageSet({ [DELETION_TOMBSTONE_KEY]: { generation, active: false } });
+        endStorageDeletion(generation);
+        await loadConfig();
+        chrome.runtime.sendMessage?.({ type: 'DATA_DELETED', generation }, () => {
+          void chrome.runtime.lastError;
+        });
+        sendResponse({ status: 'ok' });
+      } catch (error) {
+        try {
+          await storageSet({ [DELETION_TOMBSTONE_KEY]: { generation, active: false, failed: true } });
+        } catch {
+          // Preserve the original deletion error for the caller.
+        }
+        endStorageDeletion(generation);
+        chrome.runtime.sendMessage?.({
+          type: 'DATA_DELETION_FAILED',
+          generation,
+          message: error.message || 'Unable to delete IntentLock data.',
+        }, () => {
+          void chrome.runtime.lastError;
+        });
+        sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
+      }
+    });
+  }, (error) => {
+    endStorageDeletion(generation);
+    chrome.runtime.sendMessage?.({
+      type: 'DATA_DELETION_FAILED',
+      generation,
+      message: error.message || 'Unable to delete IntentLock data.',
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+    sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
   });
 }
 
@@ -1123,20 +1168,23 @@ function loadConfig() {
       }
       if (data.activeSession && data.activeSession.isActive) {
         currentSession = sanitizeSessionEvents(data.activeSession);
-        ensureMetrics(currentSession);
-        if (hasUnsupportedSessionEvents(data.activeSession)) {
-          const sanitizedSession = {
-            ...data.activeSession,
-            events: currentSession.events,
-          };
+        if (!currentSession) {
           void enqueueStorageMutation(() => {
             if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-            return storageSet({ activeSession: sanitizedSession });
+            return storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState']);
+          });
+        } else {
+          ensureMetrics(currentSession);
+        }
+        if (currentSession && hasUnsupportedSessionEvents(data.activeSession)) {
+          void enqueueStorageMutation(() => {
+            if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+            return storageSet({ activeSession: currentSession });
           });
         }
 
         // Restore time budget alarm if session has a time budget
-        if (currentSession.timeBudget) {
+        if (currentSession?.timeBudget) {
           const elapsedMinutes = (Date.now() - currentSession.startTime) / 60000;
           const remainingMinutes = currentSession.timeBudget - elapsedMinutes;
           if (remainingMinutes > 0) {
@@ -1339,7 +1387,7 @@ function handleSessionStart(session, expectedGeneration = getStorageGeneration()
     if (latest.trackingEnabled === false) {
       throw new Error('Tracking is disabled.');
     }
-    if (latest.activeSession?.isActive) {
+    if (sanitizeSessionEvents(latest.activeSession)?.isActive) {
       throw new Error('An active session already exists.');
     }
     const nextSession = {
@@ -1382,7 +1430,7 @@ function updateSessionIntent(intent, expectedSessionId, expectedGeneration = get
       throw new Error('Intent must be between 1 and 250 characters.');
     }
     const latest = await storageGet(['activeSession', 'trackingEnabled']);
-    const session = latest.activeSession;
+    const session = sanitizeSessionEvents(latest.activeSession);
     if (latest.trackingEnabled === false) {
       throw new Error('Tracking is disabled.');
     }
@@ -1612,8 +1660,9 @@ function logEvent(
       session.events.shift();
     }
     if (flushReceiptKey) markFlushReceipt(session, flushReceiptKey, 'eventApplied');
-    await storageSet({ activeSession: session });
-    currentSession = session;
+    const persistedSession = sanitizeSessionEvents(session);
+    await storageSet({ activeSession: persistedSession });
+    currentSession = persistedSession;
   }, expectedGeneration);
 }
 
@@ -1856,7 +1905,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
         payload.actionType === 'SPA_NAVIGATION' ? (payload.navigationUrl || payload.url) : payload.url,
         tabId,
         expectedGeneration,
-        { skipLlm: payload.actionType === 'PAGE_DWELL' },
+        { skipLlm: payload.actionType === 'PAGE_DWELL', transientEvent: payload },
       );
     }
   });
@@ -1888,7 +1937,7 @@ function evaluateDrift(
   url,
   tabId,
   expectedGeneration = getStorageGeneration(),
-  { skipLlm = false } = {},
+  { skipLlm = false, transientEvent = null } = {},
 ) {
   if (!isTrackableUrl(url)) return;
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
@@ -1945,10 +1994,19 @@ function evaluateDrift(
     }
 
     const activePolicy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+    const evaluationEvents = transientEvent
+      ? [
+        ...(Array.isArray(session.events) ? session.events : []),
+        {
+          ...transientEvent,
+          timestamp: Number.isFinite(transientEvent.timestamp) ? transientEvent.timestamp : now,
+        },
+      ]
+      : session.events;
     const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
-      events: session.events,
+      events: evaluationEvents,
       policy: activePolicy,
       now: Date.now(),
       relatedHostnames: relatedHostnamesList(),
@@ -2062,7 +2120,7 @@ function triggerIntervention(reason, tabId = null, expectedGeneration = getStora
       reason,
       originalTabId: targetTabId,
       fallbackTabId,
-      originalUrl: isTrackableUrl(targetTab?.url) ? targetTab.url : null,
+      originalUrl: sanitizeUrl(targetTab?.url),
       intent: session.intent || '',
       mode: 'pending',
       timestamp: Date.now(),
@@ -2114,12 +2172,12 @@ function triggerIntervention(reason, tabId = null, expectedGeneration = getStora
 function handleOverride(sessionData, expectedGeneration = getStorageGeneration()) {
   if (!sessionData) return Promise.resolve();
   return enqueueSessionMutation(async () => {
-    const updatedSession = {
+    const updatedSession = sanitizeSessionEvents({
       ...sessionData,
       events: Array.isArray(sessionData.events)
         ? sessionData.events.filter(hasSupportedEventUrls)
         : [],
-    };
+    });
     await storageSet({ activeSession: updatedSession });
     currentSession = updatedSession;
 

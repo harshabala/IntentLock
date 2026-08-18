@@ -40,6 +40,44 @@ test('classifyApiError maps quota and invalid key responses', () => {
   assert.equal(invalid.code, 'invalid_api_key');
 });
 
+test('provider diagnostics keep only structured status and code', () => {
+  const body = JSON.stringify({
+    error: {
+      message: 'Prompt echo: write the private launch plan at https://private.example.test/doc?id=42',
+    },
+  });
+  const error = classifyApiError(500, body, 'custom');
+
+  assert.equal(error.code, 'api_error');
+  assert.equal(error.providerMessage, null);
+  assert.doesNotMatch(error.message, /Prompt echo|private\.example|launch plan/);
+});
+
+test('diagnostic details discard provider bodies, prompts, and private URLs', async () => {
+  storageData = { errorLog: [] };
+  await logError({
+    type: ERROR_TYPES.API,
+    message: 'API request failed (500).',
+    details: {
+      code: 'api_error',
+      status: 500,
+      bodyText: 'Prompt echo: keep this private text',
+      prompt: 'private user intent',
+      url: 'https://private.example.test/path?token=secret',
+      providerId: 'custom',
+    },
+    source: 'provider',
+  });
+
+  const [entry] = await getErrorLog();
+  assert.equal(entry.details.code, 'api_error');
+  assert.equal(entry.details.status, 500);
+  assert.equal(entry.details.providerId, 'custom');
+  assert.equal(entry.details.bodyText, undefined);
+  assert.equal(entry.details.prompt, undefined);
+  assert.equal(entry.details.url, undefined);
+});
+
 test('logError stores entries locally with sanitized details', async () => {
   storageData = { errorLog: [] };
   await logError({

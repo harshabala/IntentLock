@@ -145,7 +145,7 @@ test('built-in provider keys never enter request URLs', async () => {
   }
 });
 
-test('getLlmConfig uses local llmApiKey fallback when session storage is empty', async () => {
+test('getLlmConfig does not fall back to a persistent local API key', async () => {
   const previousConfig = storageData.llmProviderConfig;
   const previousKey = storageData.llmApiKey;
   const previousSessionGet = globalThis.chrome.storage.session.get;
@@ -154,11 +154,95 @@ test('getLlmConfig uses local llmApiKey fallback when session storage is empty',
   globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
   try {
     const config = await getLlmConfig();
-    assert.equal(config.apiKey, 'local-llm-key');
+    assert.equal(config.apiKey, null);
   } finally {
     storageData.llmProviderConfig = previousConfig;
     if (previousKey === undefined) delete storageData.llmApiKey;
     else storageData.llmApiKey = previousKey;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+  }
+});
+
+test('deletion aborts in-flight provider work immediately', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousFetch = globalThis.fetch;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  let requestController = null;
+  storageData.llmProviderConfig = {
+    providerId: 'ollama',
+    model: 'llama3.2',
+    baseUrl: 'http://localhost:11434/api/chat',
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
+  globalThis.fetch = (_url, { signal }) => {
+    requestController = { signal };
+    return new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    });
+  };
+
+  const request = chatCompletion('in-flight deletion test');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    assert.ok(requestController, 'provider request should have started');
+    beginStorageDeletion();
+    assert.equal(requestController.signal.aborted, true);
+    const result = await request;
+    assert.equal(result.error.code, 'data_deletion');
+  } finally {
+    if (requestController && !requestController.signal.aborted) requestController.signal.dispatchEvent(new Event('abort'));
+    endStorageDeletion();
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.fetch = previousFetch;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+  }
+});
+
+test('deletion blocks a provider fetch that races after the tracking read', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousFetch = globalThis.fetch;
+  const previousLocalGet = globalThis.chrome.storage.local.get;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  let trackingReads = 0;
+  let fetchCalled = false;
+  storageData.llmProviderConfig = {
+    providerId: 'ollama',
+    model: 'llama3.2',
+    baseUrl: 'http://localhost:11434/api/chat',
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
+  globalThis.chrome.storage.local.get = (keys, callback) => {
+    const keysArr = Array.isArray(keys) ? keys : [keys];
+    if (keysArr.length === 1 && keysArr[0] === 'trackingEnabled') {
+      trackingReads += 1;
+      callback({});
+      if (trackingReads === 2) beginStorageDeletion();
+      return;
+    }
+    const result = {};
+    for (const key of keysArr) {
+      if (storageData[key] !== undefined) result[key] = storageData[key];
+    }
+    callback(result);
+  };
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    return { ok: true, json: async () => ({ message: { content: '{}' } }) };
+  };
+
+  try {
+    const result = await chatCompletion('racing deletion test');
+    assert.equal(fetchCalled, false);
+    assert.equal(result.error.code, 'data_deletion');
+  } finally {
+    endStorageDeletion();
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.fetch = previousFetch;
+    globalThis.chrome.storage.local.get = previousLocalGet;
     globalThis.chrome.storage.session.get = previousSessionGet;
   }
 });
