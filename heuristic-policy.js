@@ -503,6 +503,25 @@ function parseDomainInput(value, pathname = '') {
   return { hostname: normalizeHostname(host), pathname: normalizePath(path) };
 }
 
+const CUSTOM_DOMAIN_HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/i;
+
+export function normalizeCustomDomainRules(value) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '').split(/\r?\n/);
+  const normalized = [];
+  const seen = new Set();
+  for (const entry of values) {
+    const parsed = parseDomainInput(entry);
+    if (!parsed.hostname || !CUSTOM_DOMAIN_HOSTNAME_RE.test(parsed.hostname)) continue;
+    const rule = `${parsed.hostname}${parsed.pathname}`;
+    if (seen.has(rule)) continue;
+    seen.add(rule);
+    normalized.push(rule);
+  }
+  return normalized;
+}
+
 function hostnameSuffixes(hostname) {
   const labels = normalizeHostname(hostname).split('.').filter(Boolean);
   return labels.map((_, index) => labels.slice(index).join('.'));
@@ -911,7 +930,7 @@ export function evaluatePolicyDrift({
   const terms = intentTerms(intent);
   const signals = [];
 
-  const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
+  const domainDecision = resolveDomainPolicy(url, safePolicy);
   const keywordAligned = isKeywordAligned(url, terms);
   const categoryAligned = isCategoryAligned(parsed.hostname, parsed.pathname, safePolicy.intentCategoryId);
   const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)

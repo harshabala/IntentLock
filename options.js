@@ -8,7 +8,12 @@ import {
   validateProviderConfig,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
-import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
+import {
+  SITE_CATEGORIES,
+  buildDefaultPolicy,
+  migrateLegacyDistractionSites,
+  normalizeCustomDomainRules,
+} from './heuristic-policy.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
 
@@ -451,11 +456,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  const HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/;
-  function parseCustomDomains(text) {
-    return text.split('\n').map(s => s.trim().toLowerCase()).filter(s => s && HOSTNAME_RE.test(s));
-  }
-
   saveSitesBtn.addEventListener('click', () => {
     if (deletionInProgress) return;
     const categoryPolicies = {};
@@ -464,10 +464,10 @@ document.addEventListener('DOMContentLoaded', () => {
       categoryPolicies[catId] = radio.value;
     });
 
-    const customBlockDomains = parseCustomDomains(
+    const customBlockDomains = normalizeCustomDomainRules(
       (document.getElementById('custom-block-domains')?.value || '')
     );
-    const customAllowDomains = parseCustomDomains(
+    const customAllowDomains = normalizeCustomDomainRules(
       (document.getElementById('custom-allow-domains')?.value || '')
     );
 

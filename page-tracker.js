@@ -39,6 +39,7 @@
     let activeMs = 0;
     let lastTick = now();
     let lastReportedActiveMs = 0;
+    let pageGeneration = 0;
     let currentUrl = getLocation();
     let intervalId = null;
     let started = false;
@@ -67,15 +68,29 @@
     function report(actionType, extra = {}, urlOverride = null) {
       const data = snapshot(urlOverride);
       const dwellDeltaMs = Math.max(0, data.dwellMs - lastReportedActiveMs);
-      lastReportedActiveMs = data.dwellMs;
-      return onReport({
+      const reportGeneration = pageGeneration;
+      const payload = {
         actionType,
         url: data.url,
         pageTitle: data.pageTitle,
         dwellMs: data.dwellMs,
         dwellDeltaMs,
         ...extra,
-      });
+      };
+      const result = onReport(payload);
+      const commitBaseline = () => {
+        if (reportGeneration === pageGeneration) {
+          lastReportedActiveMs = Math.max(lastReportedActiveMs, data.dwellMs);
+        }
+      };
+      if (result && typeof result.then === 'function') {
+        return Promise.resolve(result).then((value) => {
+          commitBaseline();
+          return value;
+        });
+      }
+      commitBaseline();
+      return result;
     }
 
     function flush(extra = {}) {
@@ -97,6 +112,7 @@
       activeMs = 0;
       lastTick = now();
       lastReportedActiveMs = 0;
+      pageGeneration += 1;
       currentUrl = nextUrl;
     }
 

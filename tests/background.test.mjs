@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildDefaultPolicy } from '../heuristic-policy.js';
-import { getStorageGeneration } from '../storage-queue.js';
+import { beginStorageDeletion, endStorageDeletion, getStorageGeneration } from '../storage-queue.js';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
@@ -13,6 +13,9 @@ const tabUrls = new Map();
 let trackedTabs = [];
 const finalDwellPayloads = new Map();
 const flushBehaviors = new Map();
+let tabsQueryBehavior = 'normal';
+let onTabsQueryStarted = null;
+let flushAttempts = 0;
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -51,6 +54,12 @@ globalThis.chrome = {
   },
   tabs: {
     query: (_query, callback) => {
+      onTabsQueryStarted?.();
+      if (tabsQueryBehavior === 'timeout') return;
+      if (tabsQueryBehavior === 'delayed') {
+        setTimeout(() => callback?.(trackedTabs), 25);
+        return;
+      }
       callback?.(trackedTabs);
       return Promise.resolve(trackedTabs);
     },
@@ -59,7 +68,19 @@ globalThis.chrome = {
       callback?.({ id: tabId, url: tabUrls.get(tabId) || 'https://example.com' });
     },
     sendMessage: (tabId, message, callback) => {
+      if (message?.type === 'FLUSH_DWELL') flushAttempts += 1;
       if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'timeout') {
+        return;
+      }
+      if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'inactive') {
+        callback?.({
+          status: 'error',
+          persisted: false,
+          sessionId: message.sessionId,
+          generation: message.generation,
+          requestId: message.requestId,
+          message: 'Page tracking is not active.',
+        });
         return;
       }
       if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'reject') {
@@ -794,6 +815,29 @@ test('session finalization flushes unreported tracker dwell into metrics and his
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
 });
 
+test('inactive content tabs are successful no-ops during final dwell flush', async () => {
+  const url = 'https://docs.example.com/inactive-tracker';
+  trackedTabs = [{ id: 14, url }];
+  tabUrls.set(14, url);
+  flushBehaviors.set(14, 'inactive');
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('inactive-tracker-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'inactive-tracker-session',
+  });
+
+  trackedTabs = [];
+  flushBehaviors.clear();
+  assert.equal(response.status, 'ok');
+  assert.equal(storageData.activeSession, undefined);
+  assert.equal(storageData.sessionHistory.at(-1).activeMs, 0);
+});
+
 test('rejected final dwell flush prevents finalization and history writes', async () => {
   const url = 'https://docs.example.com/rejected-flush';
   trackedTabs = [{ id: 12, url }];
@@ -840,6 +884,57 @@ test('timed-out final dwell flush prevents finalization and history writes', asy
   assert.equal(response.status, 'error');
   assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
   assert.match(response.message, /timed out|final dwell flush/i);
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
+});
+
+test('hung final dwell tab queries fail boundedly without finalizing', async () => {
+  trackedTabs = [{ id: 15, url: 'https://docs.example.com/query-timeout' }];
+  tabsQueryBehavior = 'timeout';
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('query-timeout-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'query-timeout-session',
+  }, {}, 500);
+
+  tabsQueryBehavior = 'normal';
+  trackedTabs = [];
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
+});
+
+test('final dwell flush rechecks generation after a delayed tab query', async () => {
+  trackedTabs = [{ id: 16, url: 'https://docs.example.com/query-race' }];
+  tabsQueryBehavior = 'delayed';
+  flushAttempts = 0;
+  onTabsQueryStarted = () => {
+    onTabsQueryStarted = null;
+    beginStorageDeletion();
+    endStorageDeletion();
+  };
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('query-race-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'query-race-session',
+  }, {}, 500);
+
+  tabsQueryBehavior = 'normal';
+  trackedTabs = [];
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.equal(flushAttempts, 0);
   assert.equal(storageData.activeSession?.isActive, true);
   assert.equal(storageData.sessionHistory, undefined);
 });

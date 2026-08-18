@@ -13,6 +13,7 @@ import {
   evaluatePolicyDrift,
   isUrlAligned,
   intentTerms,
+  normalizeCustomDomainRules,
 } from '../heuristic-policy.js';
 
 test('INTENT_CATEGORIES has at least 12 entries', () => {
@@ -130,6 +131,25 @@ test('site catalog resolves parent-domain subdomains and path-specific entries',
   assert.equal(getSiteCategory('m.youtube.com')?.categoryId, 'short_video');
   assert.equal(getSiteCategory('google.com', '/travel')?.categoryId, 'travel');
   assert.equal(resolveDomainPolicy('https://google.com/travel/flights', buildDefaultPolicy('coding', 'balanced')), 'allow');
+});
+
+test('custom domain normalization preserves path rules for settings and policy matching', () => {
+  assert.deepEqual(
+    normalizeCustomDomainRules(' Google.com/travel/ \nhttps://WWW.Example.com/work?view=1\ninvalid'),
+    ['google.com/travel', 'example.com/work'],
+  );
+
+  const policy = buildDefaultPolicy('coding', 'strict');
+  policy.customAllowDomains = ['youtube.com/watch'];
+  assert.equal(
+    evaluatePolicyDrift({
+      intent: 'coding the new feature',
+      url: 'https://youtube.com/watch?v=123',
+      events: [],
+      policy,
+    }).reason,
+    'custom_allow',
+  );
 });
 
 test('site catalog resolves overlapping entries explicitly instead of first-write wins', () => {

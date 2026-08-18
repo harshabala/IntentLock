@@ -196,6 +196,35 @@ test('flush reports final dwell and is idempotent while persistence is pending',
   tracker.stop();
 });
 
+test('failed dwell persistence keeps the delta available for a retry', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let attempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('persistence failed'))
+        : Promise.resolve();
+    },
+    getLocation: () => 'https://example.com/retry',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.flush(), /persistence failed/);
+  await tracker.flush();
+
+  assert.equal(reports.length, 2);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[1].dwellDeltaMs, 5_000);
+  tracker.stop();
+});
+
 test('classic page tracker refuses a pre-existing global API property', async () => {
   await assert.rejects(
     loadClassicScript(new URL('../page-tracker.js', import.meta.url), {

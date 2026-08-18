@@ -228,6 +228,7 @@ function sendTabMessage(tabId, message) {
 }
 
 const FINAL_DWELL_FLUSH_TIMEOUT_MS = 1_000;
+const FINAL_DWELL_QUERY_TIMEOUT_MS = 250;
 
 function sendTabMessageBounded(tabId, message, timeoutMs = FINAL_DWELL_FLUSH_TIMEOUT_MS) {
   return new Promise((resolve) => {
@@ -252,7 +253,21 @@ function sendTabMessageBounded(tabId, message, timeoutMs = FINAL_DWELL_FLUSH_TIM
 
 async function flushTrackedTabs(sessionId, expectedGeneration) {
   if (!sessionId || expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) return;
-  const tabs = await queryTabs({});
+  let tabs;
+  try {
+    tabs = await queryTabsBounded({}, FINAL_DWELL_QUERY_TIMEOUT_MS);
+  } catch (error) {
+    throw new FinalDwellFlushError([{
+      tabId: null,
+      message: error?.message || 'Tab query timed out.',
+    }]);
+  }
+  if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) {
+    throw new FinalDwellFlushError([{
+      tabId: null,
+      message: 'Final dwell session changed while querying tabs.',
+    }]);
+  }
   const requestId = `${sessionId}:${createNonce()}`;
   const flushTabs = (Array.isArray(tabs) ? tabs : [])
     .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url));
@@ -270,7 +285,10 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
       response.sessionId === sessionId &&
       response.generation === expectedGeneration &&
       response.requestId === requestId;
-    if (!acknowledged) {
+    const noReceiver = !response && (!result?.error || isMissingContentScriptError(result.error));
+    const inactiveTracker = response?.status === 'error' &&
+      /page tracking is not active/i.test(response.message || '');
+    if (!acknowledged && !noReceiver && !inactiveTracker) {
       failed.push({
         tabId: flushTabs[index].id,
         message: result?.error?.message || response?.message || 'Persistence was not acknowledged.',
@@ -302,6 +320,36 @@ function getTab(tabId) {
 
 function queryTabs(queryInfo) {
   return new Promise((resolve) => chrome.tabs.query(queryInfo, (tabs) => resolve(tabs || [])));
+}
+
+function queryTabsBounded(queryInfo, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      callback(value);
+    };
+    timeoutId = setTimeout(() => finish(reject, new Error('Tab query timed out.')), timeoutMs);
+    try {
+      chrome.tabs.query(queryInfo, (tabs) => {
+        if (chrome.runtime.lastError) {
+          finish(reject, new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        finish(resolve, tabs || []);
+      });
+    } catch (error) {
+      finish(reject, error);
+    }
+  });
+}
+
+function isMissingContentScriptError(error) {
+  return /receiving end does not exist|could not establish connection|message port closed|no tab with id/i
+    .test(error?.message || '');
 }
 
 function updateTab(tabId, updateProperties) {
