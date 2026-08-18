@@ -45,6 +45,9 @@
     let started = false;
     let idle = false;
     let flushPromise = null;
+    let reportTail = Promise.resolve();
+    let reportQueuePending = false;
+    let reportQueueVersion = 0;
     const cleanups = [];
 
     const isActive = () => isVisible() && !idle;
@@ -65,31 +68,85 @@
       };
     }
 
-    function report(actionType, extra = {}, urlOverride = null) {
+    function createReportJob(actionType, extra = {}, urlOverride = null) {
       const data = snapshot(urlOverride);
-      const dwellDeltaMs = Math.max(0, data.dwellMs - lastReportedActiveMs);
-      const reportGeneration = pageGeneration;
-      const payload = {
+      return {
+        data,
+        extra,
         actionType,
-        url: data.url,
-        pageTitle: data.pageTitle,
-        dwellMs: data.dwellMs,
+        reportGeneration: pageGeneration,
+      };
+    }
+
+    function reportResultError(result) {
+      if (!result || typeof result !== 'object') return null;
+      if ('error' in result && result.error) {
+        return result.error instanceof Error ? result.error : new Error(String(result.error));
+      }
+      const response = 'response' in result ? result.response : result;
+      if ('response' in result && !response) {
+        return new Error('Report persistence was not acknowledged.');
+      }
+      if (response?.status === 'error') {
+        return new Error(response.message || 'Report persistence failed.');
+      }
+      return null;
+    }
+
+    function sendReport(job) {
+      const dwellDeltaMs = Math.max(0, job.data.dwellMs - lastReportedActiveMs);
+      const payload = {
+        actionType: job.actionType,
+        url: job.data.url,
+        pageTitle: job.data.pageTitle,
+        dwellMs: job.data.dwellMs,
         dwellDeltaMs,
-        ...extra,
+        ...job.extra,
       };
       const result = onReport(payload);
-      const commitBaseline = () => {
-        if (reportGeneration === pageGeneration) {
-          lastReportedActiveMs = Math.max(lastReportedActiveMs, data.dwellMs);
+      const completeReport = (value) => {
+        const error = reportResultError(value);
+        if (error) throw error;
+        if (job.reportGeneration === pageGeneration) {
+          lastReportedActiveMs = Math.max(lastReportedActiveMs, job.data.dwellMs);
         }
+        return value;
       };
       if (result && typeof result.then === 'function') {
-        return Promise.resolve(result).then((value) => {
-          commitBaseline();
-          return value;
-        });
+        return Promise.resolve(result).then(completeReport);
       }
-      commitBaseline();
+      return completeReport(result);
+    }
+
+    function finishReportQueue(version) {
+      if (version !== reportQueueVersion) return;
+      reportQueuePending = false;
+      reportTail = Promise.resolve();
+    }
+
+    function report(actionType, extra = {}, urlOverride = null) {
+      const job = createReportJob(actionType, extra, urlOverride);
+      if (reportQueuePending) {
+        const version = ++reportQueueVersion;
+        const queued = reportTail.catch(() => {}).then(() => sendReport(job));
+        reportTail = queued;
+        queued.then(
+          () => finishReportQueue(version),
+          () => finishReportQueue(version),
+        );
+        return queued;
+      }
+
+      const result = sendReport(job);
+      if (result && typeof result.then === 'function') {
+        const version = ++reportQueueVersion;
+        reportQueuePending = true;
+        reportTail = Promise.resolve(result);
+        result.then(
+          () => finishReportQueue(version),
+          () => finishReportQueue(version),
+        );
+      }
       return result;
     }
 

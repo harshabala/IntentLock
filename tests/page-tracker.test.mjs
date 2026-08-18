@@ -225,6 +225,71 @@ test('failed dwell persistence keeps the delta available for a retry', async () 
   tracker.stop();
 });
 
+test('overlapping reports serialize so each active interval is counted once', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let resolveFirst;
+  const firstPersistence = new Promise((resolve) => { resolveFirst = resolve; });
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      return reports.length === 1 ? firstPersistence : Promise.resolve();
+    },
+    getLocation: () => 'https://example.com/overlap',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  const first = tracker.flush();
+  now = 6_000;
+  const second = tracker.report('PAGE_DWELL');
+
+  assert.equal(reports.length, 1);
+  resolveFirst();
+  await first;
+  await second;
+
+  assert.equal(reports.length, 2);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[1].dwellDeltaMs, 1_000);
+  tracker.stop();
+});
+
+test('normal report write failures reject and leave the full interval for retry', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let attempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      attempts += 1;
+      return attempts === 1
+        ? Promise.resolve({
+          response: { status: 'error', message: 'normal write failed' },
+          error: null,
+        })
+        : Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => 'https://example.com/write-failure',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.report('PAGE_DWELL'), /normal write failed/);
+  now = 6_000;
+  await tracker.report('PAGE_DWELL');
+
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[1].dwellDeltaMs, 6_000);
+  tracker.stop();
+});
+
 test('classic page tracker refuses a pre-existing global API property', async () => {
   await assert.rejects(
     loadClassicScript(new URL('../page-tracker.js', import.meta.url), {

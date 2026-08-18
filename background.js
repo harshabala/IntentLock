@@ -285,7 +285,7 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
       response.sessionId === sessionId &&
       response.generation === expectedGeneration &&
       response.requestId === requestId;
-    const noReceiver = !response && (!result?.error || isMissingContentScriptError(result.error));
+    const noReceiver = !response && isMissingContentScriptError(result?.error);
     const inactiveTracker = response?.status === 'error' &&
       /page tracking is not active/i.test(response.message || '');
     if (!acknowledged && !noReceiver && !inactiveTracker) {
@@ -348,7 +348,7 @@ function queryTabsBounded(queryInfo, timeoutMs) {
 }
 
 function isMissingContentScriptError(error) {
-  return /receiving end does not exist|could not establish connection|message port closed|no tab with id/i
+  return /receiving end does not exist|could not establish connection|no tab with id/i
     .test(error?.message || '');
 }
 
@@ -1036,11 +1036,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           sendResponse({ status: 'ok' });
         }, (error) => {
-          if (message.payload?.flushRequestId) {
-            sendResponse({ status: 'error', message: error?.message || 'Content event persistence failed.' });
-            return;
-          }
-          sendResponse({ status: 'ok' });
+          sendResponse({ status: 'error', message: error?.message || 'Content event persistence failed.' });
         });
     } else if (message.type === 'INTERVENTION_TRANSITION') {
       handleInterventionTransition(message, sender, requestGeneration).then((result) => {
@@ -1735,7 +1731,12 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
       await storageSet({ activeSession: session });
       currentSession = session;
     }, expectedGeneration);
-    if (!flushMetadata) metricWrite = metricWrite.catch(() => {});
+    if (!flushMetadata) {
+      metricWrite = metricWrite.catch((error) => {
+        if (error?.code === 'SESSION_MUTATION_CANCELLED') return;
+        throw error;
+      });
+    }
   }
 
   let eventWrite = logEvent(
@@ -1745,7 +1746,12 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     expectedGeneration,
     flushMetadata?.sessionId || null,
   );
-  if (!flushMetadata) eventWrite = eventWrite.catch(() => {});
+  if (!flushMetadata) {
+    eventWrite = eventWrite.catch((error) => {
+      if (error?.code === 'SESSION_MUTATION_CANCELLED') return;
+      throw error;
+    });
+  }
 
   return Promise.all([metricWrite, eventWrite]).then(() => {
     if (flushMetadata) return flushEventResult(flushMetadata, true);

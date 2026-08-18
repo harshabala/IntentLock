@@ -83,6 +83,16 @@ globalThis.chrome = {
         });
         return;
       }
+      if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'empty') {
+        callback?.();
+        return;
+      }
+      if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'closed') {
+        chrome.runtime.lastError = { message: 'The message port closed before a response was received.' };
+        callback?.();
+        chrome.runtime.lastError = null;
+        return;
+      }
       if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'reject') {
         callback?.({
           status: 'error',
@@ -715,6 +725,31 @@ test('PAGE_DWELL evaluates static pages after the dwell event is persisted', asy
   assert.ok(storageData.interventionStates, 'static dwell should create an intervention');
 });
 
+test('normal content-event write failures are not acknowledged as success', async () => {
+  const url = 'https://docs.example.com/normal-write-failure';
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('normal-write-failure-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+  storageErrorMessage = 'normal content write failed';
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 5_000,
+      dwellDeltaMs: 5_000,
+    },
+  }, { tab: { id: 1 } });
+
+  storageErrorMessage = null;
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /normal content write failed|persistence failed/i);
+  assert.equal(storageData.activeSession.metrics, undefined);
+});
+
 test('PAGE_DWELL does not call the configured provider for every snapshot', async () => {
   const url = 'https://dwell-provider-check.example/work';
   const previousFetch = globalThis.fetch;
@@ -836,6 +871,54 @@ test('inactive content tabs are successful no-ops during final dwell flush', asy
   assert.equal(response.status, 'ok');
   assert.equal(storageData.activeSession, undefined);
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 0);
+});
+
+test('empty final dwell acknowledgements block finalization', async () => {
+  const url = 'https://docs.example.com/empty-ack';
+  trackedTabs = [{ id: 17, url }];
+  tabUrls.set(17, url);
+  flushBehaviors.set(17, 'empty');
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('empty-ack-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'empty-ack-session',
+  });
+
+  trackedTabs = [];
+  flushBehaviors.clear();
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
+});
+
+test('generic message-port closure blocks finalization', async () => {
+  const url = 'https://docs.example.com/closed-port';
+  trackedTabs = [{ id: 18, url }];
+  tabUrls.set(18, url);
+  flushBehaviors.set(18, 'closed');
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('closed-port-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'closed-port-session',
+  });
+
+  trackedTabs = [];
+  flushBehaviors.clear();
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
 });
 
 test('rejected final dwell flush prevents finalization and history writes', async () => {
