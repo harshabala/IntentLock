@@ -154,6 +154,15 @@ class SessionMutationCancelledError extends Error {
   }
 }
 
+class FinalDwellFlushError extends Error {
+  constructor(failures) {
+    super(`Final dwell flush failed for ${failures.length} tab${failures.length === 1 ? '' : 's'}.`);
+    this.name = 'FinalDwellFlushError';
+    this.code = 'FINAL_DWELL_FLUSH_FAILED';
+    this.failures = failures;
+  }
+}
+
 function enqueueSessionMutation(operation, expectedGeneration = getStorageGeneration()) {
   return enqueueStorageMutation(() => {
     if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) {
@@ -245,15 +254,31 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
   if (!sessionId || expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) return;
   const tabs = await queryTabs({});
   const requestId = `${sessionId}:${createNonce()}`;
-  const flushes = (Array.isArray(tabs) ? tabs : [])
-    .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url))
-    .map((tab) => sendTabMessageBounded(tab.id, {
-      type: 'FLUSH_DWELL',
-      sessionId,
-      generation: expectedGeneration,
-      requestId,
-    }));
-  await Promise.all(flushes);
+  const flushTabs = (Array.isArray(tabs) ? tabs : [])
+    .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url));
+  const results = await Promise.all(flushTabs.map((tab) => sendTabMessageBounded(tab.id, {
+    type: 'FLUSH_DWELL',
+    sessionId,
+    generation: expectedGeneration,
+    requestId,
+  })));
+  const failures = results.reduce((failed, result, index) => {
+    const response = result?.response;
+    const acknowledged = !result?.error &&
+      response?.status === 'ok' &&
+      response.persisted === true &&
+      response.sessionId === sessionId &&
+      response.generation === expectedGeneration &&
+      response.requestId === requestId;
+    if (!acknowledged) {
+      failed.push({
+        tabId: flushTabs[index].id,
+        message: result?.error?.message || response?.message || 'Persistence was not acknowledged.',
+      });
+    }
+    return failed;
+  }, []);
+  if (failures.length > 0) throw new FinalDwellFlushError(failures);
 }
 
 async function flushBeforeFinalization(expectedSessionId, expectedGeneration) {

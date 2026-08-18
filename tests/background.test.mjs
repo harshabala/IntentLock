@@ -12,6 +12,7 @@ let tabsCreateCount = 0;
 const tabUrls = new Map();
 let trackedTabs = [];
 const finalDwellPayloads = new Map();
+const flushBehaviors = new Map();
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -58,6 +59,19 @@ globalThis.chrome = {
       callback?.({ id: tabId, url: tabUrls.get(tabId) || 'https://example.com' });
     },
     sendMessage: (tabId, message, callback) => {
+      if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'timeout') {
+        return;
+      }
+      if (message?.type === 'FLUSH_DWELL' && flushBehaviors.get(tabId) === 'reject') {
+        callback?.({
+          status: 'error',
+          persisted: false,
+          sessionId: message.sessionId,
+          generation: message.generation,
+          requestId: message.requestId,
+        });
+        return;
+      }
       if (message?.type === 'FLUSH_DWELL' && finalDwellPayloads.has(tabId) && messageListener) {
         const payload = {
           ...finalDwellPayloads.get(tabId),
@@ -68,7 +82,7 @@ globalThis.chrome = {
         messageListener(
           { type: 'CONTENT_EVENT', payload },
           { tab: { id: tabId } },
-          (response) => callback?.({ status: response?.status || 'ok' }),
+          (response) => callback?.(response),
         );
         return;
       }
@@ -166,7 +180,7 @@ const {
   triggerIntervention,
 } = await import('../background.js');
 
-function requestMessage(message, sender = {}) {
+function requestMessage(message, sender = {}, timeoutMs = 100) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (response) => {
@@ -175,7 +189,7 @@ function requestMessage(message, sender = {}) {
       resolve(response);
     };
     messageListener(message, sender, finish);
-    setTimeout(() => finish({ status: 'timeout' }), 100);
+    setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
   });
 }
 
@@ -778,6 +792,56 @@ test('session finalization flushes unreported tracker dwell into metrics and his
   assert.equal(ended.session.activeMs, 7_000);
   assert.equal(ended.session.metrics.activeMs, 7_000);
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
+});
+
+test('rejected final dwell flush prevents finalization and history writes', async () => {
+  const url = 'https://docs.example.com/rejected-flush';
+  trackedTabs = [{ id: 12, url }];
+  tabUrls.set(12, url);
+  flushBehaviors.set(12, 'reject');
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('rejected-flush-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'rejected-flush-session',
+  });
+
+  trackedTabs = [];
+  flushBehaviors.clear();
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.match(response.message, /final dwell flush/i);
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
+});
+
+test('timed-out final dwell flush prevents finalization and history writes', async () => {
+  const url = 'https://docs.example.com/timed-out-flush';
+  trackedTabs = [{ id: 13, url }];
+  tabUrls.set(13, url);
+  flushBehaviors.set(13, 'timeout');
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('timed-out-flush-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'timed-out-flush-session',
+  }, {}, 1_500);
+
+  trackedTabs = [];
+  flushBehaviors.clear();
+  assert.equal(response.status, 'error');
+  assert.equal(response.code, 'FINAL_DWELL_FLUSH_FAILED');
+  assert.match(response.message, /timed out|final dwell flush/i);
+  assert.equal(storageData.activeSession?.isActive, true);
+  assert.equal(storageData.sessionHistory, undefined);
 });
 
 test('late final dwell events cannot write into a newer session', async () => {

@@ -80,6 +80,17 @@ function makeChrome(initialStorage = {}, initialTabs = {}) {
       },
       sendMessage(tabId, message, callback) {
         calls.tabMessages.push({ tabId, message });
+        if (message?.type === 'FLUSH_DWELL') {
+          const response = {
+            status: 'ok',
+            persisted: true,
+            sessionId: message.sessionId,
+            generation: message.generation,
+            requestId: message.requestId,
+          };
+          callback?.(response);
+          return Promise.resolve(response);
+        }
         callback?.({ shown: true });
         return Promise.resolve({ shown: true });
       },

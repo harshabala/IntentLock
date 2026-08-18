@@ -26,7 +26,15 @@ function sendContentEvent(payload, requirePersistence = false) {
       payload,
     }, (response) => {
       const error = chrome.runtime.lastError;
-      if (requirePersistence && (error || response?.status !== 'ok' || response.persisted !== true)) {
+      const acknowledgementMatches = response?.sessionId === payload.sessionId &&
+        response?.generation === payload.generation &&
+        response?.requestId === payload.flushRequestId;
+      if (requirePersistence && (
+        error ||
+        response?.status !== 'ok' ||
+        response.persisted !== true ||
+        !acknowledgementMatches
+      )) {
         reject(error || new Error(response?.message || 'Content event persistence was not acknowledged.'));
         return;
       }
@@ -41,7 +49,15 @@ function flushFinalDwell(sessionId, generation, requestId) {
   }
 
   if (!trackingActive || !pageTracker?.flush) {
-    return Promise.resolve({ status: 'ok', flushed: false });
+    return Promise.resolve({
+      status: 'error',
+      flushed: false,
+      persisted: false,
+      sessionId,
+      generation,
+      requestId,
+      message: 'Page tracking is not active.',
+    });
   }
 
   const flushPromise = Promise.resolve(pageTracker.flush({
@@ -57,7 +73,15 @@ function flushFinalDwell(sessionId, generation, requestId) {
       generation,
       requestId,
     }))
-    .catch(() => ({ status: 'ok', flushed: false }));
+    .catch((error) => ({
+      status: 'error',
+      flushed: false,
+      persisted: false,
+      sessionId,
+      generation,
+      requestId,
+      message: error?.message || 'Final dwell persistence failed.',
+    }));
   if (requestId) {
     lastFlushRequestId = requestId;
     lastFlushPromise = flushPromise;
@@ -212,7 +236,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'FLUSH_DWELL') {
     flushFinalDwell(message.sessionId, message.generation, message.requestId).then(sendResponse, () => {
-      sendResponse({ status: 'ok', flushed: false });
+      sendResponse({
+        status: 'error',
+        flushed: false,
+        persisted: false,
+        sessionId: message.sessionId,
+        generation: message.generation,
+        requestId: message.requestId,
+      });
     });
     return true;
   }
