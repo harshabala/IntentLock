@@ -189,6 +189,20 @@
               currentUrl,
             );
           }
+          const inFlight = pending.inFlightPromise;
+          if (inFlight) {
+            pending.inFlightPromise = null;
+            try {
+              const result = await inFlight;
+              if (completeNavigation(pending)) {
+                lastResult = result;
+                rebased = true;
+              }
+              continue;
+            } catch {
+              // Retry the exact navigation payload below after its initial write fails.
+            }
+          }
           const result = await sendReport(pending.job);
           if (!completeNavigation(pending)) continue;
           lastResult = result;
@@ -364,6 +378,9 @@
       const pending = { job, nextUrl };
       pendingNavigationJobs.push(pending);
       const result = enqueueReportJob(job);
+      if (result && typeof result.then === 'function') {
+        pending.inFlightPromise = result;
+      }
       const complete = () => {
         if (completeNavigation(pending) && pendingNavigationJobs.length > 0) {
           void retryPendingNavigation().catch(() => {});

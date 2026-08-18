@@ -560,6 +560,49 @@ test('failed SPA navigations queue in order and preserve later dwell', async () 
   tracker.stop({ discard: true });
 });
 
+test('final flush waits for an in-flight SPA navigation report', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/race-old';
+  let now = 0;
+  let resolveNavigation;
+  const navigationPersistence = new Promise((resolve) => {
+    resolveNavigation = resolve;
+  });
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.actionType === 'SPA_NAVIGATION') return navigationPersistence;
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  href = 'https://example.com/race-new';
+  pageTrackerRuntime.history.pushState({}, '', '/race-new');
+  const final = tracker.flush({
+    sessionId: 'navigation-race-session',
+    generation: 1,
+    flushCorrelationId: 'navigation-race-flush',
+  });
+  await Promise.resolve();
+
+  try {
+    assert.equal(
+      reports.filter((payload) => payload.actionType === 'SPA_NAVIGATION').length,
+      1,
+    );
+  } finally {
+    resolveNavigation();
+    await final.catch(() => {});
+    tracker.stop({ discard: true });
+  }
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];

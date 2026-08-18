@@ -827,6 +827,75 @@ test('normal SPA navigation retries reuse a receipt after a one-sided metric wri
   );
 });
 
+test('stale normal reports are rejected instead of acknowledged', async () => {
+  const url = 'https://docs.example.com/stale-normal-report';
+  const sessionId = 'stale-normal-report-session';
+  const generation = getStorageGeneration();
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession(sessionId, 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 5_000,
+      dwellDeltaMs: 5_000,
+      sessionId,
+      generation: generation + 1,
+      reportId: 'stale-normal-report-1',
+    },
+  }, { tab: { id: 9001 } });
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /stale/i);
+  assert.equal(storageData.activeSession.metrics, undefined);
+  assert.equal(storageData.activeSession.events.length, 0);
+});
+
+test('rate-limited normal reports are rejected instead of acknowledged', async () => {
+  const url = 'https://docs.example.com/rate-limited-normal-report';
+  const sessionId = 'rate-limited-normal-report-session';
+  const generation = getStorageGeneration();
+  const tabId = 9002;
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession(sessionId, 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  for (let index = 0; index < 120; index += 1) {
+    const response = await requestMessage({
+      type: 'CONTENT_EVENT',
+      payload: {
+        actionType: 'TAB_SWITCH',
+        url,
+      },
+    }, { tab: { id: tabId } });
+    assert.equal(response.status, 'ok');
+  }
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 5_000,
+      dwellDeltaMs: 5_000,
+      sessionId,
+      generation,
+      reportId: 'rate-limited-normal-report-1',
+    },
+  }, { tab: { id: tabId } });
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /rate limit/i);
+  assert.equal(storageData.activeSession.metrics, undefined);
+});
+
 test('PAGE_DWELL does not call the configured provider for every snapshot', async () => {
   const url = 'https://dwell-provider-check.example/work';
   const previousFetch = globalThis.fetch;

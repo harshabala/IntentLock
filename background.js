@@ -1720,12 +1720,15 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
   const sessionContext = getSessionContext(payload);
   const flushMetadata = getFlushMetadata(payload);
   const normalReportMetadata = getNormalReportMetadata(payload);
-  if (sessionContext?.invalid || flushMetadata?.invalid || normalReportMetadata?.invalid) {
-    return Promise.resolve(flushEventResult(flushMetadata, false, 'Invalid final dwell metadata.'));
-  }
   const reportMetadata = flushMetadata || normalReportMetadata;
+  const rejectContentEvent = (message) => Promise.resolve(
+    reportMetadata ? flushEventResult(reportMetadata, false, message) : undefined,
+  );
+  if (sessionContext?.invalid || flushMetadata?.invalid || normalReportMetadata?.invalid) {
+    return rejectContentEvent('Invalid final dwell metadata.');
+  }
   if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') {
-    return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
+    return rejectContentEvent('Invalid content event.');
   }
   const allowedActions = new Set(['PAGE_DWELL', 'SPA_NAVIGATION', 'PAGE_LOAD', 'TAB_SWITCH']);
   if (
@@ -1739,7 +1742,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     (payload.navigationUrl !== undefined && (typeof payload.navigationUrl !== 'string' || payload.navigationUrl.length > 2048 || !isTrackableUrl(payload.navigationUrl))) ||
     (payload.dwellMs !== undefined && (!Number.isFinite(payload.dwellMs) || payload.dwellMs < 0 || payload.dwellMs > 86_400_000)) ||
     (payload.dwellDeltaMs !== undefined && (!Number.isFinite(payload.dwellDeltaMs) || payload.dwellDeltaMs < 0 || payload.dwellDeltaMs > 86_400_000))
-  ) return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
+  ) return rejectContentEvent('Invalid content event.');
 
   if (
     sessionContext && (
@@ -1749,9 +1752,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
       isStorageDeletionActive()
     )
   ) {
-    return Promise.resolve(flushMetadata
-      ? flushEventResult(flushMetadata, false, 'Final dwell session is stale.')
-      : undefined);
+    return rejectContentEvent('Final dwell session is stale.');
   }
 
   const now = Date.now();
@@ -1761,7 +1762,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     bucket.count = 0;
   }
   if (bucket.count >= MAX_CONTENT_EVENTS_PER_WINDOW) {
-    return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Content event rate limit exceeded.') : undefined);
+    return rejectContentEvent('Content event rate limit exceeded.');
   }
   bucket.count += 1;
   contentEventBuckets.set(tabId, bucket);
