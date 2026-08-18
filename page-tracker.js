@@ -48,9 +48,11 @@
     let reportTail = Promise.resolve();
     let reportQueuePending = false;
     let reportQueueVersion = 0;
+    let reportQueueEpoch = 0;
     let reportSequence = 0;
     let pendingFinalFlushJob = null;
     let pendingNavigationJob = null;
+    let queuedReportsCanRebase = true;
     const cleanups = [];
 
     function createReportId() {
@@ -83,6 +85,7 @@
         extra,
         actionType,
         reportGeneration: pageGeneration,
+        reportQueueEpoch,
         reportId: createReportId(),
         isFinalFlush: typeof extra?.flushCorrelationId === 'string',
       };
@@ -168,28 +171,31 @@
       });
     }
 
+    function rebaseQueuedReport(job) {
+      if (job.reportGeneration === pageGeneration) return job;
+      if (
+        !started ||
+        !queuedReportsCanRebase ||
+        job.reportQueueEpoch !== reportQueueEpoch
+      ) return null;
+      return createReportJob(job.actionType, job.extra);
+    }
+
     function sendQueuedReport(job) {
       if (job.isFinalFlush) return sendReport(job);
       if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
         pendingFinalFlushJob = null;
       }
-      let navigationRebased = false;
       let prerequisite = null;
       if (pendingFinalFlushJob) {
         prerequisite = Promise.resolve(sendReport(pendingFinalFlushJob));
       }
       if (pendingNavigationJob && pendingNavigationJob.job !== job) {
         prerequisite = (prerequisite || Promise.resolve()).then(() => retryPendingNavigation())
-          .then(({ result, rebased }) => {
-            navigationRebased = rebased;
-            return result;
-          });
+          .then(({ result }) => result);
       }
       const sendCurrentJob = () => {
-        if (navigationRebased && job.reportGeneration !== pageGeneration) {
-          return sendReport(createReportJob(job.actionType, job.extra));
-        }
-        return sendReport(job);
+        return sendReport(rebaseQueuedReport(job) || job);
       };
       return prerequisite ? prerequisite.then(sendCurrentJob) : sendCurrentJob();
     }
@@ -295,6 +301,7 @@
       lastTick = now();
       lastReportedActiveMs = 0;
       pageGeneration += 1;
+      queuedReportsCanRebase = true;
       currentUrl = nextUrl;
     }
 
@@ -417,6 +424,8 @@
       if (!started) return;
       if (discard) {
         pageGeneration += 1;
+        reportQueueEpoch += 1;
+        queuedReportsCanRebase = false;
         activeMs = 0;
         lastReportedActiveMs = 0;
         lastTick = now();

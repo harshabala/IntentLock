@@ -441,6 +441,62 @@ test('failed SPA navigation retries rebase the queued periodic dwell report', as
   tracker.stop({ discard: true });
 });
 
+test('all queued periodic reports rebase after SPA navigation retry', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/old-page';
+  let now = 0;
+  let navigationAttempts = 0;
+  let periodicReports = 0;
+  let resolveFirstPeriodic;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.actionType === 'SPA_NAVIGATION') {
+        navigationAttempts += 1;
+        return navigationAttempts === 1
+          ? Promise.reject(new Error('navigation persistence failed'))
+          : Promise.resolve({ response: { status: 'ok' }, error: null });
+      }
+      periodicReports += 1;
+      if (periodicReports === 1) {
+        return new Promise((resolve) => {
+          resolveFirstPeriodic = () => resolve({ response: { status: 'ok' }, error: null });
+        });
+      }
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  href = 'https://example.com/new-page';
+  pageTrackerRuntime.history.pushState({}, '', '/new-page');
+  now = 8_000;
+  const first = tracker.report('PAGE_DWELL');
+  const second = tracker.report('PAGE_DWELL');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(typeof resolveFirstPeriodic, 'function');
+
+  now = 9_000;
+  resolveFirstPeriodic();
+  await first;
+  await second;
+
+  assert.equal(navigationAttempts, 2);
+  assert.equal(reports.length, 4);
+  assert.equal(reports[2].url, 'https://example.com/new-page');
+  assert.equal(reports[2].dwellMs, 3_000);
+  assert.equal(reports[2].dwellDeltaMs, 3_000);
+  assert.equal(reports[3].url, 'https://example.com/new-page');
+  assert.equal(reports[3].dwellMs, 4_000);
+  assert.equal(reports[3].dwellDeltaMs, 1_000);
+  tracker.stop({ discard: true });
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];
