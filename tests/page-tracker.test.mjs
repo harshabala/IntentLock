@@ -234,7 +234,9 @@ test('final flush receipt ids are stable for retries and change for later dwell'
     onReport: (payload) => {
       reports.push(payload);
       attempts += 1;
-      return attempts === 1 ? Promise.reject(new Error('flush write failed')) : Promise.resolve();
+      return attempts === 1
+        ? Promise.reject(new Error('flush write failed'))
+        : Promise.resolve({ response: { status: 'ok', requestId: payload.reportId }, error: null });
     },
     getLocation: () => 'https://example.com/receipt-id',
     isVisible: () => true,
@@ -248,22 +250,55 @@ test('final flush receipt ids are stable for retries and change for later dwell'
     generation: 1,
     flushCorrelationId: 'flush-1',
   }), /flush write failed/);
-  await tracker.flush({
+  now = 8_000;
+  const retried = await tracker.flush({
     sessionId: 'receipt-session',
     generation: 1,
     flushCorrelationId: 'flush-2',
-  });
-  now = 8_000;
-  await tracker.flush({
-    sessionId: 'receipt-session',
-    generation: 1,
-    flushCorrelationId: 'flush-3',
   });
 
   assert.equal(reports.length, 3);
   assert.equal(reports[0].reportId, reports[1].reportId);
   assert.notEqual(reports[1].reportId, reports[2].reportId);
   assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 3_000);
+  assert.equal(retried.receiptId, reports[2].reportId);
+  tracker.stop();
+});
+
+test('periodic reports reconcile a pending final receipt before advancing baseline', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let finalAttempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.flushCorrelationId) {
+        finalAttempts += 1;
+        if (finalAttempts === 1) return Promise.reject(new Error('one-sided final write'));
+      }
+      return Promise.resolve();
+    },
+    getLocation: () => 'https://example.com/periodic-after-final',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.flush({
+    sessionId: 'periodic-session',
+    generation: 1,
+    flushCorrelationId: 'flush-1',
+  }), /one-sided final write/);
+  now = 8_000;
+  await tracker.report('PAGE_DWELL');
+
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[1].dwellDeltaMs, 5_000);
   assert.equal(reports[2].dwellDeltaMs, 3_000);
   tracker.stop();
 });

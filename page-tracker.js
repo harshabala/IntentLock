@@ -125,14 +125,6 @@
           lastReportedActiveMs = Math.max(lastReportedActiveMs, job.data.dwellMs);
         }
         if (pendingFinalFlushJob === job) pendingFinalFlushJob = null;
-        if (
-          pendingFinalFlushJob &&
-          !job.isFinalFlush &&
-          job.reportGeneration === pendingFinalFlushJob.reportGeneration &&
-          job.data.dwellMs >= pendingFinalFlushJob.data.dwellMs
-        ) {
-          pendingFinalFlushJob = null;
-        }
         return value;
       };
       const settleReport = (value) => {
@@ -180,18 +172,42 @@
     }
 
     function report(actionType, extra = {}, urlOverride = null, jobOverride = null) {
-      return enqueueReportJob(jobOverride || createReportJob(actionType, extra, urlOverride));
+      const job = jobOverride || createReportJob(actionType, extra, urlOverride);
+      if (jobOverride) return enqueueReportJob(job);
+      if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
+        pendingFinalFlushJob = null;
+      }
+      if (!pendingFinalFlushJob) return enqueueReportJob(job);
+      return Promise.resolve(enqueueReportJob(pendingFinalFlushJob))
+        .then(() => enqueueReportJob(job));
     }
 
     function flush(extra = {}) {
       if (!started) return Promise.resolve({ flushed: false });
       if (flushPromise) return flushPromise;
+      if (
+        pendingFinalFlushJob &&
+        (
+          pendingFinalFlushJob.reportGeneration !== pageGeneration ||
+          pendingFinalFlushJob.extra?.sessionId !== extra.sessionId ||
+          pendingFinalFlushJob.extra?.generation !== extra.generation
+        )
+      ) {
+        pendingFinalFlushJob = null;
+      }
       const retryJob = pendingFinalFlushJob &&
         pendingFinalFlushJob.reportGeneration === pageGeneration &&
         pendingFinalFlushJob.extra?.sessionId === extra.sessionId &&
         pendingFinalFlushJob.extra?.generation === extra.generation
         ? pendingFinalFlushJob
         : null;
+      const projectedActiveMs = () => accumulateDwell({
+        activeMs,
+        lastTick,
+        isVisible: isActive(),
+        now: now(),
+      }).activeMs;
+      const reportReceiptId = (result) => result?.response?.requestId || result?.receiptId || null;
       try {
         flushPromise = Promise.resolve(report(
           'PAGE_DWELL',
@@ -199,10 +215,18 @@
           null,
           retryJob,
         ))
-          .then((result) => ({
-            flushed: true,
-            receiptId: result?.response?.requestId || result?.receiptId || null,
-          }))
+          .then((result) => {
+            const finalResult = {
+              flushed: true,
+              receiptId: reportReceiptId(result),
+            };
+            if (!retryJob || projectedActiveMs() <= lastReportedActiveMs) return finalResult;
+            return Promise.resolve(report('PAGE_DWELL', extra))
+              .then((laterResult) => ({
+                ...finalResult,
+                receiptId: reportReceiptId(laterResult),
+              }));
+          })
           .finally(() => {
             flushPromise = null;
           });
