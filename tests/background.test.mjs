@@ -106,7 +106,7 @@ globalThis.chrome = {
 // Import background.js to execute its loadConfig
 const { getInMemoryState, reloadConfig, createHistoryEntry } = await import('../background.js');
 
-function requestMessage(message) {
+function requestMessage(message, sender = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (response) => {
@@ -114,7 +114,7 @@ function requestMessage(message) {
       settled = true;
       resolve(response);
     };
-    messageListener(message, {}, finish);
+    messageListener(message, sender, finish);
     setTimeout(() => finish({ status: 'timeout' }), 100);
   });
 }
@@ -347,4 +347,87 @@ test('history overrides ignore unsupported URLs', () => {
 
   assert.equal(entry.driftCount, 1);
   assert.deepEqual(entry.overrides.map((override) => override.hostname), ['example.com']);
+});
+
+test('rehydrated intervention intent is enumerable in the runtime response', async () => {
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('rehydrated-intent-session', 'persisted intent'),
+    interventionStates: {
+      'rehydrated-intent-session:7': {
+        sessionId: 'rehydrated-intent-session',
+        nonce: 'rehydrated-nonce',
+        reason: 'drift',
+        originalTabId: 7,
+        originalUrl: 'https://example.com/work',
+        mode: 'overlay',
+        timestamp: 1,
+      },
+    },
+  };
+  await reloadConfig();
+
+  const response = await requestMessage(
+    { type: 'GET_INTERVENTION_STATE' },
+    { tab: { id: 7 } },
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(response.state.intent, 'persisted intent');
+  assert.equal(Object.keys(response.state).includes('intent'), true);
+  assert.equal(JSON.parse(JSON.stringify(response.state)).intent, 'persisted intent');
+});
+
+test('session start drops unsupported event URLs before persistence', async () => {
+  const unsupportedUrls = [
+    'data:text/plain,unsupported',
+    'blob:https://example.com/unsupported',
+    'javascript:alert(1)',
+    'ftp://example.com/unsupported',
+    'chrome://settings',
+  ];
+
+  for (const [index, unsupportedUrl] of unsupportedUrls.entries()) {
+    storageData = { trackingEnabled: true };
+    await reloadConfig();
+    const response = await requestMessage({
+      type: 'SESSION_STARTED',
+      session: {
+        ...makeSession(`unsupported-session-${index}`),
+        events: [
+          { actionType: 'PAGE_LOAD', url: unsupportedUrl },
+          { actionType: 'PAGE_LOAD', url: 'https://example.com/supported' },
+        ],
+      },
+    });
+
+    assert.equal(response.status, 'ok');
+    assert.deepEqual(
+      storageData.activeSession.events.map((event) => event.url),
+      ['https://example.com/supported'],
+      `unsupported URL should be dropped: ${unsupportedUrl}`,
+    );
+  }
+});
+
+test('restored active sessions drop unsupported event URLs before use and persistence', async () => {
+  const unsupportedUrls = [
+    'data:text/plain,unsupported',
+    'blob:https://example.com/unsupported',
+    'javascript:alert(1)',
+    'ftp://example.com/unsupported',
+    'chrome://settings',
+  ];
+  storageData = {
+    trackingEnabled: true,
+    activeSession: {
+      ...makeSession('restored-events-session'),
+      events: unsupportedUrls.map((url) => ({ actionType: 'PAGE_LOAD', url })),
+    },
+  };
+
+  await reloadConfig();
+
+  assert.deepEqual(getInMemoryState().currentSession.events, []);
+  assert.deepEqual(storageData.activeSession.events, []);
 });

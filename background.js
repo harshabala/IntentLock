@@ -300,7 +300,7 @@ function relatedHostnamesList() {
 }
 
 function createHistoryEntry(session) {
-  const events = Array.isArray(session.events) ? session.events : [];
+  const events = sanitizeSessionEvents(session).events;
   const metrics = ensureMetrics(session);
   const overrides = events
     .filter(e => e.actionType === 'OVERRIDE' && (!e.url || isTrackableUrl(e.url)))
@@ -333,6 +333,22 @@ function hasSupportedEventUrls(event) {
   return ['url', 'previousUrl', 'navigationUrl'].every((key) => (
     event[key] == null || isTrackableUrl(event[key])
   ));
+}
+
+function sanitizeSessionEvents(session) {
+  if (!session || typeof session !== 'object') return session;
+  const events = Array.isArray(session.events) ? session.events : [];
+  return {
+    ...session,
+    events: events
+      .filter(hasSupportedEventUrls)
+      .map((event) => ({ ...event })),
+  };
+}
+
+function hasUnsupportedSessionEvents(session) {
+  return Array.isArray(session?.events)
+    && session.events.some((event) => !hasSupportedEventUrls(event));
 }
 
 // Idle tracking
@@ -442,10 +458,7 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     const result = await storageGet(['activeSession', 'sessionHistory']);
     const session = result.activeSession
       ? {
-        ...result.activeSession,
-        events: Array.isArray(result.activeSession.events)
-          ? result.activeSession.events.map((event) => ({ ...event }))
-          : [],
+        ...sanitizeSessionEvents(result.activeSession),
         metrics: result.activeSession.metrics ? { ...result.activeSession.metrics } : undefined,
       }
       : null;
@@ -505,14 +518,10 @@ async function getInterventionStateForTab(tabId) {
   );
   if (!state) return null;
   if (state.intent !== undefined) return state;
-  const hydratedState = { ...state };
-  const intent = state.intent ?? result.activeSession.intent ?? '';
-  Object.defineProperty(hydratedState, 'intent', {
-    configurable: true,
-    enumerable: false,
-    value: intent,
-  });
-  return hydratedState;
+  return {
+    ...state,
+    intent: state.intent ?? result.activeSession.intent ?? '',
+  };
 }
 
 function findStateEntry(states, state) {
@@ -533,7 +542,7 @@ async function handleInterventionTransition(message, sender) {
       COMPLETED_TRANSITION_KEY,
       'trackingEnabled',
     ]);
-    const session = result.activeSession;
+    const session = sanitizeSessionEvents(result.activeSession);
     const states = cloneInterventionStates(result[INTERVENTION_STATE_KEY]);
     const completed = cloneInterventionStates(result[COMPLETED_TRANSITION_KEY]);
     if (result.trackingEnabled === false) {
@@ -859,8 +868,18 @@ function loadConfig() {
         });
       }
       if (data.activeSession && data.activeSession.isActive) {
-        currentSession = data.activeSession;
+        currentSession = sanitizeSessionEvents(data.activeSession);
         ensureMetrics(currentSession);
+        if (hasUnsupportedSessionEvents(data.activeSession)) {
+          const sanitizedSession = {
+            ...data.activeSession,
+            events: currentSession.events,
+          };
+          void enqueueStorageMutation(() => {
+            if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+            return storageSet({ activeSession: sanitizedSession });
+          });
+        }
 
         // Restore time budget alarm if session has a time budget
         if (currentSession.timeBudget) {
@@ -1058,28 +1077,29 @@ function handleSessionStart(session) {
     if (latest.activeSession?.isActive) {
       throw new Error('An active session already exists.');
     }
-    ensureMetrics(session);
-    if (!session.metrics || session.metrics.activeMs == null) {
-      session.metrics = createSessionMetrics();
+    const nextSession = sanitizeSessionEvents(session);
+    ensureMetrics(nextSession);
+    if (!nextSession.metrics || nextSession.metrics.activeMs == null) {
+      nextSession.metrics = createSessionMetrics();
     }
     clearDriftCache();
     clearLlmBackoff();
     await storageRemove(['llmBackoffUntil']);
     overrideCooldowns.clear(); // clear cooldowns on new session
     await storageRemove(['overrideCooldowns']);
-    await storageSet({ activeSession: session });
-    currentSession = session;
+    await storageSet({ activeSession: nextSession });
+    currentSession = nextSession;
 
     chrome.alarms.clear(timeBudgetAlarmName);
 
-    if (session.timeBudget) {
+    if (nextSession.timeBudget) {
       chrome.alarms.create(timeBudgetAlarmName, {
-        when: session.startTime + (session.timeBudget * 60000)
+        when: nextSession.startTime + (nextSession.timeBudget * 60000)
       });
     }
 
-    await createTabGroup(session.intent);
-    return session;
+    await createTabGroup(nextSession.intent);
+    return nextSession;
   });
 }
 
@@ -1238,7 +1258,7 @@ function logEvent(actionType, url, extras = {}) {
     if (!isTrackableUrl(url)) return;
     const result = await storageGet(['activeSession', 'trackingEnabled']);
     if (result.trackingEnabled === false) return;
-    const session = result.activeSession;
+    const session = sanitizeSessionEvents(result.activeSession);
     if (!session || !session.isActive) return;
 
     const event = {
@@ -1300,7 +1320,7 @@ function handleContentEvent(payload, tabId) {
     enqueueSessionMutation(async () => {
       const result = await storageGet(['activeSession', 'trackingEnabled']);
       if (result.trackingEnabled === false) return;
-      const session = result.activeSession;
+      const session = sanitizeSessionEvents(result.activeSession);
       if (!session?.isActive) return;
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
@@ -1340,7 +1360,7 @@ function evaluateDrift(url, tabId) {
   if (!isTrackableUrl(url)) return;
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
     if (result.trackingEnabled === false) return;
-    const session = result.activeSession;
+    const session = sanitizeSessionEvents(result.activeSession);
     if (!session || !session.isActive) return;
 
     const now = Date.now();
@@ -1449,7 +1469,7 @@ function triggerIntervention(reason, tabId = null) {
   return enqueueSessionMutation(async () => {
     const result = await storageGet(['activeSession', INTERVENTION_STATE_KEY, 'trackingEnabled']);
     if (result.trackingEnabled === false) return null;
-    const session = result.activeSession;
+    const session = sanitizeSessionEvents(result.activeSession);
     if (!session?.isActive) return null;
 
     let targetTab = null;

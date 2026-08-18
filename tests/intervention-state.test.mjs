@@ -189,6 +189,7 @@ test('restart-safe state can be rehydrated for the requesting tab only', async (
     originalUrl: 'https://example.test/work',
     mode: 'overlay',
     timestamp: 10,
+    intent: 'work',
   };
   const harness = await loadBackground(
     {
