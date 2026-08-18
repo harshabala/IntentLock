@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { buildDefaultPolicy } from '../heuristic-policy.js';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
@@ -7,6 +8,7 @@ let storageErrorMessage = null;
 let storageGetErrorMessage = null;
 let storageRemoveErrorMessage = null;
 let tabsCreateCount = 0;
+const tabUrls = new Map();
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -49,6 +51,17 @@ globalThis.chrome = {
       return Promise.resolve([]);
     },
     create: () => { tabsCreateCount += 1; },
+    get: (tabId, callback) => {
+      callback?.({ id: tabId, url: tabUrls.get(tabId) || 'https://example.com' });
+    },
+    sendMessage: (_tabId, message, callback) => {
+      callback?.(message?.type === 'SHOW_INTERVENTION' ? { shown: true } : {});
+    },
+    update: (tabId, properties, callback) => {
+      if (properties?.url) tabUrls.set(tabId, properties.url);
+      callback?.({ id: tabId, url: tabUrls.get(tabId) });
+    },
+    remove: (_tabId, callback) => callback?.(),
     onUpdated: { addListener: (listener) => { tabUpdatedListener = listener; } },
     onActivated: { addListener: (listener) => { tabActivatedListener = listener; } }
   },
@@ -129,7 +142,12 @@ globalThis.chrome = {
 };
 
 // Import background.js to execute its loadConfig
-const { getInMemoryState, reloadConfig, createHistoryEntry } = await import('../background.js');
+const {
+  getInMemoryState,
+  reloadConfig,
+  createHistoryEntry,
+  triggerIntervention,
+} = await import('../background.js');
 
 function requestMessage(message, sender = {}) {
   return new Promise((resolve) => {
@@ -617,4 +635,153 @@ test('restored active sessions drop unsupported event URLs before use and persis
 
   assert.deepEqual(getInMemoryState().currentSession.events, []);
   assert.deepEqual(storageData.activeSession.events, []);
+});
+
+test('PAGE_DWELL evaluates static pages after the dwell event is persisted', async () => {
+  const url = 'https://reddit.com/r/programming';
+  tabUrls.set(1, url);
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'balanced'),
+    activeSession: makeSession('static-dwell-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 120_000,
+      dwellDeltaMs: 120_000,
+    },
+  }, { tab: { id: 1 } });
+  await waitForCallbacks();
+
+  assert.deepEqual(response, { status: 'ok' });
+  assert.equal(storageData.activeSession.metrics.activeMs, 120_000);
+  assert.ok(storageData.interventionStates, 'static dwell should create an intervention');
+});
+
+test('final session history includes the final dwell delta before it is written', async () => {
+  const url = 'https://docs.example.com/work';
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'balanced'),
+    activeSession: makeSession('final-dwell-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 5_000,
+      dwellDeltaMs: 5_000,
+    },
+  }, { tab: { id: 1 } });
+  const ended = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'final-dwell-session',
+  });
+
+  assert.equal(ended.status, 'ok');
+  assert.equal(ended.session.activeMs, 5_000);
+  assert.equal(storageData.sessionHistory.at(-1).activeMs, 5_000);
+});
+
+test('related-domain marks do not carry into a new session', async () => {
+  const youtubeUrl = 'https://youtube.com/watch?v=abc';
+  tabUrls.set(1, youtubeUrl);
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'strict'),
+    activeSession: makeSession('related-session-one', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const state = await triggerIntervention('test intervention', 1);
+  const marked = await requestMessage({
+    type: 'INTERVENTION_TRANSITION',
+    transition: 'mark-related',
+    sessionId: state.sessionId,
+    nonce: state.nonce,
+    reflection: 'This is relevant to the task.',
+  }, { tab: { id: 1 } });
+  assert.equal(marked.ok, true);
+
+  const ended = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'related-session-one',
+  });
+  assert.equal(ended.status, 'ok');
+
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'strict'),
+    activeSession: makeSession('related-session-two', 'coding the new feature'),
+  };
+  await reloadConfig();
+  tabUpdatedListener(1, { status: 'complete' }, { url: youtubeUrl });
+  await waitForCallbacks();
+  await waitForCallbacks();
+
+  assert.ok(storageData.interventionStates, 'old related mark must not suppress a new-session block');
+});
+
+test('idle context switching requires an unaligned destination and another signal', async () => {
+  const now = Date.now();
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('writing', 'strict'),
+    activeSession: makeSession('idle-alignment-session', 'write the project article'),
+    isCurrentlyIdle: false,
+    lastIdleTime: now - 1_000,
+  };
+  await reloadConfig();
+  tabUrls.set(2, 'https://docs.google.com/document/d/abc');
+  tabActivatedListener({ tabId: 2 });
+  await waitForCallbacks();
+  assert.equal(storageData.interventionStates, undefined);
+
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('writing', 'strict'),
+    activeSession: {
+      ...makeSession('idle-signal-session', 'write the project article'),
+      events: [{
+        timestamp: now - 1_000,
+        actionType: 'PAGE_LOAD',
+        url: 'https://reddit.com/r/unrelated',
+      }],
+    },
+    isCurrentlyIdle: false,
+    lastIdleTime: now - 1_000,
+  };
+  await reloadConfig();
+  tabUrls.set(2, 'https://example.com/unrelated');
+  tabActivatedListener({ tabId: 2 });
+  await waitForCallbacks();
+  await waitForCallbacks();
+  assert.ok(storageData.interventionStates, 'an unaligned destination plus recent unrelated activity should intervene');
+});
+
+test('drift debounce is independent for two tabs on the same URL', async () => {
+  const url = 'https://youtube.com/watch?v=same';
+  tabUrls.set(3, url);
+  tabUrls.set(4, url);
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'strict'),
+    activeSession: makeSession('two-tab-debounce-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  tabUpdatedListener(3, { status: 'complete' }, { url });
+  tabUpdatedListener(4, { status: 'complete' }, { url });
+  await waitForCallbacks();
+  await waitForCallbacks();
+
+  assert.equal(Object.keys(storageData.interventionStates || {}).length, 2);
 });

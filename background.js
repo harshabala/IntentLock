@@ -48,6 +48,7 @@ let sessionTabGroupId = null;
 let heuristicPolicy = null;
 /** @type {Record<string, { count: number, lastMarkedAt: number }>} */
 let relatedDomainMarks = {};
+let relatedDomainMarksSessionId = null;
 
 const OVERRIDE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const overrideCooldowns = new Map(); // domain -> cooldown expiry timestamp
@@ -311,7 +312,15 @@ function rememberCompletedTransition(completed, key, tabId, closeTab = false) {
 }
 
 function relatedHostnamesList() {
+  if (!currentSession?.id || relatedDomainMarksSessionId !== currentSession.id) return [];
   return Object.keys(relatedDomainMarks || {});
+}
+
+function readScopedRelatedMarks(value, sessionId) {
+  if (!value || typeof value !== 'object' || value.sessionId !== sessionId) return {};
+  return value.marks && typeof value.marks === 'object' && !Array.isArray(value.marks)
+    ? value.marks
+    : {};
 }
 
 function createHistoryEntry(session) {
@@ -512,7 +521,13 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     session.topDomains = entry.topDomains;
 
     await storageSet({ sessionHistory: history });
-    await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns']);
+    await storageRemove([
+      'activeSession',
+      INTERVENTION_STATE_KEY,
+      'interventionState',
+      'overrideCooldowns',
+      'relatedDomainMarks',
+    ]);
     hideInterventionsFromTabs();
     let cleanupWarning = null;
     try {
@@ -521,6 +536,9 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
       cleanupWarning = error?.message || 'Unable to clear the session tab group.';
     }
     currentSession = null;
+    relatedDomainMarks = {};
+    relatedDomainMarksSessionId = null;
+    clearDriftDebounce();
     overrideCooldowns.clear();
     chrome.alarms.clear(timeBudgetAlarmName);
     if (cleanupWarning) session.cleanupWarning = cleanupWarning;
@@ -653,7 +671,10 @@ async function handleInterventionTransition(message, sender, expectedGeneration 
     if (message.markRelated || transition === 'mark-related') {
       const host = extractDomain(originalUrl);
       if (host) {
-        const marks = { ...(result.relatedDomainMarks || relatedDomainMarks || {}) };
+        const marks = {
+          ...readScopedRelatedMarks(result.relatedDomainMarks, session.id),
+          ...(relatedDomainMarksSessionId === session.id ? relatedDomainMarks : {}),
+        };
         const previous = marks[host] || { count: 0, lastMarkedAt: 0 };
         marks[host] = { count: (previous.count || 0) + 1, lastMarkedAt: Date.now() };
         const keys = Object.keys(marks);
@@ -664,7 +685,8 @@ async function handleInterventionTransition(message, sender, expectedGeneration 
             .forEach((key) => delete marks[key]);
         }
         relatedDomainMarks = marks;
-        values.relatedDomainMarks = marks;
+        relatedDomainMarksSessionId = session.id;
+        values.relatedDomainMarks = { sessionId: session.id, marks };
       }
     }
 
@@ -701,9 +723,11 @@ function handleSessionCleared(sendResponse) {
       isCurrentlyIdle = false;
       lastIdleTime = 0;
       relatedDomainMarks = {};
+      relatedDomainMarksSessionId = null;
       overrideCooldowns.clear();
       contentEventBuckets.clear();
       clearDriftCache();
+      clearDriftDebounce();
       clearLlmBackoff();
       await clearTabGroupState();
       chrome.alarms.clear(timeBudgetAlarmName);
@@ -821,6 +845,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await clearTabGroupState();
         currentSession = null;
         clearDriftCache();
+        clearDriftDebounce();
         clearLlmBackoff();
         overrideCooldowns.clear();
         await storageRemove([
@@ -828,8 +853,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           'interventionState',
           'overrideCooldowns',
           COMPLETED_TRANSITION_KEY,
+          'relatedDomainMarks',
         ]);
         configPromise = null;
+        relatedDomainMarks = {};
+        relatedDomainMarksSessionId = null;
         await loadConfig();
         return { status: 'ok' };
       }, requestGeneration).then(sendResponse, (error) => {
@@ -874,8 +902,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'ok' });
       });
     } else if (message.type === 'CONTENT_EVENT') {
-      handleContentEvent(message.payload, sender.tab?.id, requestGeneration);
-      sendResponse({ status: 'ok' });
+      Promise.resolve(handleContentEvent(message.payload, sender.tab?.id, requestGeneration))
+        .then(() => sendResponse({ status: 'ok' }), () => sendResponse({ status: 'ok' }));
     } else if (message.type === 'INTERVENTION_TRANSITION') {
       handleInterventionTransition(message, sender, requestGeneration).then((result) => {
         sendResponse(result);
@@ -1026,10 +1054,12 @@ function loadConfig() {
       if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
         setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
       }
-      if (data.relatedDomainMarks && typeof data.relatedDomainMarks === 'object') {
-        relatedDomainMarks = data.relatedDomainMarks;
+      if (currentSession?.id && data.relatedDomainMarks?.sessionId === currentSession.id) {
+        relatedDomainMarks = readScopedRelatedMarks(data.relatedDomainMarks, currentSession.id);
+        relatedDomainMarksSessionId = currentSession.id;
       } else {
         relatedDomainMarks = {};
+        relatedDomainMarksSessionId = null;
       }
       resolve();
     });
@@ -1177,10 +1207,14 @@ function handleSessionStart(session, expectedGeneration = getStorageGeneration()
       nextSession.metrics = createSessionMetrics();
     }
     clearDriftCache();
+    clearDriftDebounce();
     clearLlmBackoff();
     await storageRemove(['llmBackoffUntil']);
     overrideCooldowns.clear(); // clear cooldowns on new session
     await storageRemove(['overrideCooldowns']);
+    relatedDomainMarks = {};
+    relatedDomainMarksSessionId = nextSession.id;
+    await storageRemove(['relatedDomainMarks']);
     await storageSet({ activeSession: nextSession });
     currentSession = nextSession;
 
@@ -1293,6 +1327,22 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ── Tab monitoring ─────────────────────────────────────────────────────
 
+function hasMeaningfulIdleSignal(session, destinationUrl, now = Date.now()) {
+  const recentEvents = (Array.isArray(session?.events) ? session.events : [])
+    .filter((event) => Number.isFinite(event?.timestamp) && now - event.timestamp <= 2 * 60 * 1000);
+  const policy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+  return recentEvents.some((event) => {
+    if (!event?.url || !['PAGE_LOAD', 'SPA_NAVIGATION', 'PAGE_DWELL', 'TAB_SWITCH'].includes(event.actionType)) {
+      return false;
+    }
+    const dwellMs = typeof event.dwellDeltaMs === 'number'
+      ? event.dwellDeltaMs
+      : (typeof event.dwellMs === 'number' ? event.dwellMs : 0);
+    if (event.url === destinationUrl) return event.actionType === 'PAGE_DWELL' && dwellMs > 0;
+    return !isUrlAligned(session.intent, event.url, policy, relatedHostnamesList());
+  });
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && isTrackableUrl(tab.url)) {
     loadConfig().then(() => {
@@ -1327,13 +1377,21 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
             const isCurrentlyIdleVal = result.isCurrentlyIdle || false;
             const lastIdleTimeVal = result.lastIdleTime || 0;
             if (!isCurrentlyIdleVal && lastIdleTimeVal > 0 && (Date.now() - lastIdleTimeVal < 10000)) {
+              const policy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+              const destinationAligned = isUrlAligned(
+                session.intent,
+                tab.url,
+                policy,
+                relatedHostnamesList(),
+              );
+              const meaningfulSignal = hasMeaningfulIdleSignal(session, tab.url);
               void enqueueSessionMutation(async () => {
                 const latest = await storageGet(['trackingEnabled']);
                 if (latest.trackingEnabled === false) return false;
                 await storageSet({ lastIdleTime: 0 });
                 return true;
               }).then((reset) => {
-                if (reset) {
+                if (reset && !destinationAligned && meaningfulSignal) {
                   void triggerIntervention("You were idle and immediately switched context. Are you still aligned?", activeInfo.tabId).catch(() => {});
                 }
               }, () => {});
@@ -1396,7 +1454,7 @@ function logEvent(actionType, url, extras = {}, expectedGeneration = getStorageG
 }
 
 function handleContentEvent(payload, tabId, expectedGeneration = getStorageGeneration()) {
-  if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') return;
+  if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') return Promise.resolve();
   const allowedActions = new Set(['PAGE_DWELL', 'SPA_NAVIGATION', 'PAGE_LOAD', 'TAB_SWITCH']);
   if (
     typeof payload.url !== 'string' ||
@@ -1409,7 +1467,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     (payload.navigationUrl !== undefined && (typeof payload.navigationUrl !== 'string' || payload.navigationUrl.length > 2048 || !isTrackableUrl(payload.navigationUrl))) ||
     (payload.dwellMs !== undefined && (!Number.isFinite(payload.dwellMs) || payload.dwellMs < 0 || payload.dwellMs > 86_400_000)) ||
     (payload.dwellDeltaMs !== undefined && (!Number.isFinite(payload.dwellDeltaMs) || payload.dwellDeltaMs < 0 || payload.dwellDeltaMs > 86_400_000))
-  ) return;
+  ) return Promise.resolve();
 
   const now = Date.now();
   const bucket = contentEventBuckets.get(tabId) || { startedAt: now, count: 0 };
@@ -1417,7 +1475,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     bucket.startedAt = now;
     bucket.count = 0;
   }
-  if (bucket.count >= MAX_CONTENT_EVENTS_PER_WINDOW) return;
+  if (bucket.count >= MAX_CONTENT_EVENTS_PER_WINDOW) return Promise.resolve();
   bucket.count += 1;
   contentEventBuckets.set(tabId, bucket);
 
@@ -1429,12 +1487,13 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
   if (payload.navigationUrl) extras.navigationUrl = payload.navigationUrl;
 
   // Accumulate on-intent metrics from dwell deltas (not reconstructable from capped events)
+  let metricWrite = Promise.resolve();
   if (
     (payload.actionType === 'PAGE_DWELL' || payload.actionType === 'SPA_NAVIGATION') &&
     typeof payload.dwellDeltaMs === 'number' &&
     payload.dwellDeltaMs > 0
   ) {
-    void enqueueSessionMutation(async () => {
+    metricWrite = enqueueSessionMutation(async () => {
       const result = await storageGet(['activeSession', 'trackingEnabled']);
       if (result.trackingEnabled === false) return;
       const session = sanitizeSessionEvents(result.activeSession);
@@ -1460,18 +1519,27 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     }, expectedGeneration).catch(() => {});
   }
 
-  void logEvent(payload.actionType, payload.url, extras, expectedGeneration).catch(() => {});
+  const eventWrite = logEvent(payload.actionType, payload.url, extras, expectedGeneration).catch(() => {});
 
-  if (payload.actionType === 'SPA_NAVIGATION') {
-    evaluateDrift(payload.navigationUrl || payload.url, tabId, expectedGeneration);
-  }
+  return Promise.all([metricWrite, eventWrite]).then(() => {
+    if (payload.actionType === 'PAGE_DWELL' || payload.actionType === 'SPA_NAVIGATION') {
+      evaluateDrift(
+        payload.actionType === 'SPA_NAVIGATION' ? (payload.navigationUrl || payload.url) : payload.url,
+        tabId,
+        expectedGeneration,
+      );
+    }
+  });
 }
 
 // ── Drift evaluation ───────────────────────────────────────────────────
 
-let lastEvaluatedUrl = null;
-let lastEvaluatedTime = 0;
 const DRIFT_DEBOUNCE_MS = 5000;
+const driftDebounce = new Map();
+
+function clearDriftDebounce() {
+  driftDebounce.clear();
+}
 
 function evaluateDrift(url, tabId, expectedGeneration = getStorageGeneration()) {
   if (!isTrackableUrl(url)) return;
@@ -1483,11 +1551,12 @@ function evaluateDrift(url, tabId, expectedGeneration = getStorageGeneration()) 
     if (!session || !session.isActive) return;
 
     const now = Date.now();
-    if (url === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
+    const debounceKey = `${session.id}:${Number.isInteger(tabId) ? tabId : 'fallback'}:${url}`;
+    const lastEvaluatedTime = driftDebounce.get(debounceKey) || 0;
+    if ((now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
       return;
     }
-    lastEvaluatedUrl = url;
-    lastEvaluatedTime = now;
+    driftDebounce.set(debounceKey, now);
 
     // Check per-domain override cooldown
     const evaluatedDomain = extractDomain(url);

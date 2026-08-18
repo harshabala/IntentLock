@@ -125,6 +125,17 @@ test('www prefix is stripped before lookup', () => {
   assert.equal(getSiteCategory('www.youtube.com')?.categoryId, 'short_video');
 });
 
+test('site catalog resolves parent-domain subdomains and path-specific entries', () => {
+  assert.equal(getSiteCategory('m.youtube.com')?.categoryId, 'short_video');
+  assert.equal(getSiteCategory('google.com', '/travel')?.categoryId, 'travel');
+  assert.equal(resolveDomainPolicy('https://google.com/travel/flights', buildDefaultPolicy('coding', 'balanced')), 'allow');
+});
+
+test('site catalog resolves overlapping entries explicitly instead of first-write wins', () => {
+  assert.equal(getSiteCategory('cvs.com')?.categoryId, 'shopping');
+  assert.equal(getSiteCategory('cvs.com', '/minuteclinic')?.categoryId, 'health');
+});
+
 test('buildDefaultPolicy has correct schema', () => {
   const policy = buildDefaultPolicy('deep_work', 'strict');
   assert.equal(policy.version, 1);
@@ -255,6 +266,61 @@ test('warn category + 130s dwell triggers intervention', () => {
   assert.equal(result.shouldIntervene, true);
 });
 
+test('dwell thresholds use delta events once and ignore repeated cumulative snapshots', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  const now = Date.now();
+  const url = 'https://reddit.com/r/programming';
+  const at59 = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [
+      { timestamp: now - 3_000, actionType: 'PAGE_DWELL', url, dwellMs: 59_000 },
+      { timestamp: now - 2_000, actionType: 'PAGE_DWELL', url, dwellMs: 59_000 },
+    ],
+    policy,
+    now,
+  });
+  const at60 = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [{ timestamp: now - 2_000, actionType: 'PAGE_DWELL', url, dwellDeltaMs: 60_000, dwellMs: 60_000 }],
+    policy,
+    now,
+  });
+  const repeatedAt60 = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [
+      { timestamp: now - 3_000, actionType: 'PAGE_DWELL', url, dwellMs: 60_000 },
+      { timestamp: now - 2_000, actionType: 'PAGE_DWELL', url, dwellMs: 60_000 },
+    ],
+    policy,
+    now,
+  });
+  const at119 = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [{ timestamp: now - 2_000, actionType: 'PAGE_DWELL', url, dwellDeltaMs: 119_000, dwellMs: 119_000 }],
+    policy,
+    now,
+  });
+  const at120 = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [{ timestamp: now - 2_000, actionType: 'PAGE_DWELL', url, dwellDeltaMs: 120_000, dwellMs: 120_000 }],
+    policy,
+    now,
+  });
+
+  assert.equal(at59.shouldIntervene, false);
+  assert.equal(at60.shouldIntervene, false);
+  assert.equal(repeatedAt60.shouldIntervene, false);
+  assert.equal(at119.shouldIntervene, false);
+  assert.equal(at120.shouldIntervene, true);
+  assert.ok(!at59.signals.some((signal) => signal === 'unrelated_events:2'));
+  assert.ok(!at59.signals.some((signal) => signal.startsWith('repeated_domain:')));
+});
+
 test('allowed domain does not trigger category block', () => {
   const policy = buildDefaultPolicy('coding', 'strict');
   const result = evaluatePolicyDrift({
@@ -278,6 +344,74 @@ test('customAllowDomains prevents block on blocked-category site', () => {
     now: Date.now(),
   });
   assert.equal(result.shouldIntervene, false);
+});
+
+test('custom allow and block rules match subdomains with block taking precedence', () => {
+  const allowPolicy = buildDefaultPolicy('coding', 'strict');
+  allowPolicy.customAllowDomains = ['youtube.com'];
+  assert.equal(resolveDomainPolicy('m.youtube.com', allowPolicy), 'allow');
+  assert.equal(evaluatePolicyDrift({
+    intent: 'coding a new feature',
+    url: 'https://m.youtube.com/watch?v=tutorial',
+    events: [],
+    policy: allowPolicy,
+  }).shouldIntervene, false);
+
+  const blockPolicy = buildDefaultPolicy('coding', 'strict');
+  blockPolicy.customAllowDomains = ['youtube.com'];
+  blockPolicy.customBlockDomains = ['youtube.com'];
+  const result = evaluatePolicyDrift({
+    intent: 'find YouTube API documentation',
+    url: 'https://m.youtube.com/developers',
+    events: [],
+    policy: blockPolicy,
+  });
+  assert.equal(resolveDomainPolicy('m.youtube.com', blockPolicy), 'block');
+  assert.equal(result.shouldIntervene, true);
+  assert.equal(result.reason, 'blocked_category');
+});
+
+test('deep_work and writing categories align with work-oriented catalog sites', () => {
+  const deepWork = buildDefaultPolicy('deep_work', 'strict');
+  assert.equal(evaluatePolicyDrift({
+    intent: 'focus on the project deliverable',
+    url: 'https://docs.google.com/document/d/abc',
+    events: [],
+    policy: deepWork,
+  }).shouldIntervene, false);
+
+  const writing = buildDefaultPolicy('writing', 'strict');
+  assert.equal(evaluatePolicyDrift({
+    intent: 'write the project article',
+    url: 'https://docs.google.com/document/d/abc',
+    events: [],
+    policy: writing,
+  }).shouldIntervene, false);
+});
+
+test('research intent aligns with an explicitly named YouTube documentation destination', () => {
+  const policy = buildDefaultPolicy('research', 'balanced');
+  const result = evaluatePolicyDrift({
+    intent: 'research YouTube API documentation',
+    url: 'https://m.youtube.com/developers',
+    events: [],
+    policy,
+  });
+  assert.equal(result.shouldIntervene, false);
+});
+
+test('keyword alignment uses token boundaries', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  const result = evaluatePolicyDrift({
+    intent: 'plan the work',
+    url: 'https://example.com/planning',
+    events: [],
+    policy,
+  });
+  assert.equal(result.shouldIntervene, false);
+  assert.equal(result.reason, 'low_confidence');
+  assert.deepEqual(intentTerms('plan the work'), ['plan', 'work']);
+  assert.notEqual(classifyIntentCategory('planning').categoryId, 'deep_work');
 });
 
 test('3+ unrelated events in 2 minutes boosts score by at least 0.35', () => {

@@ -141,9 +141,7 @@ export function classifyIntentCategory(intentText) {
 
   for (const cat of INTENT_CATEGORIES) {
     const keywordSet = new Set(cat.keywords);
-    const matched = tokens.filter(t =>
-      keywordSet.has(t) || cat.keywords.some(k => t.length > 4 && (k.startsWith(t) || t.startsWith(k)))
-    );
+    const matched = tokens.filter(t => keywordSet.has(t));
     const score = matched.length / Math.max(tokens.length, 1);
     if (score > bestScore) {
       bestScore = score;
@@ -470,23 +468,146 @@ export const SITE_CATEGORIES = [
   },
 ];
 
-export const DOMAIN_TO_CATEGORY = new Map();
+function normalizeHostname(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .replace(/\.$/, '');
+}
+
+function normalizePath(pathname) {
+  if (!pathname) return '';
+  const path = String(pathname).split(/[?#]/, 1)[0];
+  if (!path || path === '/') return '';
+  return `/${path.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+}
+
+function parseDomainInput(value, pathname = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return { hostname: '', pathname: '' };
+
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      return { hostname: normalizeHostname(parsed.hostname), pathname: normalizePath(parsed.pathname) };
+    } catch {
+      return { hostname: '', pathname: '' };
+    }
+  }
+
+  const withoutQuery = raw.split(/[?#]/, 1)[0];
+  const slash = withoutQuery.indexOf('/');
+  const host = slash >= 0 ? withoutQuery.slice(0, slash) : withoutQuery;
+  const path = slash >= 0 ? withoutQuery.slice(slash) : pathname;
+  return { hostname: normalizeHostname(host), pathname: normalizePath(path) };
+}
+
+function hostnameSuffixes(hostname) {
+  const labels = normalizeHostname(hostname).split('.').filter(Boolean);
+  return labels.map((_, index) => labels.slice(index).join('.'));
+}
+
+function catalogPathRule(rawDomain) {
+  const parsed = parseDomainInput(rawDomain);
+  return {
+    hostname: parsed.hostname,
+    path: parsed.pathname,
+    pathPattern: null,
+  };
+}
+
+function catalogPathPattern(rawPattern) {
+  const raw = String(rawPattern || '').replace(/^https?:\/\//i, '');
+  const slash = raw.indexOf('/');
+  if (slash < 0) return catalogPathRule(raw);
+  const hostname = normalizeHostname(raw.slice(0, slash).replace(/\\\./g, '.'));
+  const source = raw.slice(slash).replace(/\\\//g, '/');
+  return {
+    hostname,
+    path: '',
+    pathPattern: new RegExp(`^${source}`, 'i'),
+  };
+}
+
+// Explicit precedence makes overlapping catalog entries deterministic. A path
+// match is always preferred before this category-level tie-breaker.
+const CATALOG_CATEGORY_PRIORITY = {
+  gambling: 100,
+  short_video: 95,
+  streaming: 90,
+  social_media: 80,
+  memes: 75,
+  gaming: 70,
+  finance: 60,
+  health: 60,
+  travel: 60,
+  sports: 60,
+  shopping: 55,
+  news: 40,
+};
+
+function chooseCatalogEntry(entries) {
+  return [...entries].sort((a, b) => (
+    (CATALOG_CATEGORY_PRIORITY[b.categoryId] || 0) - (CATALOG_CATEGORY_PRIORITY[a.categoryId] || 0)
+    || a.categoryId.localeCompare(b.categoryId)
+  ))[0] || null;
+}
+
+const DOMAIN_CATALOG = [];
 for (const cat of SITE_CATEGORIES) {
   for (const domain of cat.domains) {
-    const normalized = String(domain).replace(/^www\./, '').toLowerCase();
-    if (normalized && !DOMAIN_TO_CATEGORY.has(normalized)) {
-      DOMAIN_TO_CATEGORY.set(normalized, cat.id);
-    }
+    const rule = catalogPathRule(domain);
+    if (rule.hostname) DOMAIN_CATALOG.push({ ...rule, categoryId: cat.id });
+  }
+  for (const pathPattern of cat.pathPatterns || []) {
+    const rule = catalogPathPattern(pathPattern);
+    if (rule.hostname) DOMAIN_CATALOG.push({ ...rule, categoryId: cat.id });
   }
 }
 
-export function getSiteCategory(hostname) {
-  if (!hostname) return null;
-  const normalized = String(hostname).replace(/^www\./, '').toLowerCase();
-  const categoryId = DOMAIN_TO_CATEGORY.get(normalized);
-  if (!categoryId) return null;
-  const cat = SITE_CATEGORIES.find(c => c.id === categoryId);
-  return cat ? { categoryId, label: cat.label } : null;
+export const DOMAIN_TO_CATEGORY = new Map();
+for (const hostname of new Set(DOMAIN_CATALOG.map(entry => entry.hostname))) {
+  const entries = DOMAIN_CATALOG.filter(entry => entry.hostname === hostname && !entry.path && !entry.pathPattern);
+  const fallback = DOMAIN_CATALOG.filter(entry => entry.hostname === hostname);
+  const chosen = chooseCatalogEntry(entries.length > 0 ? entries : fallback);
+  if (chosen) DOMAIN_TO_CATEGORY.set(hostname, chosen.categoryId);
+}
+for (const entry of DOMAIN_CATALOG.filter(candidate => candidate.path && !candidate.pathPattern)) {
+  const key = `${entry.hostname}${entry.path}`;
+  const sameRule = DOMAIN_CATALOG.filter(candidate => (
+    candidate.hostname === entry.hostname && candidate.path === entry.path && !candidate.pathPattern
+  ));
+  const chosen = chooseCatalogEntry(sameRule);
+  if (chosen) DOMAIN_TO_CATEGORY.set(key, chosen.categoryId);
+}
+
+function matchesCatalogPath(entry, pathname) {
+  if (entry.pathPattern) return entry.pathPattern.test(pathname || '');
+  if (!entry.path) return true;
+  return pathname === entry.path || pathname.startsWith(`${entry.path}/`);
+}
+
+export function getSiteCategory(hostname, pathname = '') {
+  const location = parseDomainInput(hostname, pathname);
+  if (!location.hostname) return null;
+
+  for (const suffix of hostnameSuffixes(location.hostname)) {
+    const entries = DOMAIN_CATALOG.filter(entry => entry.hostname === suffix);
+    if (entries.length === 0) continue;
+
+    const pathMatches = entries.filter(entry => (entry.path || entry.pathPattern)
+      && matchesCatalogPath(entry, location.pathname));
+    const candidates = pathMatches.length > 0
+      ? pathMatches
+      : entries.filter(entry => !entry.path && !entry.pathPattern);
+    const chosen = chooseCatalogEntry(candidates);
+    if (chosen) {
+      const cat = SITE_CATEGORIES.find(c => c.id === chosen.categoryId);
+      return cat ? { categoryId: chosen.categoryId, label: cat.label } : null;
+    }
+  }
+  return null;
 }
 
 // ── Policy schema + builders ──────────────────────────────────────────
@@ -585,23 +706,28 @@ export function mergePolicyWithIntent(intentText, existingPolicy = null) {
   return base;
 }
 
-function normalizeHostname(h) {
-  return String(h || '').replace(/^www\./, '').toLowerCase();
+function matchesCustomDomain(hostname, domains) {
+  const host = normalizeHostname(hostname);
+  if (!host || !Array.isArray(domains)) return false;
+  return domains.some((domain) => {
+    const rule = parseDomainInput(domain).hostname;
+    return rule && (host === rule || host.endsWith(`.${rule}`));
+  });
 }
 
 export function resolveDomainPolicy(hostname, policy) {
   try {
     if (!policy || typeof policy !== 'object') return 'neutral';
-    const normalized = normalizeHostname(hostname);
-    if (!normalized) return 'neutral';
+    const location = parseDomainInput(hostname);
+    if (!location.hostname) return 'neutral';
 
     const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
     const blockList = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [];
 
-    if (allowList.some(d => normalizeHostname(d) === normalized)) return 'allow';
-    if (blockList.some(d => normalizeHostname(d) === normalized)) return 'block';
+    if (matchesCustomDomain(location.hostname, blockList)) return 'block';
+    if (matchesCustomDomain(location.hostname, allowList)) return 'allow';
 
-    const lookup = getSiteCategory(normalized);
+    const lookup = getSiteCategory(location.hostname, location.pathname);
     if (!lookup) return 'neutral';
     return policy.categoryPolicies?.[lookup.categoryId] || 'neutral';
   } catch {
@@ -612,22 +738,20 @@ export function resolveDomainPolicy(hostname, policy) {
 export function getEffectiveBlockList(policy) {
   if (!policy || typeof policy !== 'object') return [];
   const blocked = new Set();
-  const allowSet = new Set(
-    (Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : []).map(normalizeHostname)
-  );
+  const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
 
   for (const cat of SITE_CATEGORIES) {
     if (policy.categoryPolicies?.[cat.id] === 'block') {
       for (const domain of cat.domains) {
-        const n = normalizeHostname(domain);
-        if (!allowSet.has(n)) blocked.add(n);
+        const n = parseDomainInput(domain).hostname;
+        if (n && !matchesCustomDomain(n, allowList)) blocked.add(n);
       }
     }
   }
 
   for (const d of (Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [])) {
-    const n = normalizeHostname(d);
-    if (!allowSet.has(n)) blocked.add(n);
+    const n = parseDomainInput(d).hostname;
+    if (n) blocked.add(n);
   }
 
   return [...blocked];
@@ -639,7 +763,8 @@ function parseUrl(url) {
   try {
     const parsed = new URL(url);
     return {
-      hostname: parsed.hostname.replace(/^www\./, '').toLowerCase(),
+      hostname: normalizeHostname(parsed.hostname),
+      pathname: normalizePath(parsed.pathname),
       text: `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase(),
     };
   } catch {
@@ -656,7 +781,8 @@ export function intentTerms(intent) {
 function isKeywordAligned(url, terms) {
   const parsed = parseUrl(url);
   if (!parsed || terms.length === 0) return false;
-  return terms.some(t => parsed.text.includes(t));
+  const urlTokens = tokenize(parsed.text);
+  return terms.some(term => urlTokens.includes(term));
 }
 
 // Category-aware alignment: some intent categories have a natural set of site
@@ -664,8 +790,10 @@ function isKeywordAligned(url, terms) {
 const CATEGORY_ALIGNMENT = {
   job_search:          ['job_boards', 'professional_network'],
   coding:              ['code_forge', 'documentation', 'ai_tools'],
+  deep_work:           ['documentation', 'code_forge', 'productivity', 'ai_tools'],
   research:            ['documentation', 'news', 'forums'],
   learning:            ['documentation', 'code_forge', 'ai_tools'],
+  writing:             ['documentation', 'productivity', 'ai_tools'],
   admin:               ['email', 'messaging', 'productivity'],
   communication:       ['messaging', 'email'],
   creative:            ['productivity', 'ai_tools'],
@@ -674,9 +802,9 @@ const CATEGORY_ALIGNMENT = {
   entertainment_allowed: ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
 };
 
-function isCategoryAligned(hostname, intentCategoryId) {
+function isCategoryAligned(hostname, pathname, intentCategoryId) {
   if (!intentCategoryId || !hostname) return false;
-  const siteCat = getSiteCategory(hostname);
+  const siteCat = getSiteCategory(hostname, pathname);
   if (!siteCat) return false;
   const aligned = CATEGORY_ALIGNMENT[intentCategoryId] || [];
   return aligned.includes(siteCat.categoryId);
@@ -692,13 +820,16 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
   const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
     ? policy
     : buildDefaultPolicy('deep_work', 'balanced');
+  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains);
+  const customAllow = !customBlock && matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains);
+  if (customAllow) return true;
   const terms = intentTerms(intent);
   const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
+  const categoryAligned = isCategoryAligned(parsed.hostname, parsed.pathname, safePolicy.intentCategoryId);
   if (keywordAligned || categoryAligned) return true;
 
   const related = Array.isArray(relatedHostnames) ? relatedHostnames : [];
-  const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+  const host = parsed.hostname;
   for (const raw of related) {
     const r = String(raw || '').replace(/^www\./, '').toLowerCase();
     if (!r) continue;
@@ -738,14 +869,32 @@ export function evaluatePolicyDrift({
 
   const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
   const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
+  const categoryAligned = isCategoryAligned(parsed.hostname, parsed.pathname, safePolicy.intentCategoryId);
   const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)
     && !keywordAligned && !categoryAligned;
   const isAligned = keywordAligned || categoryAligned || relatedAligned;
+  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains);
+  const customAllow = !customBlock && matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains);
+
+  // Custom rules are explicit user decisions: blocks win over allows, and an
+  // allowed host is not reconsidered by later heuristic signals.
+  if (customBlock) {
+    signals.push('blocked_custom_domain');
+    return {
+      shouldIntervene: true,
+      score: 1,
+      reason: 'blocked_category',
+      reasonLabel: REASON_LABELS.blocked_category,
+      signals,
+    };
+  }
+  if (customAllow) {
+    return { shouldIntervene: false, score: 0, reason: 'custom_allow', reasonLabel: '', signals };
+  }
 
   // Immediate block: domain is in a blocked category and not aligned with intent
   if (domainDecision === 'block' && !isAligned) {
-    const siteCat = getSiteCategory(parsed.hostname);
+    const siteCat = getSiteCategory(parsed.hostname, parsed.pathname);
     signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');
     const intentCat = INTENT_CATEGORIES.find(c => c.id === safePolicy.intentCategoryId);
     const reasonLabel = (siteCat && intentCat)
@@ -771,18 +920,27 @@ export function evaluatePolicyDrift({
 
   const recentEvents = events.filter(e => now - e.timestamp <= 2 * 60 * 1000);
   const unrelated = recentEvents.filter(e => {
+    if (!['PAGE_LOAD', 'SPA_NAVIGATION', 'TAB_SWITCH'].includes(e.actionType)) return false;
     if (!e.url) return false;
     const ep = parseUrl(e.url);
-    return ep && !isKeywordAligned(e.url, terms) && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
+    return ep && !isKeywordAligned(e.url, terms)
+      && !isCategoryAligned(ep.hostname, ep.pathname, safePolicy.intentCategoryId);
   });
   const tabSwitches = recentEvents.filter(e => e.actionType === 'TAB_SWITCH').length;
   const sameDomainLoads = recentEvents.filter(e => {
+    if (e.actionType !== 'PAGE_LOAD') return false;
     const ep = parseUrl(e.url);
     return ep && ep.hostname === parsed.hostname;
   }).length;
-  const dwellForUrl = recentEvents
-    .filter(e => e.actionType === 'PAGE_DWELL' && e.url === url)
-    .reduce((t, e) => t + (e.dwellMs || 0), 0);
+  const dwellEvents = recentEvents.filter(e => e.actionType === 'PAGE_DWELL' && e.url === url);
+  const hasDwellDeltas = dwellEvents.some(e => typeof e.dwellDeltaMs === 'number');
+  const dwellForUrl = hasDwellDeltas
+    ? dwellEvents.reduce((total, event) => (
+      total + (typeof event.dwellDeltaMs === 'number' ? Math.max(0, event.dwellDeltaMs) : 0)
+    ), 0)
+    : dwellEvents.reduce((max, event) => (
+      Math.max(max, typeof event.dwellMs === 'number' ? event.dwellMs : 0)
+    ), 0);
 
   // +0.1 base for being on an unaligned domain
   let score = isAligned ? 0 : 0.1;

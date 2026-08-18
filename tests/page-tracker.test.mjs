@@ -142,6 +142,31 @@ test('createPageTracker reports dwell snapshots', () => {
   assert.ok(reports.length >= 2);
 });
 
+test('repeated dwell snapshots carry only the new dwell delta', () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => reports.push(payload),
+    getLocation: () => 'https://example.com/static',
+    isVisible: () => true,
+    now: () => now,
+    reportIntervalMs: 60_000,
+  });
+
+  tracker.start();
+  now = 59_000;
+  tracker.report('PAGE_DWELL');
+  now = 60_000;
+  tracker.report('PAGE_DWELL');
+
+  assert.equal(reports[0].dwellMs, 59_000);
+  assert.equal(reports[0].dwellDeltaMs, 59_000);
+  assert.equal(reports[1].dwellMs, 60_000);
+  assert.equal(reports[1].dwellDeltaMs, 1_000);
+  tracker.stop();
+});
+
 test('classic page tracker refuses a pre-existing global API property', async () => {
   await assert.rejects(
     loadClassicScript(new URL('../page-tracker.js', import.meta.url), {
