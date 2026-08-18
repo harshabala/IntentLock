@@ -61,8 +61,9 @@ test('failed final flushes are retried so later dwell can be persisted', async (
         dwellDeltaMs: 4_000,
         sessionId: extra.sessionId,
         generation: extra.generation,
-        flushRequestId: extra.flushRequestId,
-      });
+        flushCorrelationId: extra.flushCorrelationId,
+        reportId: 'report-later',
+      }).then((result) => ({ receiptId: result.response.requestId }));
     },
   };
 
@@ -106,6 +107,7 @@ test('failed final flushes are retried so later dwell can be persisted', async (
   assert.equal(first.status, 'error');
   assert.equal(second.status, 'ok');
   assert.equal(second.persisted, true);
+  assert.equal(second.receiptId, 'report-later');
   assert.equal(flushAttempts, 2);
   assert.equal(contentEvents.length, 1);
   assert.equal(contentEvents[0].dwellDeltaMs, 4_000);

@@ -858,6 +858,62 @@ test('session finalization flushes unreported tracker dwell into metrics and his
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
 });
 
+test('partial multi-tab finalization preserves later dwell on an already flushed tab', async () => {
+  const firstTabUrl = 'https://docs.example.com/partial-tab-one';
+  const secondTabUrl = 'https://docs.example.com/partial-tab-two';
+  trackedTabs = [
+    { id: 21, url: firstTabUrl },
+    { id: 22, url: secondTabUrl },
+  ];
+  tabUrls.set(21, firstTabUrl);
+  tabUrls.set(22, secondTabUrl);
+  finalDwellPayloads.set(21, {
+    actionType: 'PAGE_DWELL',
+    url: firstTabUrl,
+    dwellMs: 5_000,
+    dwellDeltaMs: 5_000,
+  });
+  finalDwellPayloads.set(22, {
+    actionType: 'PAGE_DWELL',
+    url: secondTabUrl,
+    dwellMs: 2_000,
+    dwellDeltaMs: 2_000,
+  });
+  flushBehaviors.set(22, 'reject');
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'balanced'),
+    activeSession: makeSession('partial-multi-tab-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const firstEnd = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'partial-multi-tab-session',
+  });
+  assert.equal(firstEnd.status, 'error');
+  assert.equal(storageData.activeSession.metrics.activeMs, 5_000);
+
+  flushBehaviors.delete(22);
+  finalDwellPayloads.set(21, {
+    actionType: 'PAGE_DWELL',
+    url: firstTabUrl,
+    dwellMs: 8_000,
+    dwellDeltaMs: 3_000,
+  });
+  const secondEnd = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'partial-multi-tab-session',
+  });
+
+  trackedTabs = [];
+  finalDwellPayloads.clear();
+  flushBehaviors.clear();
+  assert.equal(secondEnd.status, 'ok');
+  assert.equal(secondEnd.session.activeMs, 10_000);
+  assert.equal(storageData.sessionHistory.at(-1).activeMs, 10_000);
+});
+
 test('retrying a one-sided final dwell write does not duplicate metrics or events', async () => {
   const url = 'https://docs.example.com/one-sided-final-dwell';
   const generation = getStorageGeneration();

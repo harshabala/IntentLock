@@ -225,6 +225,49 @@ test('failed dwell persistence keeps the delta available for a retry', async () 
   tracker.stop();
 });
 
+test('final flush receipt ids are stable for retries and change for later dwell', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let attempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      attempts += 1;
+      return attempts === 1 ? Promise.reject(new Error('flush write failed')) : Promise.resolve();
+    },
+    getLocation: () => 'https://example.com/receipt-id',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.flush({
+    sessionId: 'receipt-session',
+    generation: 1,
+    flushCorrelationId: 'flush-1',
+  }), /flush write failed/);
+  await tracker.flush({
+    sessionId: 'receipt-session',
+    generation: 1,
+    flushCorrelationId: 'flush-2',
+  });
+  now = 8_000;
+  await tracker.flush({
+    sessionId: 'receipt-session',
+    generation: 1,
+    flushCorrelationId: 'flush-3',
+  });
+
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.notEqual(reports[1].reportId, reports[2].reportId);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 3_000);
+  tracker.stop();
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];

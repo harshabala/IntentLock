@@ -48,7 +48,14 @@
     let reportTail = Promise.resolve();
     let reportQueuePending = false;
     let reportQueueVersion = 0;
+    let reportSequence = 0;
+    let pendingFinalFlushJob = null;
     const cleanups = [];
+
+    function createReportId() {
+      reportSequence += 1;
+      return `report-${Date.now().toString(36)}-${reportSequence.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
 
     const isActive = () => isVisible() && !idle;
 
@@ -75,6 +82,8 @@
         extra,
         actionType,
         reportGeneration: pageGeneration,
+        reportId: createReportId(),
+        isFinalFlush: typeof extra?.flushCorrelationId === 'string',
       };
     }
 
@@ -103,6 +112,11 @@
         dwellDeltaMs,
         ...job.extra,
       };
+      if (job.isFinalFlush) payload.reportId = job.reportId;
+      const handleFailure = (error) => {
+        if (job.isFinalFlush) pendingFinalFlushJob = job;
+        throw error;
+      };
       const result = onReport(payload);
       const completeReport = (value) => {
         const error = reportResultError(value);
@@ -110,12 +124,28 @@
         if (job.reportGeneration === pageGeneration) {
           lastReportedActiveMs = Math.max(lastReportedActiveMs, job.data.dwellMs);
         }
+        if (pendingFinalFlushJob === job) pendingFinalFlushJob = null;
+        if (
+          pendingFinalFlushJob &&
+          !job.isFinalFlush &&
+          job.reportGeneration === pendingFinalFlushJob.reportGeneration &&
+          job.data.dwellMs >= pendingFinalFlushJob.data.dwellMs
+        ) {
+          pendingFinalFlushJob = null;
+        }
         return value;
       };
+      const settleReport = (value) => {
+        try {
+          return completeReport(value);
+        } catch (error) {
+          return handleFailure(error);
+        }
+      };
       if (result && typeof result.then === 'function') {
-        return Promise.resolve(result).then(completeReport);
+        return Promise.resolve(result).then(settleReport, handleFailure);
       }
-      return completeReport(result);
+      return settleReport(result);
     }
 
     function finishReportQueue(version) {
@@ -124,8 +154,7 @@
       reportTail = Promise.resolve();
     }
 
-    function report(actionType, extra = {}, urlOverride = null) {
-      const job = createReportJob(actionType, extra, urlOverride);
+    function enqueueReportJob(job) {
       if (reportQueuePending) {
         const version = ++reportQueueVersion;
         const queued = reportTail.catch(() => {}).then(() => sendReport(job));
@@ -150,12 +179,30 @@
       return result;
     }
 
+    function report(actionType, extra = {}, urlOverride = null, jobOverride = null) {
+      return enqueueReportJob(jobOverride || createReportJob(actionType, extra, urlOverride));
+    }
+
     function flush(extra = {}) {
       if (!started) return Promise.resolve({ flushed: false });
       if (flushPromise) return flushPromise;
+      const retryJob = pendingFinalFlushJob &&
+        pendingFinalFlushJob.reportGeneration === pageGeneration &&
+        pendingFinalFlushJob.extra?.sessionId === extra.sessionId &&
+        pendingFinalFlushJob.extra?.generation === extra.generation
+        ? pendingFinalFlushJob
+        : null;
       try {
-        flushPromise = Promise.resolve(report('PAGE_DWELL', extra))
-          .then(() => ({ flushed: true }))
+        flushPromise = Promise.resolve(report(
+          'PAGE_DWELL',
+          retryJob ? retryJob.extra : extra,
+          null,
+          retryJob,
+        ))
+          .then((result) => ({
+            flushed: true,
+            receiptId: result?.response?.requestId || result?.receiptId || null,
+          }))
           .finally(() => {
             flushPromise = null;
           });

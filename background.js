@@ -271,8 +271,11 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
   }
   const flushTabs = (Array.isArray(tabs) ? tabs : [])
     .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url));
-  const results = await Promise.all(flushTabs.map((tab) => {
-    const requestId = `${sessionId}:${tab.id}`;
+  const flushRequests = flushTabs.map((tab) => ({
+    tab,
+    requestId: `${sessionId}:${tab.id}:${createNonce()}`,
+  }));
+  const results = await Promise.all(flushRequests.map(({ tab, requestId }) => {
     return sendTabMessageBounded(tab.id, {
       type: 'FLUSH_DWELL',
       sessionId,
@@ -282,7 +285,7 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
   }));
   const failures = results.reduce((failed, result, index) => {
     const response = result?.response;
-    const requestId = `${sessionId}:${flushTabs[index].id}`;
+    const { tab, requestId } = flushRequests[index];
     const acknowledged = !result?.error &&
       response?.status === 'ok' &&
       response.persisted === true &&
@@ -294,7 +297,7 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
       /page tracking is not active/i.test(response.message || '');
     if (!acknowledged && !noReceiver && !inactiveTracker) {
       failed.push({
-        tabId: flushTabs[index].id,
+        tabId: tab.id,
         message: result?.error?.message || response?.message || 'Persistence was not acknowledged.',
       });
     }

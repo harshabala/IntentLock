@@ -63,15 +63,16 @@ function flushFinalDwell(sessionId, generation, requestId) {
   const flushPromise = Promise.resolve(pageTracker.flush({
     sessionId,
     generation,
-    flushRequestId: requestId,
+    flushCorrelationId: requestId,
   }))
-    .then(() => ({
+    .then((result) => ({
       status: 'ok',
       flushed: true,
       persisted: true,
       sessionId,
       generation,
       requestId,
+      receiptId: result?.receiptId || null,
     }))
     .catch((error) => ({
       status: 'error',
@@ -101,7 +102,16 @@ function flushFinalDwell(sessionId, generation, requestId) {
 function ensureTracker() {
   if (pageTracker) return pageTracker;
   pageTracker = createPageTracker({
-    onReport: (payload) => sendContentEvent(payload, Boolean(payload.flushRequestId)),
+    onReport: (payload) => {
+      if (typeof payload.flushCorrelationId === 'string') {
+        const { flushCorrelationId, reportId, ...eventPayload } = payload;
+        return sendContentEvent({
+          ...eventPayload,
+          flushRequestId: reportId || flushCorrelationId,
+        }, true);
+      }
+      return sendContentEvent(payload, Boolean(payload.flushRequestId));
+    },
   });
   return pageTracker;
 }
