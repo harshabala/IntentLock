@@ -6,7 +6,7 @@ export const ACTIVATION_EVENT = 'session_report_viewed_after_10_min_session';
 export const ACTIVATION_MIN_SESSION_MS = 10 * 60 * 1000;
 export const MAX_DOMAIN_ENTRIES = 50;
 
-export const PRIVACY_COPY = 'Stored only on this device. Never uploaded.';
+export const PRIVACY_COPY = 'Stored locally by default. An enabled remote provider receives minimized intent context.';
 export const ON_INTENT_METHOD_COPY =
   "On-intent % is time on sites that matched your intent policy vs total active browsing in this session. " +
   "It is an estimate from active-tab time — heuristics don't need an API key.";

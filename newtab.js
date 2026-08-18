@@ -24,6 +24,7 @@ import {
   validateApiKey,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
+import { sanitizeSessionHistory } from './privacy-utils.js';
 import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
@@ -32,6 +33,26 @@ import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
 } from './session-metrics.js';
+import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+
+let dataDeletionInProgress = false;
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED') {
+    dataDeletionInProgress = true;
+    beginStorageDeletion();
+  }
+  if (message?.type === 'DATA_DELETED') {
+    dataDeletionInProgress = false;
+    endStorageDeletion();
+  }
+});
+
+function sanitizeStoredHistory(rawHistory) {
+  const raw = Array.isArray(rawHistory) ? rawHistory : [];
+  const sanitized = sanitizeSessionHistory(raw);
+  return sanitized;
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -170,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (wantReport) {
-      const history = result.sessionHistory || [];
+      const history = sanitizeStoredHistory(result.sessionHistory);
       const last = history.length > 0 ? history[history.length - 1] : null;
       if (last) {
         showSummary(container, last);
@@ -199,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const oldSession = changes.activeSession.oldValue;
         if (oldSession && oldSession.isActive) {
           chrome.storage.local.get(['sessionHistory'], (result) => {
-            const history = result.sessionHistory || [];
+            const history = sanitizeStoredHistory(result.sessionHistory);
             const lastSession = history.find(h => h.id === oldSession.id);
             if (lastSession) {
               const endedSession = {
@@ -482,7 +503,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const currentSession = result.activeSession;
           if (currentSession) {
             currentSession.intent = newIntent;
-            chrome.storage.local.set({ activeSession: currentSession });
+            if (!dataDeletionInProgress) chrome.storage.local.set({ activeSession: currentSession });
           }
         });
         intentTextElement.textContent = newIntent;
@@ -496,7 +517,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function endSession(container, session) {
     if (timerInterval) clearInterval(timerInterval);
 
-    chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION' }, (response) => {
+    chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, (response) => {
       chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
         const endedSession = (response && response.session) ? response.session : session;
         showSummary(container, endedSession);
@@ -897,22 +918,32 @@ document.addEventListener('DOMContentLoaded', () => {
           clearFieldError(input);
 
           if (heuristicsInput.checked) {
+            if (dataDeletionInProgress) {
+              resetContinueButton();
+              return;
+            }
             continueBtn.disabled = true;
             continueBtn.textContent = 'Saving...';
 
             const clearStoredKey = (done) => {
+              if (dataDeletionInProgress) return;
               if (chrome.storage.session) {
                 chrome.storage.session.remove(['llmApiKey', 'openaiApiKey'], () => {
+                  if (dataDeletionInProgress) return;
                   chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
                 });
               } else {
-                chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+                if (!dataDeletionInProgress) {
+                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
+                }
               }
             };
 
             clearStoredKey(() => {
+              if (dataDeletionInProgress) return;
               chrome.storage.local.set({ llmProviderConfig: { providerId: 'none' } }, () => {
-                if (chrome.runtime.lastError) {
+                if (dataDeletionInProgress || chrome.runtime.lastError) {
+                  if (dataDeletionInProgress) return;
                   logError({
                     type: ERROR_TYPES.STORAGE,
                     message: `Could not save provider settings. ${chrome.runtime.lastError.message}`,
@@ -981,7 +1012,12 @@ document.addEventListener('DOMContentLoaded', () => {
           };
 
           const saveProvider = () => {
+            if (dataDeletionInProgress) {
+              failSetup('Data deletion is in progress. Please try again afterward.');
+              return;
+            }
             chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
+              if (dataDeletionInProgress) return;
               if (chrome.runtime.lastError) {
                 failSetup(`Could not save provider settings. ${chrome.runtime.lastError.message}`);
                 return;
@@ -991,8 +1027,13 @@ document.addEventListener('DOMContentLoaded', () => {
           };
 
           if (apiKey) {
+            if (dataDeletionInProgress) {
+              failSetup('Data deletion is in progress. Please try again afterward.');
+              return;
+            }
             const storageArea = chrome.storage.session || chrome.storage.local;
             storageArea.set({ llmApiKey: apiKey }, () => {
+              if (dataDeletionInProgress) return;
               if (chrome.runtime.lastError) {
                 failSetup(`Could not save API key. ${chrome.runtime.lastError.message}`);
                 return;
@@ -1003,10 +1044,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const clearStoredKey = (done) => {
               if (chrome.storage.session) {
                 chrome.storage.session.remove(['llmApiKey'], () => {
+                  if (dataDeletionInProgress) return;
                   chrome.storage.local.remove(['llmApiKey'], done);
                 });
               } else {
-                chrome.storage.local.remove(['llmApiKey'], done);
+                if (!dataDeletionInProgress) {
+                  chrome.storage.local.remove(['llmApiKey'], done);
+                }
               }
             };
             clearStoredKey(saveProvider);
@@ -1039,7 +1083,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function finishOnboarding() {
+      if (dataDeletionInProgress) return;
       chrome.storage.local.set({ hasSeenOnboarding: true }, () => {
+        if (dataDeletionInProgress) return;
         if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
         showNewSessionForm(container);
       });
@@ -1121,7 +1167,13 @@ document.addEventListener('DOMContentLoaded', () => {
         policy.setupCompleted = true;
         saveBtn.disabled = true;
         saveBtn.textContent = 'Saving...';
+        if (dataDeletionInProgress) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'SAVE POLICY';
+          return;
+        }
         chrome.storage.local.set({ heuristicPolicy: policy }, () => {
+          if (dataDeletionInProgress) return;
           if (chrome.runtime.lastError) {
             statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
             statusEl.classList.remove('hidden');
@@ -1387,6 +1439,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedPreset = presetInput.value;
         const selectedStrictness = strictnessInput.value;
         chrome.storage.local.get(['heuristicPolicy'], (res) => {
+          if (dataDeletionInProgress) return;
           const existingPolicy = res.heuristicPolicy || null;
           if (!existingPolicy || existingPolicy.intentCategoryId !== selectedPreset || existingPolicy.strictness !== selectedStrictness) {
             const updatedPolicy = buildDefaultPolicy(selectedPreset, selectedStrictness);
@@ -1396,7 +1449,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (existingPolicy && existingPolicy.customAllowDomains) {
               updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
             }
-            chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
+            if (!dataDeletionInProgress) {
+              chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
+            }
             chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
           }
         });
@@ -1434,12 +1489,18 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
-        chrome.storage.local.set({ activeSession: sessionData }, () => {
-          if (chrome.runtime.lastError) {
+        if (dataDeletionInProgress) {
+          setFieldError(intentInput, 'Data deletion is in progress. Please try again afterward.');
+          startBtn.disabled = false;
+          startBtn.textContent = 'Lock in';
+          return;
+        }
+        chrome.runtime.sendMessage({ type: 'SESSION_STARTED', session: sessionData }, (response) => {
+          if (chrome.runtime.lastError || response?.status !== 'ok') {
             logError({
-              type: ERROR_TYPES.STORAGE,
-              message: 'Could not start session.',
-              details: { error: chrome.runtime.lastError.message },
+              type: ERROR_TYPES.RUNTIME,
+              message: response?.message || 'Could not start session.',
+              details: { error: chrome.runtime.lastError?.message },
               source: 'session_start',
             });
             setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
@@ -1447,17 +1508,7 @@ document.addEventListener('DOMContentLoaded', () => {
             startBtn.textContent = 'Lock in';
             return;
           }
-          chrome.runtime.sendMessage({ type: 'SESSION_STARTED', session: sessionData }, () => {
-            if (chrome.runtime.lastError) {
-              logError({
-                type: ERROR_TYPES.RUNTIME,
-                message: 'Session saved but background sync failed.',
-                details: { error: chrome.runtime.lastError.message },
-                source: 'session_start',
-              });
-            }
-            showActiveState(sessionData);
-          });
+          showActiveState(sessionData);
         });
       }).catch((err) => {
         logError({

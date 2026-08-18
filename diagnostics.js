@@ -18,6 +18,12 @@ import {
   clearErrorLog,
   formatErrorLogForExport,
 } from './error-log.js';
+import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED') beginStorageDeletion();
+  if (message?.type === 'DATA_DELETED') endStorageDeletion();
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   const listEl = document.getElementById('error-log-list');

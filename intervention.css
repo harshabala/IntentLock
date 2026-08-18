@@ -2,7 +2,7 @@
 .lock-container {
   position: relative;
   z-index: 1;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow, 0 12px 30px rgba(0, 0, 0, 0.24));
   animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -16,7 +16,7 @@
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
-  box-shadow: 0 0 0 2px rgba(var(--error-rgb), 0.3);
+  box-shadow: 0 0 0 2px rgba(var(--error-rgb, 244, 63, 94), 0.3);
   animation: pulseRing 2.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -81,6 +81,40 @@ body.intervention {
 
 .stagger-3 {
   animation-delay: 0.3s;
+}
+
+.intervention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.intervention-actions button {
+  min-height: 44px;
+}
+
+.related-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--text-secondary, #667085);
+}
+
+.related-toggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.transition-error {
+  min-height: 1.4em;
+  color: var(--error, #dc2626);
+}
+
+@media (max-width: 520px) {
+  .intervention-actions button {
+    flex: 1 1 100%;
+  }
 }
 
 /* Respect prefers-reduced-motion */

@@ -13,6 +13,13 @@ chrome.storage.local.get(['theme'], (result) => {
   }
 });
 
+let dataDeletionInProgress = false;
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED') dataDeletionInProgress = true;
+  if (message?.type === 'DATA_DELETED') dataDeletionInProgress = false;
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   const historyList = document.getElementById('history-list');
   const emptyState = document.getElementById('empty-state');
@@ -22,9 +29,22 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentFilter = 'all';
   let searchQuery = '';
 
-  // Load sessions
-  chrome.storage.local.get(['sessionHistory'], (result) => {
-    allSessions = result.sessionHistory || [];
+  function loadSessionHistory(callback) {
+    import('./privacy-utils.js').then(({ sanitizeSessionHistory }) => {
+      chrome.storage.local.get(['sessionHistory'], (result) => {
+        const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
+        const sanitizedHistory = sanitizeSessionHistory(rawHistory);
+        callback(sanitizedHistory);
+      });
+    }).catch((error) => {
+      console.error('Unable to sanitize session history.', error);
+      callback([]);
+    });
+  }
+
+  // Load, sanitize, and persist retention-pruned sessions.
+  loadSessionHistory((sessions) => {
+    allSessions = sessions;
 
     if (allSessions.length === 0) {
       emptyState.classList.remove('hidden');

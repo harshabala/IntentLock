@@ -40,13 +40,12 @@ All messages are plain objects `{ type: string, ...payload }`. The service worke
 |-------------|--------|-------------|
 | `SESSION_STARTED` | newtab.js | Persists new session to storage, starts time-budget alarm, clears drift cache |
 | `END_ACTIVE_SESSION` | newtab.js / popup.js | Finalises session, appends to `sessionHistory`, clears state |
-| `SESSION_CLEARED` | newtab.js / options.js | Removes active session, clears alarms and cooldowns |
+| `SESSION_CLEARED` | newtab.js / popup.js | Removes completed-session state, clears alarms and cooldowns while preserving history |
+| `DELETE_ALL_DATA` | options.js | Service worker clears local/session data behind a deletion barrier |
 | `GET_SESSION` | popup.js / newtab.js | Returns `activeSession` from storage |
 | `CONFIG_UPDATED` | options.js | Calls `reloadConfig()` — re-reads all settings from storage |
 | `CONTENT_EVENT` | content.js | Routes tab/dwell/SPA events into the active session's event log |
-| `OVERLAY_OVERRIDE` | content.js | Records override event, sets domain cooldown, hides overlay |
-| `OVERLAY_DISMISS` | content.js | Clears `interventionState`, sends `HIDE_INTERVENTION` back to tab |
-| `OVERRIDE_INTERVENTION` | intervention.js | Tab-replacement override path — same effect as `OVERLAY_OVERRIDE` |
+| `INTERVENTION_TRANSITION` | content.js / intervention.js | Nonce-bound override, related, end-session, or close-tab transition |
 | `TEST_INTERVENTION` | options.js | Fires a test intervention on the current active tab |
 | `LOG_ERROR` | any page | Appends entry to `errorLog` in storage via `error-log.js` |
 
@@ -67,8 +66,7 @@ stateDiagram-v2
     Idle --> Active : SESSION_STARTED\n(intent, timeBudget)
     Active --> Active : CONTENT_EVENT\n(tab switch, page load,\ndwell, SPA nav)
     Active --> Intervening : triggerIntervention\n(score ≥ 0.7)
-    Intervening --> Active : OVERLAY_OVERRIDE\n(reflection written,\n5-min cooldown set)
-    Intervening --> Active : OVERLAY_DISMISS\n(overlay closed, no cooldown)
+    Intervening --> Active : INTERVENTION_TRANSITION\n(override, related, end, or close)
     Active --> Idle : END_ACTIVE_SESSION\nor SESSION_CLEARED\nor keyboard shortcut ⌘⇧L
 ```
 

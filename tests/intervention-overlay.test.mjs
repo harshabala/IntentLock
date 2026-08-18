@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildOverlayStyles, createInterventionOverlay } from '../intervention-overlay.js';
+import { loadClassicScript } from './helpers/load-classic-script.mjs';
+
+const overlayRuntime = await loadClassicScript(new URL('../intervention-overlay.js', import.meta.url));
+const { buildOverlayStyles, createInterventionOverlay } = overlayRuntime.IntentLock.interventionOverlay;
 
 test('buildOverlayStyles includes core intervention layout rules', () => {
   const css = buildOverlayStyles();
@@ -8,7 +11,7 @@ test('buildOverlayStyles includes core intervention layout rules', () => {
   assert.match(css, /z-index:\s*2147483647/);
 });
 
-test('createInterventionOverlay is exported factory function', () => {
+test('classic overlay script exposes its factory through the narrow global API', () => {
   assert.equal(typeof createInterventionOverlay, 'function');
 });
 
@@ -18,4 +21,13 @@ test('createInterventionOverlay accepts onEndSession callback', () => {
   assert.doesNotThrow(() => {
     createInterventionOverlay({ onEndSession: () => { called = true; } });
   });
+});
+
+test('classic overlay refuses a pre-existing global API property', async () => {
+  await assert.rejects(
+    loadClassicScript(new URL('../intervention-overlay.js', import.meta.url), {
+      IntentLock: { interventionOverlay: { occupied: true } },
+    }),
+    /IntentLock\.interventionOverlay is already defined/,
+  );
 });

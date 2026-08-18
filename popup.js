@@ -1,4 +1,20 @@
 import { summarizeWeek, formatWeekExport, PRIVACY_COPY } from './session-metrics.js';
+import { sanitizeSessionHistory } from './privacy-utils.js';
+
+let dataDeletionInProgress = false;
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED') dataDeletionInProgress = true;
+  if (message?.type === 'DATA_DELETED') dataDeletionInProgress = false;
+});
+
+function loadSessionHistory(callback) {
+  chrome.storage.local.get(['sessionHistory'], (result) => {
+    const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
+    const sanitizedHistory = sanitizeSessionHistory(rawHistory);
+    callback(sanitizedHistory);
+  });
+}
 
 // Load and apply theme override as early as possible
 chrome.storage.local.get(['theme'], (result) => {
@@ -73,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.className = 'complete-btn';
       btn.textContent = 'End session';
       btn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION' }, () => {
+        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
           chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
             chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
             window.close();
@@ -98,8 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderWeekGlanceSection(parentContainer) {
-    chrome.storage.local.get(['sessionHistory'], (histResult) => {
-      const sessionHistory = histResult.sessionHistory || [];
+    loadSessionHistory((sessionHistory) => {
       const weekGlance = document.createElement('div');
       weekGlance.className = 'week-glance';
 

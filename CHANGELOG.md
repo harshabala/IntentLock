@@ -1,5 +1,12 @@
 # IntentLock Changelog
 
+## [1.5.1] — 2026-08-18
+
+### Fixed
+- Made the MV3 content-script dependency chain load as ordered classic scripts.
+- Added alarms permission and release checks for manifest/runtime assets.
+- Added deterministic, allowlisted GitHub Release packaging and tag/version validation.
+
 ## [1.5.0] — 2026-06-22
 
 ### Added

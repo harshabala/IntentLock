@@ -1,11 +1,21 @@
 // content.js — Page-level tracking and intervention overlay host
 
-import { createPageTracker } from './page-tracker.js';
-import { createInterventionOverlay } from './intervention-overlay.js';
+const { createPageTracker } = globalThis.IntentLock.pageTracker;
+const { createInterventionOverlay } = globalThis.IntentLock.interventionOverlay;
 
 let pageTracker = null;
 let overlay = null;
 let trackingActive = false;
+let pendingIntervention = null;
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      const error = chrome.runtime.lastError;
+      resolve({ response, error: error ? new Error(error.message) : null });
+    });
+  });
+}
 
 function sendContentEvent(payload) {
   chrome.runtime.sendMessage({
@@ -24,30 +34,56 @@ function ensureTracker() {
   return pageTracker;
 }
 
+function showTransitionError(message) {
+  if (overlay) overlay.setError(message);
+}
+
 function ensureOverlay() {
   if (!overlay) {
     overlay = createInterventionOverlay({
-      onOverride: (reflection) => {
-        chrome.runtime.sendMessage({
-          type: 'OVERLAY_OVERRIDE',
-          payload: {
-            reflection,
-            url: window.location.href,
-            pageTitle: document.title,
-          },
-        }, () => {
-          void chrome.runtime.lastError;
+      onOverride: async ({ reflection, markRelated, state }) => {
+        const result = await sendRuntimeMessage({
+          type: 'INTERVENTION_TRANSITION',
+          transition: 'override',
+          sessionId: state?.sessionId,
+          nonce: state?.nonce,
+          reflection,
+          markRelated,
         });
+        if (result.response?.ok) {
+          pendingIntervention = null;
+          overlay.hide();
+        } else {
+          showTransitionError(result.response?.error || result.error?.message || 'Unable to continue.');
+        }
       },
-      onDismiss: () => {
-        chrome.runtime.sendMessage({ type: 'OVERLAY_DISMISS' }, () => {
-          void chrome.runtime.lastError;
+      onCloseTab: async (state) => {
+        const result = await sendRuntimeMessage({
+          type: 'INTERVENTION_TRANSITION',
+          transition: 'close-tab',
+          sessionId: state?.sessionId,
+          nonce: state?.nonce,
         });
+        if (result.response?.ok) {
+          pendingIntervention = null;
+          overlay.hide();
+        } else {
+          showTransitionError(result.response?.error || result.error?.message || 'Unable to close this lock.');
+        }
       },
-      onEndSession: () => {
-        chrome.runtime.sendMessage({ type: 'OVERLAY_END_SESSION' }, () => {
-          void chrome.runtime.lastError;
+      onEndSession: async (state) => {
+        const result = await sendRuntimeMessage({
+          type: 'INTERVENTION_TRANSITION',
+          transition: 'end-session',
+          sessionId: state?.sessionId,
+          nonce: state?.nonce,
         });
+        if (result.response?.ok) {
+          pendingIntervention = null;
+          overlay.hide();
+        } else {
+          showTransitionError(result.response?.error || result.error?.message || 'Unable to end the session.');
+        }
       },
     });
   }
@@ -67,42 +103,87 @@ function stopTracking() {
 }
 
 function syncSessionState() {
-  chrome.storage.local.get(['activeSession'], (result) => {
-    if (result.activeSession?.isActive) {
+  chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+    if (result.activeSession?.isActive && result.trackingEnabled !== false) {
       startTracking();
     } else {
       stopTracking();
     }
+
+    if (result.trackingEnabled === false) {
+      if (overlay) overlay.hide();
+      pendingIntervention = null;
+      return;
+    }
+
+    sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE' }).then(({ response }) => {
+      if (response?.ok && response.state) {
+        pendingIntervention = response.state;
+        ensureOverlay().show({
+          reason: response.state.reason,
+          intent: response.state.intent || '',
+          state: response.state,
+        });
+      }
+    });
   });
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local' || !changes.activeSession) return;
-  if (changes.activeSession.newValue?.isActive) {
+  if (areaName !== 'local') return;
+  if (changes.trackingEnabled && changes.trackingEnabled.newValue === false) {
+    stopTracking();
+    if (overlay) overlay.hide();
+    pendingIntervention = null;
+  }
+  if (changes.trackingEnabled?.newValue === true) {
+    chrome.storage.local.get(['activeSession'], (result) => {
+      if (result.activeSession?.isActive) startTracking();
+    });
+  } else if (changes.activeSession?.newValue?.isActive && changes.trackingEnabled?.newValue !== false) {
     startTracking();
-  } else {
+  } else if (changes.activeSession && !changes.activeSession.newValue?.isActive) {
     stopTracking();
   }
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'SHOW_INTERVENTION') {
-    ensureOverlay().show({
-      reason: message.reason,
-      intent: message.intent,
+    chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      if (result.trackingEnabled === false || !result.activeSession?.isActive) {
+        sendResponse({ shown: false, reason: 'tracking_disabled' });
+        return;
+      }
+      pendingIntervention = message.state || pendingIntervention || {
+        sessionId: message.sessionId,
+        nonce: message.nonce,
+        reason: message.reason,
+      };
+      ensureOverlay().show({
+        reason: message.reason,
+        intent: message.intent,
+        state: pendingIntervention,
+      });
+      sendResponse({ shown: true });
     });
-    sendResponse({ shown: true });
     return true;
   }
 
   if (message.type === 'HIDE_INTERVENTION') {
     if (overlay) overlay.hide();
+    pendingIntervention = null;
     sendResponse({ hidden: true });
     return true;
   }
 
   if (message.type === 'STOP_TRACKING') {
     stopTracking();
+    sendResponse({ status: 'ok' });
+    return true;
+  }
+
+  if (message.type === 'IDLE_STATE') {
+    if (pageTracker) pageTracker.setIdle(Boolean(message.idle));
     sendResponse({ status: 'ok' });
     return true;
   }

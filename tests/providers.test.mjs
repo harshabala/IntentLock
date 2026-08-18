@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { beginStorageDeletion, endStorageDeletion } from '../storage-queue.js';
 
 let storageData = {
   errorLog: [],
@@ -93,6 +94,75 @@ test('getLlmConfig reads provider config and session API key', async () => {
   assert.equal(config.model, 'gemini-2.0-flash');
 });
 
+test('built-in provider auth mode ignores persisted tampering', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  storageData.llmProviderConfig = {
+    providerId: 'openai',
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://api.openai.com/v1/chat/completions',
+    authType: 'query',
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({ llmApiKey: 'sk-test-key' });
+  try {
+    const config = await getLlmConfig();
+    assert.equal(config.authType, 'bearer');
+  } finally {
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+  }
+});
+
+test('built-in provider keys never enter request URLs', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  const previousFetch = globalThis.fetch;
+  storageData.llmProviderConfig = {
+    providerId: 'openai',
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://api.openai.com/v1/chat/completions',
+    authType: 'query',
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({ llmApiKey: 'sk-test-key' });
+  let requestUrl = '';
+  let requestHeaders = null;
+  globalThis.fetch = async (url, options) => {
+    requestUrl = url;
+    requestHeaders = options.headers;
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '{}' } }] }) };
+  };
+  try {
+    const result = await chatCompletion('auth test');
+    assert.equal(result.ok, true);
+    assert.equal(requestUrl, 'https://api.openai.com/v1/chat/completions');
+    assert.equal(requestHeaders.Authorization, 'Bearer sk-test-key');
+    assert.equal(requestHeaders['x-api-key'], undefined);
+    assert.doesNotMatch(requestUrl, /key=/);
+  } finally {
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('getLlmConfig uses local llmApiKey fallback when session storage is empty', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousKey = storageData.llmApiKey;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  storageData.llmProviderConfig = { providerId: 'openai' };
+  storageData.llmApiKey = 'local-llm-key';
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
+  try {
+    const config = await getLlmConfig();
+    assert.equal(config.apiKey, 'local-llm-key');
+  } finally {
+    storageData.llmProviderConfig = previousConfig;
+    if (previousKey === undefined) delete storageData.llmApiKey;
+    else storageData.llmApiKey = previousKey;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+  }
+});
+
 test('chatCompletion routes Gemini requests to generateContent endpoint', async () => {
   let requestUrl = '';
   let requestBody = null;
@@ -167,4 +237,43 @@ test('cleanJsonString helper strips markdown fences and surrounding whitespaces'
     cleanJsonString('```json\n{"aligned": true}\n```'),
     '{"aligned": true}',
   );
+});
+
+test('chatCompletion does not call a provider when tracking is disabled', async () => {
+  globalThis.chrome.storage.local.get = (keys, callback) => callback({
+    trackingEnabled: false,
+    llmProviderConfig: {
+      providerId: 'ollama',
+      model: 'llama3.2',
+      baseUrl: 'http://localhost:11434/api/chat',
+    },
+  });
+  globalThis.chrome.storage.session.get = (keys, callback) => callback({});
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run');
+  };
+
+  const result = await chatCompletion('disabled');
+  assert.equal(result.error.code, 'tracking_disabled');
+  assert.equal(called, false);
+});
+
+test('chatCompletion is blocked while delete-all data is in progress', async () => {
+  beginStorageDeletion();
+  try {
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      throw new Error('fetch should not run during deletion');
+    };
+
+    const result = await chatCompletion('deletion boundary');
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'data_deletion');
+    assert.equal(called, false);
+  } finally {
+    endStorageDeletion();
+  }
 });

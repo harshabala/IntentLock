@@ -91,7 +91,7 @@ graph LR
 
     CS -->|CONTENT_EVENT\nSHOW_INTERVENTION| BG
     PT -->|PAGE_DWELL\nSPA_NAVIGATION| CS
-    OV -->|OVERLAY_OVERRIDE\nOVERLAY_DISMISS| BG
+    OV -->|INTERVENTION_TRANSITION| BG
     NT -->|SESSION_STARTED\nEND_ACTIVE_SESSION| BG
     POP -->|GET_SESSION\nSESSION_CLEARED| BG
     BG -->|CONFIG_UPDATED reload| BG
@@ -192,7 +192,7 @@ See [`docs/heuristic-policy.md`](docs/heuristic-policy.md) for the full referenc
 
 ## LLM providers
 
-Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` (cleared on browser close — never written to disk).
+Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` when available (cleared on browser close), with a local fallback only when session storage is unavailable. Remote providers receive minimized intent and origin-only context.
 
 | Provider | ID | API style | Local? |
 |----------|----|-----------|--------|
@@ -240,7 +240,7 @@ Key `chrome.storage.local` entries:
 | `interventionState` | object | Ephemeral: reason, originalUrl, mode while intervention is active |
 | `overrideCooldowns` | array | `[domain, expiryTimestamp]` pairs |
 
-`chrome.storage.session` (cleared on browser close):
+`chrome.storage.session` (cleared on browser close when available):
 
 | Key | Description |
 |-----|-------------|
@@ -260,10 +260,20 @@ node --test tests/providers.test.mjs           # provider config validation
 node --test tests/page-tracker.test.mjs        # dwell tracking + SPA detection
 node --test tests/error-log.test.mjs           # diagnostic log
 node --test tests/static-smoke.test.mjs        # manifest + asset integrity
-node --test tests/*.mjs                        # all tests
+npm test                                        # all tests
+npm run verify:static                           # static/runtime/release checks
 ```
 
-Uses Node's built-in `node:test` + `assert/strict`. No build step, no test runner to install.
+Uses Node's built-in `node:test` + `assert/strict`. No dependencies or test runner to install.
+
+To validate and build a release artifact locally:
+
+```bash
+npm run validate:version -- v1.5.1
+npm run package
+```
+
+The package command creates a deterministic ZIP containing only the extension runtime allowlist. Tests, docs, and development files stay out of the release artifact.
 
 ---
 

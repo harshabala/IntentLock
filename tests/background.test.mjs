@@ -59,7 +59,11 @@ globalThis.chrome = {
           delete sessionStorageData[k];
         }
         if (callback) callback();
-      }
+      },
+      clear: (callback) => {
+        sessionStorageData = {};
+        if (callback) callback();
+      },
     },
     local: {
       get: (keys, callback) => {
@@ -81,7 +85,11 @@ globalThis.chrome = {
           delete storageData[k];
         }
         if (callback) callback();
-      }
+      },
+      clear: (callback) => {
+        storageData = {};
+        if (callback) callback();
+      },
     }
   }
 };

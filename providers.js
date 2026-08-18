@@ -7,6 +7,8 @@ import {
   setQuotaBackoff,
   shouldLogQuotaError,
 } from './llm-backoff.js';
+import { redactSecrets } from './privacy-utils.js';
+import { isStorageDeletionActive } from './storage-queue.js';
 
 export const DEFAULT_PROVIDER_ID = 'openai';
 
@@ -88,6 +90,113 @@ export const PROVIDERS = {
 };
 
 export const PROVIDER_LIST = Object.values(PROVIDERS);
+const MAX_PROVIDER_CONCURRENCY = 2;
+const MAX_PROMPT_LENGTH = 16_000;
+const PROVIDER_TIMEOUT_MS = 10_000;
+const inFlightRequests = new Map();
+const activeProviderControllers = new Set();
+
+if (typeof chrome !== 'undefined') {
+  chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
+    if (areaName !== 'local' || changes.trackingEnabled?.newValue !== false) return;
+    activeProviderControllers.forEach((controller) => controller.abort());
+  });
+}
+
+function trackingDisabledResult(providerId) {
+  return {
+    ok: false,
+    error: {
+      code: 'tracking_disabled',
+      message: 'LLM calls are disabled while tracking is off.',
+      providerId,
+    },
+  };
+}
+
+async function assertTrackingEnabled(providerId) {
+  if (isStorageDeletionActive()) {
+    const error = new Error('LLM calls are disabled while data deletion is in progress.');
+    error.code = 'data_deletion';
+    error.providerId = providerId;
+    throw error;
+  }
+  if (await trackingIsDisabled()) {
+    const error = new Error('LLM calls are disabled while tracking is off.');
+    error.code = 'tracking_disabled';
+    error.providerId = providerId;
+    throw error;
+  }
+}
+
+async function fetchWithTimeout(url, options, timeoutMs = PROVIDER_TIMEOUT_MS) {
+  const controller = options.controller
+    || (typeof AbortController === 'function' ? new AbortController() : null);
+  const requestOptions = { ...options };
+  delete requestOptions.controller;
+  if (controller) activeProviderControllers.add(controller);
+  const timer = setTimeout(() => controller?.abort(), timeoutMs);
+  try {
+    return await fetch(url, controller ? { ...requestOptions, signal: controller.signal } : requestOptions);
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('Provider request timed out.');
+      timeoutError.code = 'provider_timeout';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (controller) activeProviderControllers.delete(controller);
+  }
+}
+
+function createProviderController() {
+  if (typeof AbortController !== 'function') return null;
+  const controller = new AbortController();
+  activeProviderControllers.add(controller);
+  return controller;
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+export function validateProviderEndpoint(providerId, baseUrl) {
+  const provider = PROVIDERS[providerId];
+  if (!provider) return 'Select a supported provider.';
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return 'Enter a valid API endpoint URL.';
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    return 'Endpoint must use HTTP(S) without embedded credentials.';
+  }
+  if (providerId === 'custom') {
+    if (!isLoopbackHostname(parsed.hostname) && parsed.protocol !== 'https:') {
+      return 'Custom cloud endpoints must use HTTPS; HTTP is allowed only for localhost.';
+    }
+    return null;
+  }
+  if (provider.isLocal) {
+    return isLoopbackHostname(parsed.hostname)
+      ? null
+      : 'Local providers must use a loopback endpoint.';
+  }
+  const expected = new URL(provider.defaultBaseUrl);
+  if (
+    parsed.origin !== expected.origin ||
+    parsed.pathname !== expected.pathname ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return 'Built-in cloud provider endpoints cannot be overridden.';
+  }
+  return null;
+}
 
 export function cleanJsonString(str) {
   if (typeof str !== 'string') return '';
@@ -156,26 +265,18 @@ async function throwApiFailure(response, providerId) {
 
 export function validateProviderConfig(config) {
   const providerId = config?.providerId || DEFAULT_PROVIDER_ID;
+  if (!PROVIDERS[providerId]) return 'Select a supported provider.';
   const provider = getProvider(providerId);
+  const baseUrl = config?.baseUrl?.trim() || provider.defaultBaseUrl;
 
   if (providerId === 'custom') {
     if (!config.customLabel?.trim()) return 'Enter a name for your custom provider.';
     if (!config.baseUrl?.trim()) return 'Enter the API endpoint URL.';
     if (!config.model?.trim()) return 'Enter the model name.';
-    try {
-      new URL(config.baseUrl.trim());
-    } catch {
-      return 'Enter a valid API endpoint URL.';
-    }
   }
 
-  if ((provider.isLocal || providerId === 'custom') && config.baseUrl?.trim()) {
-    try {
-      new URL(config.baseUrl.trim());
-    } catch {
-      return 'Enter a valid base URL.';
-    }
-  }
+  const endpointError = validateProviderEndpoint(providerId, baseUrl);
+  if (endpointError) return endpointError;
 
   return null;
 }
@@ -183,6 +284,9 @@ export function validateProviderConfig(config) {
 export function isLlmConfigured(config) {
   const providerId = config?.providerId || DEFAULT_PROVIDER_ID;
   const provider = getProvider(providerId);
+  if (validateProviderConfig({ ...config, providerId, baseUrl: config?.baseUrl || provider.defaultBaseUrl }) !== null) {
+    return false;
+  }
 
   if (providerId === 'custom') {
     if (!config.baseUrl?.trim() || !config.model?.trim()) return false;
@@ -206,7 +310,7 @@ export async function getLlmConfig() {
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(['llmProviderConfig', 'openaiApiKey'], (localRes) => {
+    chrome.storage.local.get(['llmProviderConfig', 'llmApiKey', 'openaiApiKey'], (localRes) => {
       const stored = { ...getDefaultProviderConfig(), ...(localRes?.llmProviderConfig || {}) };
       const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
       const provider = getProvider(providerId);
@@ -217,20 +321,28 @@ export async function getLlmConfig() {
           provider,
           apiKey,
           model: stored.model || provider.defaultModel,
-          baseUrl: stored.baseUrl || provider.defaultBaseUrl,
+          baseUrl: providerId === 'custom'
+            ? (stored.baseUrl || provider.defaultBaseUrl)
+            : provider.defaultBaseUrl,
           customLabel: stored.customLabel || '',
-          authType: stored.authType || provider.authType,
+          authType: providerId === 'custom'
+            ? (stored.authType || provider.authType)
+            : provider.authType,
           apiStyle: stored.apiStyle || provider.apiStyle,
         });
       };
 
       if (chrome.storage.session) {
         chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionRes) => {
-          const apiKey = sessionRes?.llmApiKey || sessionRes?.openaiApiKey || localRes?.openaiApiKey || null;
+          const apiKey = sessionRes?.llmApiKey
+            || sessionRes?.openaiApiKey
+            || localRes?.llmApiKey
+            || localRes?.openaiApiKey
+            || null;
           finish(apiKey);
         });
       } else {
-        finish(localRes?.openaiApiKey || null);
+        finish(localRes?.llmApiKey || localRes?.openaiApiKey || null);
       }
     });
   });
@@ -239,12 +351,15 @@ export async function getLlmConfig() {
 async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, authType, providerId }) {
   const headers = { 'Content-Type': 'application/json' };
   let url = baseUrl;
+  const effectiveAuthType = providerId === 'custom'
+    ? authType
+    : getProvider(providerId).authType;
 
-  if (authType === 'bearer' && apiKey) {
+  if (effectiveAuthType === 'bearer' && apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (authType === 'header' && apiKey) {
+  } else if (effectiveAuthType === 'header' && apiKey) {
     headers['x-api-key'] = apiKey;
-  } else if (authType === 'query' && apiKey) {
+  } else if (effectiveAuthType === 'query' && apiKey) {
     const sep = url.includes('?') ? '&' : '?';
     url = `${url}${sep}key=${encodeURIComponent(apiKey)}`;
   }
@@ -259,10 +374,18 @@ async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, 
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch(url, {
+  const controller = createProviderController();
+  try {
+    await assertTrackingEnabled(providerId);
+  } catch (error) {
+    if (controller) activeProviderControllers.delete(controller);
+    throw error;
+  }
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    controller,
   });
 
   if (!response.ok) {
@@ -288,10 +411,18 @@ async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens,
     body.generationConfig.responseMimeType = 'application/json';
   }
 
-  const response = await fetch(url, {
+  const controller = createProviderController();
+  try {
+    await assertTrackingEnabled(providerId);
+  } catch (error) {
+    if (controller) activeProviderControllers.delete(controller);
+    throw error;
+  }
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    controller,
   });
 
   if (!response.ok) {
@@ -313,10 +444,18 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
     body.format = 'json';
   }
 
-  const response = await fetch(baseUrl, {
+  const controller = createProviderController();
+  try {
+    await assertTrackingEnabled(providerId);
+  } catch (error) {
+    if (controller) activeProviderControllers.delete(controller);
+    throw error;
+  }
+  const response = await fetchWithTimeout(baseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    controller,
   });
 
   if (!response.ok) {
@@ -327,9 +466,34 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
   return data.message?.content ?? null;
 }
 
-export async function chatCompletion(prompt, options = {}) {
+async function chatCompletionInternal(prompt, options = {}) {
   const { jsonMode = true, maxTokens = 100, temperature = 0.1 } = options;
+  if (isStorageDeletionActive()) {
+    return {
+      ok: false,
+      error: {
+        code: 'data_deletion',
+        message: 'LLM calls are disabled while data deletion is in progress.',
+      },
+    };
+  }
   const config = await getLlmConfig();
+
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    const tracking = await new Promise((resolve) => {
+      chrome.storage.local.get(['trackingEnabled'], (result) => resolve(result?.trackingEnabled));
+    });
+    if (tracking === false) {
+      return trackingDisabledResult(config.providerId);
+    }
+  }
+
+  const configError = validateProviderConfig(config);
+  if (configError) {
+    const error = { code: 'invalid_provider_config', message: configError, providerId: config.providerId };
+    await logError({ type: ERROR_TYPES.CONFIG, message: configError, details: redactSecrets(error), source: 'chatCompletion' });
+    return { ok: false, error };
+  }
 
   if (!isLlmConfigured(config)) {
     return { ok: false, error: { code: 'not_configured', message: 'LLM provider is not configured.', providerId: config.providerId } };
@@ -406,6 +570,9 @@ export async function chatCompletion(prompt, options = {}) {
 
     return { ok: true, text };
   } catch (error) {
+    if (error?.code === 'tracking_disabled') {
+      return trackingDisabledResult(error.providerId || config.providerId);
+    }
     const bodyText = error.bodyText || error.message || '';
     const apiError = error.apiError || classifyApiError(error.status || 0, bodyText, config.providerId);
 
@@ -433,4 +600,33 @@ export async function chatCompletion(prompt, options = {}) {
 
     return { ok: false, error: apiError };
   }
+}
+
+export async function chatCompletion(prompt, options = {}) {
+  if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
+    return { ok: false, error: { code: 'prompt_too_large', message: 'Provider prompt exceeds the safety limit.' } };
+  }
+  const key = JSON.stringify([prompt, options]);
+  const existing = inFlightRequests.get(key);
+  if (existing) return existing;
+  if (inFlightRequests.size >= MAX_PROVIDER_CONCURRENCY) {
+    return { ok: false, error: { code: 'provider_busy', message: 'Another provider check is already in progress.' } };
+  }
+  const request = chatCompletionInternal(prompt, {
+    ...options,
+    maxTokens: Math.max(1, Math.min(Number.isFinite(options.maxTokens) ? options.maxTokens : 100, 500)),
+  });
+  inFlightRequests.set(key, request);
+  try {
+    return await request;
+  } finally {
+    inFlightRequests.delete(key);
+  }
+}
+
+async function trackingIsDisabled() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return false;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['trackingEnabled'], (result) => resolve(result?.trackingEnabled === false));
+  });
 }

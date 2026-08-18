@@ -7,9 +7,9 @@
   <link rel="stylesheet" href="intervention.css">
 </head>
 <body class="intervention">
-  <div class="lock-container">
+  <main class="lock-container" role="dialog" aria-modal="true" aria-labelledby="intervention-title" aria-describedby="reason-text" tabindex="-1">
     <div class="header">
-      <h1>Drift detected</h1>
+      <h1 id="intervention-title">Drift detected</h1>
       <p id="reason-text">You are deviating from your intent.</p>
     </div>
 
@@ -24,10 +24,20 @@
         <textarea id="reflection-input" placeholder="I need a break, or this is actually relevant..." required autofocus></textarea>
       </div>
 
-      <button type="button" id="return-btn" class="primary-btn stagger-2">Close tab</button>
-      <button type="submit" id="override-btn" class="override-btn stagger-3">Override &amp; continue</button>
+      <label class="related-toggle" for="intentlock-mark-related">
+        <input type="checkbox" id="intentlock-mark-related">
+        <span>This site is related to my intent</span>
+      </label>
+
+      <p id="transition-error" class="transition-error" role="alert" aria-live="polite"></p>
+
+      <div class="intervention-actions">
+        <button type="button" id="return-btn" class="primary-btn stagger-2">Close tab</button>
+        <button type="submit" id="override-btn" class="override-btn stagger-3">Override &amp; continue</button>
+        <button type="button" id="end-session-btn" class="end-session-btn">End session</button>
+      </div>
     </form>
-  </div>
+  </main>
 
   <script src="intervention.js"></script>
 </body>

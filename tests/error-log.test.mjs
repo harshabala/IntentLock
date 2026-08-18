@@ -59,7 +59,7 @@ test('logError stores entries locally with sanitized details', async () => {
 test('formatErrorLogForExport produces copyable text', async () => {
   storageData = {
     errorLog: [{
-      timestamp: Date.UTC(2026, 5, 22, 12, 0, 0),
+      timestamp: Date.now(),
       type: 'api',
       source: 'chatCompletion',
       message: 'API quota exceeded',
@@ -71,6 +71,35 @@ test('formatErrorLogForExport produces copyable text', async () => {
   assert.match(text, /IntentLock Diagnostic Log/);
   assert.match(text, /API quota exceeded/);
   assert.match(text, /quota_exceeded/);
+});
+
+test('diagnostic reads prune expired entries at rest and exports omit them', async () => {
+  const now = Date.now();
+  const fresh = {
+    timestamp: now,
+    type: 'runtime',
+    source: 'test',
+    message: 'fresh',
+    details: { access_token: 'do-not-store' },
+  };
+  const expired = {
+    timestamp: now - (14 * 24 * 60 * 60 * 1000) - 1,
+    type: 'runtime',
+    source: 'test',
+    message: 'expired',
+  };
+  storageData = { errorLog: [fresh, expired] };
+
+  const log = await getErrorLog();
+  assert.equal(log.length, 1);
+  assert.equal(log[0].message, 'fresh');
+  assert.equal(log[0].details.access_token, '[redacted]');
+  assert.deepEqual(storageData.errorLog, log);
+
+  const text = formatErrorLogForExport([fresh, expired]);
+  assert.match(text, /Entries: 1/);
+  assert.match(text, /fresh/);
+  assert.doesNotMatch(text, /expired/);
 });
 
 test('clearErrorLog removes stored entries', async () => {
