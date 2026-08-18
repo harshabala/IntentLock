@@ -403,6 +403,44 @@ test('repeated final failures preserve SPA navigation and prior-page dwell', asy
   tracker.stop();
 });
 
+test('failed SPA navigation retries rebase the queued periodic dwell report', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/old-page';
+  let now = 0;
+  let navigationAttempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.actionType === 'SPA_NAVIGATION') {
+        navigationAttempts += 1;
+        return navigationAttempts === 1
+          ? Promise.reject(new Error('navigation persistence failed'))
+          : Promise.resolve({ response: { status: 'ok' }, error: null });
+      }
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  href = 'https://example.com/new-page';
+  pageTrackerRuntime.history.pushState({}, '', '/new-page');
+  now = 8_000;
+  await tracker.report('PAGE_DWELL');
+
+  assert.equal(navigationAttempts, 2);
+  assert.equal(reports.length, 3);
+  assert.equal(reports[2].actionType, 'PAGE_DWELL');
+  assert.equal(reports[2].url, 'https://example.com/new-page');
+  assert.equal(reports[2].dwellMs, 3_000);
+  assert.equal(reports[2].dwellDeltaMs, 3_000);
+  tracker.stop({ discard: true });
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];
