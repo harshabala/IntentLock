@@ -6,7 +6,7 @@
 
 - Chrome (any recent version supporting MV3)
 - Node.js 18+ (for running tests — not needed for the extension itself)
-- No build step, no bundler, no `npm install`
+- No dependencies, bundler, or build install is required; the repository scripts use Node and the system `zip` utility.
 
 ---
 
@@ -52,13 +52,22 @@ Or just point Chrome at the repo folder and avoid the sync entirely.
 node --test tests/heuristic-policy.test.mjs
 
 # All suites
-node --test tests/*.mjs
+npm test
 
 # Verbose (shows individual test names)
 node --test --reporter=spec tests/*.mjs
+
+# Manifest, runtime reference, workflow, packaging, and version checks
+npm run verify:static
+npm run validate:version -- v1.5.1
+
+# Deterministic release artifact (writes to dist/ by default)
+npm run package
 ```
 
 All tests use Node's built-in `node:test` + `assert/strict`. No test runner to install.
+
+The release ZIP is built from an explicit runtime allowlist with stable entry order and timestamps. It excludes tests, docs, source plans, package metadata, and development helpers. GitHub Actions validates the tag against `manifest.json` before attaching the ZIP to a GitHub Release.
 
 ### Test files
 
@@ -96,6 +105,7 @@ IntentLock/
 ├── llm.js                         # LLM drift check
 ├── llm-backoff.js                 # Quota/rate-limit backoff guard
 ├── providers.js                   # Multi-provider LLM abstraction
+├── privacy-utils.js               # URL minimization, retention, and secret redaction
 ├── distraction-sites.js           # Legacy 8-domain default list
 ├── error-log.js                   # Diagnostic log (chrome.storage.local)
 ├── newtab.html / newtab.js        # New tab override — onboarding + session form
@@ -170,7 +180,12 @@ No other files need to change — the settings grid and policy schema pick it up
 - **No `eval`, no `innerHTML` with user input** anywhere in the codebase
 - **No remote code** — all domain data and rules ship in the extension package. `providers.js` makes `fetch()` calls only when the user has configured a provider and a session is active (LLM inference, not code loading)
 - **No telemetry** — `heuristicPolicy` and all session data stay in `chrome.storage.local`
-- **API key in session storage only** — `chrome.storage.session` is cleared on browser close; the key is never written to `chrome.storage.local` or `chrome.storage.sync`
+- **API key storage** — `chrome.storage.session` is cleared on browser close when available; a local `llmApiKey` fallback is used only when session storage is unavailable.
+- **Tracking switch is authoritative** — disabling tracking stops content tracking, background event/drift evaluation, and provider calls.
+- **Provider endpoint policy** — built-in cloud endpoints are fixed; custom cloud endpoints require HTTPS, and local HTTP endpoints must be loopback-only. Gemini query-key authentication is the only built-in exception because the provider requires it.
+- **Provider context minimization** — LLM prompts receive origin-only browsing context (no path, query, or fragment) and explicitly mark page-derived values as untrusted data.
+- **Bounded retention** — completed session history is retained for 30 days (maximum 100 entries); diagnostics are retained for 14 days (maximum 200 entries). Export sanitizes legacy URL fields and recursively redacts credentials.
+- **Deletion is final** — Delete all data clears local and session storage and does not recreate an LLM provider configuration.
 - **Domain validation** on user input in Settings: `HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/` — rejects IPs, wildcards, protocols, and paths
 - **Fail-open** — bad policy or missing storage key never throws to the caller; falls back to `buildDefaultPolicy('deep_work', 'balanced')`
 

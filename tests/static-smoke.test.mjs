@@ -22,7 +22,7 @@ test('manifest references only present extension assets and minimum V1 permissio
 
   assert.deepEqual(
     manifest.permissions,
-    ['tabs', 'storage', 'idle', 'tabGroups'],
+    ['tabs', 'storage', 'idle', 'tabGroups', 'alarms'],
   );
 
   assert.deepEqual(
@@ -34,12 +34,20 @@ test('manifest references only present extension assets and minimum V1 permissio
     [...manifest.content_scripts[0].matches].sort(),
     ['http://*/*', 'https://*/*'],
   );
+
+  assert.deepEqual(
+    manifest.content_scripts[0].js,
+    ['page-tracker.js', 'intervention-overlay.js', 'content.js'],
+  );
+  assert.equal('type' in manifest.content_scripts[0], false);
 });
 
 test('all extension javascript files parse', async () => {
   for (const file of [
     'background.js',
     'content.js',
+    'page-tracker.js',
+    'intervention-overlay.js',
     'drift.js',
     'history.js',
     'intervention.js',
@@ -50,6 +58,7 @@ test('all extension javascript files parse', async () => {
     'newtab.js',
     'options.js',
     'popup.js',
+    'storage-queue.js',
   ]) {
     const result = spawnSync(process.execPath, ['--check', file], {
       cwd: root,
@@ -156,12 +165,31 @@ test('options page uses progressive disclosure for cloud LLM settings', async ()
   assert.match(css, /aria-expanded/);
 });
 
+test('delete-all-data flow does not recreate provider configuration', async () => {
+  const options = await text('options.js');
+  const background = await text('background.js');
+  assert.match(options, /type:\s*['"]DELETE_ALL_DATA['"]/);
+  assert.match(background, /function\s+storageClear/);
+  assert.match(background, /beginStorageDeletion/);
+  assert.match(options, /All data deleted/);
+  assert.doesNotMatch(background, /if \(!localRes\?\.llmProviderConfig\)\s*\{[\s\S]*llmProviderConfig:/);
+});
+
+test('tracking-disabled paths guard content and background work', async () => {
+  const content = await text('content.js');
+  const background = await text('background.js');
+  const providers = await text('providers.js');
+  assert.match(content, /trackingEnabled/);
+  assert.match(background, /trackingEnabled.*?false/s);
+  assert.match(providers, /tracking_disabled/);
+});
+
 test('newtab.js enforces maxLength on dynamically created textareas', async () => {
   const code = await text('newtab.js');
-  
+
   // Verify edit intent textarea has maxLength set
   assert.ok(code.includes('.maxLength = 250') || code.includes('.maxLength=250'), 'edit intent textarea should set maxLength');
-  
+
   // Verify dynamic intentInput in showNewSessionForm has maxLength set
   assert.match(code, /intentInput\.maxLength\s*=\s*\d+/);
 });
@@ -203,5 +231,3 @@ test('live numeric displays use tabular-nums for stable alignment', async () => 
     assert.match(block[1], /font-variant-numeric:\s*tabular-nums/);
   }
 });
-
-

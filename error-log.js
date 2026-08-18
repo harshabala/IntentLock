@@ -1,5 +1,17 @@
 // error-log.js — Local diagnostic log for user-visible errors
 
+import {
+  ERROR_LOG_RETENTION_MS,
+  MAX_ERROR_LOG_ENTRIES,
+  pruneByRetention,
+  redactSecrets,
+} from './privacy-utils.js';
+import {
+  enqueueStorageMutation,
+  getStorageGeneration,
+  isStorageDeletionActive,
+} from './storage-queue.js';
+
 export const ERROR_TYPES = {
   API: 'api',
   CONFIG: 'config',
@@ -9,7 +21,7 @@ export const ERROR_TYPES = {
   RUNTIME: 'runtime',
 };
 
-export const MAX_LOG_ENTRIES = 200;
+export const MAX_LOG_ENTRIES = MAX_ERROR_LOG_ENTRIES;
 
 export function classifyApiError(status, bodyText = '', providerId = 'unknown') {
   const body = typeof bodyText === 'string' ? bodyText : '';
@@ -53,6 +65,7 @@ export function classifyApiError(status, bodyText = '', providerId = 'unknown') 
   }
 
   if (providerMessage) {
+    providerMessage = redactSecrets(providerMessage);
     message = `${message} Provider says: ${providerMessage}`;
   }
 
@@ -66,14 +79,18 @@ export function classifyApiError(status, bodyText = '', providerId = 'unknown') 
 }
 
 export function formatErrorLogForExport(entries = []) {
+  const recentEntries = pruneByRetention(
+    Array.isArray(entries) ? entries : [],
+    { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
+  ).map((entry) => redactSecrets(entry));
   const lines = [
     'IntentLock Diagnostic Log',
     `Exported: ${new Date().toISOString()}`,
-    `Entries: ${entries.length}`,
+    `Entries: ${recentEntries.length}`,
     '',
   ];
 
-  entries.forEach((entry, index) => {
+  recentEntries.forEach((entry, index) => {
     lines.push(`--- Entry ${index + 1} ---`);
     lines.push(`Time: ${new Date(entry.timestamp).toISOString()}`);
     lines.push(`Type: ${entry.type}`);
@@ -90,36 +107,41 @@ export function formatErrorLogForExport(entries = []) {
 
 function sanitizeDetails(details) {
   if (!details || typeof details !== 'object') return {};
-  const copy = { ...details };
-  if (copy.apiKey) copy.apiKey = '[redacted]';
-  if (copy.key) copy.key = '[redacted]';
-  return copy;
+  return redactSecrets(details);
 }
 
 export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }) {
   if (!message) return Promise.resolve(null);
 
+  const generation = getStorageGeneration();
+
   const entry = {
     id: crypto.randomUUID(),
     timestamp: Date.now(),
     type,
-    message,
+    message: redactSecrets(message),
     details: sanitizeDetails(details),
     source,
   };
 
-  console.error(`[IntentLock:${type}] ${message}`, entry.details || '');
+  console.error(`[IntentLock:${type}] ${entry.message}`, entry.details || '');
 
   if (typeof chrome === 'undefined' || !chrome.storage?.local) {
     return Promise.resolve(entry);
   }
 
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['errorLog'], (result) => {
-      const log = Array.isArray(result?.errorLog) ? result.errorLog : [];
-      log.unshift(entry);
-      if (log.length > MAX_LOG_ENTRIES) log.length = MAX_LOG_ENTRIES;
-      chrome.storage.local.set({ errorLog: log }, () => resolve(entry));
+  return enqueueStorageMutation(() => {
+    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return null;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['errorLog'], (result) => {
+        const log = pruneByRetention(
+          Array.isArray(result?.errorLog) ? result.errorLog : [],
+          { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
+        );
+        log.unshift(entry);
+        if (log.length > MAX_LOG_ENTRIES) log.length = MAX_LOG_ENTRIES;
+        chrome.storage.local.set({ errorLog: log }, () => resolve(entry));
+      });
     });
   });
 }
@@ -128,9 +150,17 @@ export function getErrorLog() {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) {
     return Promise.resolve([]);
   }
-  return new Promise((resolve) => {
+  const generation = getStorageGeneration();
+  return enqueueStorageMutation(() => {
+    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return [];
+    return new Promise((resolve) => {
     chrome.storage.local.get(['errorLog'], (result) => {
-      resolve(Array.isArray(result?.errorLog) ? result.errorLog : []);
+      const log = pruneByRetention(
+        Array.isArray(result?.errorLog) ? result.errorLog : [],
+        { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
+      ).map((entry) => redactSecrets(entry));
+      chrome.storage.local.set({ errorLog: log }, () => resolve(log));
+    });
     });
   });
 }
@@ -139,7 +169,11 @@ export function clearErrorLog() {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) {
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
+  const generation = getStorageGeneration();
+  return enqueueStorageMutation(() => {
+    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+    return new Promise((resolve) => {
     chrome.storage.local.set({ errorLog: [] }, () => resolve());
+    });
   });
 }

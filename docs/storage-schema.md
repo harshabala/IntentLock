@@ -1,6 +1,6 @@
 # Storage Schema
 
-IntentLock uses two Chrome storage areas. Neither sends data outside the browser.
+IntentLock uses Chrome's local and session storage areas. Stored data stays in the browser unless you explicitly enable a remote LLM provider; in that case, minimized intent and browsing context may be sent to that provider while tracking is enabled.
 
 ---
 
@@ -71,7 +71,7 @@ The user's site policy, version 1. Set during onboarding step 3 or Settings save
 
 ### `sessionHistory`
 
-Array of completed session summaries. Appended to on `END_ACTIVE_SESSION`. Never trimmed automatically.
+Array of completed session summaries. Appended to on `END_ACTIVE_SESSION`. On reads and exports, entries are sanitized and pruned at rest to the newest 100 entries from the last 30 days.
 
 ```js
 Array<{
@@ -87,13 +87,13 @@ Array<{
   onIntentRatio?: number | null,    // 0.0 to 1.0, or null if tracking off / no activity
   interventionCount?: number,
   overrideCount?: number,
-  topDomains?: Array<{ hostname: string, activeMs: number, aligned: boolean }>,
+  topDomains?: Array<{ hostname: string, activeMs: number, aligned: boolean, alignedMs: number }>,
   reportViewed?: boolean,
   overrides?: Array<{ timestamp: number, url?: string, hostname?: string, reflection?: string }>,
 }>
 ```
 
-Exportable as JSON via Settings → Export session history.
+Exportable as JSON via Settings → Export session history. Full event arrays and legacy override URLs are not retained in the sanitized history summary; overrides retain only hostnames and reflections.
 Note: `overrides[].hostname` replaces `overrides[].url` per privacy rules (only hostname is stored).
 
 ---
@@ -142,7 +142,7 @@ Selected AI provider and its settings. Absent until the user configures one.
 
 ### `errorLog`
 
-Array of diagnostic entries, capped at 200. Written by `error-log.js`. Viewable at Settings → Diagnostics.
+Array of diagnostic entries, capped at 200 and retained for 14 days. Reads and exports redact secret-shaped fields and prune expired entries at rest. Written by `error-log.js`. Viewable at Settings → Diagnostics.
 
 ```js
 Array<{
@@ -160,7 +160,7 @@ Array<{
 
 ### `interventionState`
 
-Ephemeral — present only while an intervention is active. Cleared on override or dismiss.
+Ephemeral — present only while an intervention is active. Cleared on override, close-tab, end-session, tracking disable, or deletion.
 
 ```js
 {
@@ -207,13 +207,13 @@ lastIdleTime: number   // timestamp when idle state began, 0 if not idle
 
 ---
 
-## `chrome.storage.session` — cleared on browser close
+## `chrome.storage.session` — cleared on browser close when available
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `openaiApiKey` | string | API key — never written to `local` storage |
 | `llmApiKey` | string | Alias used by some provider paths |
 
-The API key is kept here by design — it is never synced, never backed up, and never survives a browser restart. The user must re-enter it each session if they close Chrome.
+The API key is kept here when this storage area is available — it is never synced, never backed up, and never survives a browser restart. If session storage is unavailable, the provider path may use the local `llmApiKey` fallback. The user must re-enter the key after closing Chrome when session storage is used.
 
 On startup, `background.js` checks `chrome.storage.local` for a legacy `openaiApiKey` (written by versions before 1.2.1) and migrates it to session storage, removing the local copy.

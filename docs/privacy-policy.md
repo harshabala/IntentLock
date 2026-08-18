@@ -6,19 +6,20 @@ IntentLock is a privacy-first browser extension designed to help you maintain fo
 
 ## 1. Local Data Storage
 
-All data generated, entered, or collected by IntentLock is stored **solely on your local machine** using the Chrome Extension Storage APIs (`chrome.storage.local`). This includes:
+IntentLock stores session data, browsing metadata, settings, and diagnostic logs **locally by default** using the Chrome Extension Storage APIs (`chrome.storage.local` and, for API keys, `chrome.storage.session`). This includes:
 - **Intent Declarations:** The focus statements and goals you declare at the start of a session.
 - **Browsing History & Logs:** The metadata and URLs of active tabs monitored during a session.
 - **Alignment Events & Drift Logs:** Heuristic evaluations, tab-switch counts, and drift-intervention history.
 
-None of this data is transmitted, uploaded, or shared with external servers. It remains fully offline and under your complete control. You can view, export, or permanently delete all local data at any time through the extension's Options menu.
+IntentLock does not use analytics, advertising, or telemetry services. You can view, export, or delete local data through the extension's Options menu. Session history is automatically limited to the newest 100 entries from the last 30 days, and diagnostic logs to the newest 200 entries from the last 14 days.
 
 ## 2. API Key & LLM Drift Evaluation
 
-If you configure an OpenAI API key to enable LLM-powered drift detection:
-- **Secure Session Memory:** The API key is stored strictly in secure session memory (`chrome.storage.session`). This ensures the key is stored in RAM and is **automatically cleared and destroyed** when you close the browser.
-- **Direct API Communication:** When evaluating tab drift, the extension sends your current intent and page metadata directly to the official OpenAI API completions endpoint (`api.openai.com`). 
-- **No Intermediary Servers:** There is no intermediary server or third-party proxy. The API key is never shared, leaked, or transmitted to any server other than OpenAI's secure API.
+If you enable tracking and configure a cloud or custom remote provider for LLM-powered features:
+- **Key storage:** When `chrome.storage.session` is available, the API key is kept there and is **automatically cleared** when you close the browser. A local-storage fallback may be used when session storage is unavailable; the extension does not sync keys to a remote service.
+- **Direct API Communication:** IntentLock sends the declared intent and minimized browsing context directly to the provider you selected. Page context is reduced to origins and bounded recent events; full paths, query strings, and fragments are not sent.
+- **Provider choice matters:** The selected provider receives the request under its own privacy policy. Local providers such as Ollama and LM Studio keep the request on your machine. IntentLock does not operate an intermediary analytics or proxy service.
+- **Tracking control:** Turning tracking off suppresses provider requests and browsing-event collection.
 
 ## 3. No Analytics or Telemetry
 
@@ -27,4 +28,4 @@ We do not track you. IntentLock has **zero** built-in:
 - Telemetry or crash reporting sent to external servers.
 - Advertising trackers, cookies, or user profiling scripts.
 
-Your usage patterns, success rates, and configuration settings are stored locally and are visible only to you.
+Your usage patterns, success rates, and configuration settings are stored locally. Data sent to an explicitly selected remote provider is governed by that provider's terms and privacy policy.

@@ -4,7 +4,7 @@
     "extension_pages": "script-src 'self'; object-src 'self';"
   },
   "name": "IntentLock",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Enforces user-declared intent during browsing sessions.",
   "icons": {
     "16": "icon16.png",
@@ -22,7 +22,8 @@
     "tabs",
     "storage",
     "idle",
-    "tabGroups"
+    "tabGroups",
+    "alarms"
   ],
   "host_permissions": [
     "https://*/*",
@@ -31,8 +32,7 @@
   "content_scripts": [
     {
       "matches": ["https://*/*", "http://*/*"],
-      "js": ["content.js"],
-      "type": "module",
+      "js": ["page-tracker.js", "intervention-overlay.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

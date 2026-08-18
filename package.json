@@ -1,0 +1,11 @@
+{
+  "name": "intentlock",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "verify:static": "node --test tests/static-smoke.test.mjs tests/manifest-runtime.test.mjs tests/content-bootstrap.test.mjs",
+    "package": "node scripts/package-release.mjs",
+    "validate:version": "node scripts/validate-version.mjs"
+  }
+}

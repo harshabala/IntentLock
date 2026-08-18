@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+      - name: Validate tag and manifest version
+        run: npm run validate:version -- "$GITHUB_REF_NAME"
+      - name: Run release checks
+        run: npm run verify:static
+      - name: Run full test suite
+        run: npm test
+      - name: Build deterministic release ZIP
+        run: npm run package -- --output "$RUNNER_TEMP/IntentLock-$GITHUB_REF_NAME.zip"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/IntentLock-$GITHUB_REF_NAME.zip" --verify-tag --generate-notes --title "IntentLock $GITHUB_REF_NAME"
