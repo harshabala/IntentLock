@@ -21,7 +21,7 @@
 | `mergePolicyWithIntent(intentText, existingPolicy?)` | function | Classifies intent and builds policy |
 | `normalizeHostname(h)` | internal | Strips `www.`, lowercases |
 | `resolveDomainPolicy(hostname, policy)` | function | Returns `'block'|'warn'|'allow'|'neutral'` |
-| `getEffectiveBlockList(policy)` | function | Returns `string[]` of blocked hostnames/path rules; path-specific allows are represented as `hostname/*` plus `!hostname/path` exceptions |
+| `getEffectiveBlockList(policy)` | function | Returns `string[]` of blocked hostnames/path rules; path-specific allows use scoped wildcards such as `hostname/parent/*` plus `!hostname/path` exceptions, including nested paths |
 | `intentTerms(text)` | function | Tokenizes, strips stop words, deduplicates |
 | `CATEGORY_ALIGNMENT` | object | Maps intentCategoryId → aligned site category IDs |
 | `evaluatePolicyDrift(params)` | function | Main drift evaluator — returns `{shouldIntervene, score, reason, reasonLabel, signals}` |

@@ -85,6 +85,15 @@ function flushFinalDwell(sessionId, generation, requestId) {
   if (requestId) {
     lastFlushRequestId = requestId;
     lastFlushPromise = flushPromise;
+    // Only coalesce concurrent flushes. Settled-request deduplication belongs
+    // to the background session receipt so later dwell can be reported.
+    const clearInFlight = () => {
+      if (lastFlushPromise === flushPromise) {
+        lastFlushRequestId = null;
+        lastFlushPromise = null;
+      }
+    };
+    flushPromise.then(clearInFlight, clearInFlight);
   }
   return flushPromise;
 }

@@ -254,6 +254,24 @@ test('getEffectiveBlockList preserves path-specific catalog and custom rules', (
   assert.ok(list.includes('example.com/work'));
 });
 
+test('getEffectiveBlockList scopes nested catalog and custom path allows', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  policy.categoryPolicies.shopping = 'block';
+  let list = getEffectiveBlockList(policy);
+
+  assert.ok(list.includes('cvs.com/*'));
+  assert.ok(list.includes('!cvs.com/minuteclinic'));
+  assert.ok(!list.includes('cvs.com'));
+
+  policy.categoryPolicies.travel = 'block';
+  policy.customAllowDomains = ['google.com/travel/flights'];
+  list = getEffectiveBlockList(policy);
+
+  assert.ok(list.includes('google.com/travel/*'));
+  assert.ok(list.includes('!google.com/travel/flights'));
+  assert.ok(!list.includes('google.com/travel'));
+});
+
 test('mergePolicyWithIntent auto-classifies job_search text', () => {
   const policy = mergePolicyWithIntent('applying for software engineer jobs');
   assert.equal(policy.intentCategoryId, 'job_search');

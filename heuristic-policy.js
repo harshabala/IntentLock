@@ -759,6 +759,35 @@ export function resolveDomainPolicy(hostname, policy) {
   }
 }
 
+function isNestedPath(parentPath, candidatePath) {
+  const parent = normalizePath(parentPath);
+  const candidate = normalizePath(candidatePath);
+  if (!candidate || candidate === parent) return false;
+  return !parent || candidate.startsWith(`${parent}/`);
+}
+
+function collectAllowedPathExceptions(entry, policy, allowList) {
+  const exceptions = new Set();
+  for (const domain of allowList) {
+    const rule = parseDomainInput(domain);
+    if (!rule.pathname || !isNestedPath(entry.path, rule.pathname)) continue;
+    if (rule.hostname === entry.hostname || rule.hostname.endsWith(`.${entry.hostname}`)) {
+      exceptions.add(`${rule.hostname}${rule.pathname}`);
+    }
+  }
+
+  for (const candidate of DOMAIN_CATALOG) {
+    if (
+      candidate.hostname !== entry.hostname
+      || !candidate.path
+      || !isNestedPath(entry.path, candidate.path)
+      || policy.categoryPolicies?.[candidate.categoryId] === 'block'
+    ) continue;
+    exceptions.add(`${candidate.hostname}${candidate.path}`);
+  }
+  return [...exceptions];
+}
+
 export function getEffectiveBlockList(policy) {
   if (!policy || typeof policy !== 'object') return [];
   const blocked = new Set();
@@ -767,30 +796,17 @@ export function getEffectiveBlockList(policy) {
   for (const entry of DOMAIN_CATALOG) {
     if (policy.categoryPolicies?.[entry.categoryId] !== 'block') continue;
     if (entry.pathPattern) {
-      const baseEntry = DOMAIN_CATALOG.find(candidate => (
-        candidate.hostname === entry.hostname && !candidate.path && !candidate.pathPattern
-      ));
-      if (baseEntry) continue;
       continue;
     }
-    if (!entry.path) {
-      if (matchesCustomDomain(entry.hostname, allowList)) continue;
-      const pathAllows = allowList
-        .map((domain) => parseDomainInput(domain))
-        .filter((rule) => (
-          rule.hostname === entry.hostname && rule.pathname
-        ));
-      if (pathAllows.length > 0) {
-        blocked.add(`${entry.hostname}/*`);
-        for (const rule of pathAllows) blocked.add(`!${entry.hostname}${rule.pathname}`);
-      } else {
-        blocked.add(entry.hostname);
-      }
+    if (matchesCustomDomain(entry.hostname, allowList, entry.path)) continue;
+    const pathAllows = collectAllowedPathExceptions(entry, policy, allowList);
+    if (pathAllows.length > 0) {
+      const blockedPath = `${entry.hostname}${entry.path}`;
+      blocked.add(`${blockedPath}/*`);
+      for (const path of pathAllows) blocked.add(`!${path}`);
       continue;
     }
-    if (!matchesCustomDomain(entry.hostname, allowList, entry.path)) {
-      blocked.add(`${entry.hostname}${entry.path}`);
-    }
+    blocked.add(`${entry.hostname}${entry.path}`);
   }
 
   for (const d of (Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [])) {
