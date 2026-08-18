@@ -229,6 +229,7 @@ function sendTabMessage(tabId, message) {
 
 const FINAL_DWELL_FLUSH_TIMEOUT_MS = 1_000;
 const FINAL_DWELL_QUERY_TIMEOUT_MS = 250;
+const MAX_FLUSH_RECEIPTS = 200;
 
 function sendTabMessageBounded(tabId, message, timeoutMs = FINAL_DWELL_FLUSH_TIMEOUT_MS) {
   return new Promise((resolve) => {
@@ -268,17 +269,20 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
       message: 'Final dwell session changed while querying tabs.',
     }]);
   }
-  const requestId = `${sessionId}:${createNonce()}`;
   const flushTabs = (Array.isArray(tabs) ? tabs : [])
     .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url));
-  const results = await Promise.all(flushTabs.map((tab) => sendTabMessageBounded(tab.id, {
-    type: 'FLUSH_DWELL',
-    sessionId,
-    generation: expectedGeneration,
-    requestId,
-  })));
+  const results = await Promise.all(flushTabs.map((tab) => {
+    const requestId = `${sessionId}:${tab.id}`;
+    return sendTabMessageBounded(tab.id, {
+      type: 'FLUSH_DWELL',
+      sessionId,
+      generation: expectedGeneration,
+      requestId,
+    });
+  }));
   const failures = results.reduce((failed, result, index) => {
     const response = result?.response;
+    const requestId = `${sessionId}:${flushTabs[index].id}`;
     const acknowledged = !result?.error &&
       response?.status === 'ok' &&
       response.persisted === true &&
@@ -1568,6 +1572,7 @@ function logEvent(
   extras = {},
   expectedGeneration = getStorageGeneration(),
   expectedSessionId = null,
+  flushReceiptKey = null,
 ) {
   return enqueueSessionMutation(async () => {
     if (!isTrackableUrl(url)) return;
@@ -1584,6 +1589,9 @@ function logEvent(
     if (expectedSessionId && session.id !== expectedSessionId) {
       throw new Error('Content event belongs to a different session.');
     }
+    if (flushReceiptKey && getFlushReceipt(session, flushReceiptKey)?.eventApplied) {
+      return;
+    }
 
     const event = {
       timestamp: Date.now(),
@@ -1597,9 +1605,39 @@ function logEvent(
     if (session.events.length > 50) {
       session.events.shift();
     }
+    if (flushReceiptKey) markFlushReceipt(session, flushReceiptKey, 'eventApplied');
     await storageSet({ activeSession: session });
     currentSession = session;
   }, expectedGeneration);
+}
+
+function flushReceiptKey(metadata, tabId) {
+  return `${metadata.requestId}:${tabId}`;
+}
+
+function getFlushReceipt(session, key) {
+  const receipt = session?.flushDwellReceipts?.[key];
+  return receipt && typeof receipt === 'object' ? receipt : null;
+}
+
+function markFlushReceipt(session, key, part) {
+  const receipts = session.flushDwellReceipts && typeof session.flushDwellReceipts === 'object'
+    && !Array.isArray(session.flushDwellReceipts)
+    ? { ...session.flushDwellReceipts }
+    : {};
+  receipts[key] = {
+    ...receipts[key],
+    [part]: true,
+    updatedAt: Date.now(),
+  };
+  const keys = Object.keys(receipts);
+  if (keys.length > MAX_FLUSH_RECEIPTS) {
+    keys
+      .sort((a, b) => (receipts[a].updatedAt || 0) - (receipts[b].updatedAt || 0))
+      .slice(0, keys.length - MAX_FLUSH_RECEIPTS)
+      .forEach((receiptKey) => delete receipts[receiptKey]);
+  }
+  session.flushDwellReceipts = receipts;
 }
 
 function getFlushMetadata(payload) {
@@ -1690,6 +1728,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     extras.generation = flushMetadata.generation;
     extras.flushRequestId = flushMetadata.requestId;
   }
+  const receiptKey = flushMetadata ? flushReceiptKey(flushMetadata, tabId) : null;
 
   // Accumulate on-intent metrics from dwell deltas (not reconstructable from capped events)
   let metricWrite = Promise.resolve();
@@ -1712,6 +1751,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
       if (flushMetadata && session.id !== flushMetadata.sessionId) {
         throw new Error('Final dwell event belongs to a different session.');
       }
+      if (receiptKey && getFlushReceipt(session, receiptKey)?.metricsApplied) return;
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
         ? (payload.previousUrl || payload.url)
@@ -1728,6 +1768,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
         deltaMs: payload.dwellDeltaMs,
         aligned,
       });
+      if (receiptKey) markFlushReceipt(session, receiptKey, 'metricsApplied');
       await storageSet({ activeSession: session });
       currentSession = session;
     }, expectedGeneration);
@@ -1745,6 +1786,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     extras,
     expectedGeneration,
     flushMetadata?.sessionId || null,
+    receiptKey,
   );
   if (!flushMetadata) {
     eventWrite = eventWrite.catch((error) => {

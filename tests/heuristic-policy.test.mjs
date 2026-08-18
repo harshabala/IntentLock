@@ -226,6 +226,18 @@ test('getEffectiveBlockList excludes customAllowDomains', () => {
   assert.ok(!list.includes('youtube.com'), 'customAllowDomains should not be in block list');
 });
 
+test('getEffectiveBlockList represents path allows as scoped exceptions', () => {
+  const policy = buildDefaultPolicy('coding', 'strict');
+  policy.customAllowDomains = ['youtube.com/watch'];
+  const list = getEffectiveBlockList(policy);
+
+  assert.ok(!list.includes('youtube.com'), 'path allow must not block the whole hostname');
+  assert.ok(list.includes('youtube.com/*'), 'path-aware block rule should cover the remaining paths');
+  assert.ok(list.includes('!youtube.com/watch'), 'path allow should be retained as an exception');
+  assert.equal(resolveDomainPolicy('https://youtube.com/watch?v=123', policy), 'allow');
+  assert.equal(resolveDomainPolicy('https://youtube.com/shorts/123', policy), 'block');
+});
+
 test('getEffectiveBlockList preserves path-specific catalog and custom rules', () => {
   const policy = buildDefaultPolicy('coding', 'balanced');
   policy.categoryPolicies.travel = 'block';

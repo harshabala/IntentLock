@@ -8,6 +8,7 @@ let sessionStorageData = {};
 let storageErrorMessage = null;
 let storageGetErrorMessage = null;
 let storageRemoveErrorMessage = null;
+let storageSetFailures = 0;
 let tabsCreateCount = 0;
 const tabUrls = new Map();
 let trackedTabs = [];
@@ -172,6 +173,13 @@ globalThis.chrome = {
         callback(res);
       },
       set: (data, callback) => {
+        if (storageSetFailures > 0) {
+          storageSetFailures -= 1;
+          chrome.runtime.lastError = { message: 'one-sided storage write failed' };
+          if (callback) callback();
+          chrome.runtime.lastError = null;
+          return;
+        }
         if (storageErrorMessage) {
           chrome.runtime.lastError = { message: storageErrorMessage };
           if (callback) callback();
@@ -848,6 +856,49 @@ test('session finalization flushes unreported tracker dwell into metrics and his
   assert.equal(ended.session.activeMs, 7_000);
   assert.equal(ended.session.metrics.activeMs, 7_000);
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
+});
+
+test('retrying a one-sided final dwell write does not duplicate metrics or events', async () => {
+  const url = 'https://docs.example.com/one-sided-final-dwell';
+  const generation = getStorageGeneration();
+  const payload = {
+    actionType: 'PAGE_DWELL',
+    url,
+    dwellMs: 5_000,
+    dwellDeltaMs: 5_000,
+    sessionId: 'one-sided-final-dwell-session',
+    generation,
+    flushRequestId: 'one-sided-final-dwell-session:tab-19',
+  };
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession(payload.sessionId, 'coding the new feature'),
+  };
+  await reloadConfig();
+  storageSetFailures = 1;
+
+  const first = await requestMessage(
+    { type: 'CONTENT_EVENT', payload },
+    { tab: { id: 19 } },
+  );
+  assert.equal(first.status, 'error');
+  assert.equal(storageData.activeSession.metrics, undefined);
+  assert.equal(
+    storageData.activeSession.events.filter((event) => event.actionType === 'PAGE_DWELL').length,
+    1,
+  );
+
+  const second = await requestMessage(
+    { type: 'CONTENT_EVENT', payload },
+    { tab: { id: 19 } },
+  );
+  storageSetFailures = 0;
+  assert.equal(second.status, 'ok');
+  assert.equal(storageData.activeSession.metrics.activeMs, 5_000);
+  assert.equal(
+    storageData.activeSession.events.filter((event) => event.actionType === 'PAGE_DWELL').length,
+    1,
+  );
 });
 
 test('inactive content tabs are successful no-ops during final dwell flush', async () => {

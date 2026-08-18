@@ -770,8 +770,21 @@ export function getEffectiveBlockList(policy) {
       const baseEntry = DOMAIN_CATALOG.find(candidate => (
         candidate.hostname === entry.hostname && !candidate.path && !candidate.pathPattern
       ));
-      if (baseEntry && !matchesCustomDomain(baseEntry.hostname, allowList)) {
-        blocked.add(baseEntry.hostname);
+      if (baseEntry) continue;
+      continue;
+    }
+    if (!entry.path) {
+      if (matchesCustomDomain(entry.hostname, allowList)) continue;
+      const pathAllows = allowList
+        .map((domain) => parseDomainInput(domain))
+        .filter((rule) => (
+          rule.hostname === entry.hostname && rule.pathname
+        ));
+      if (pathAllows.length > 0) {
+        blocked.add(`${entry.hostname}/*`);
+        for (const rule of pathAllows) blocked.add(`!${entry.hostname}${rule.pathname}`);
+      } else {
+        blocked.add(entry.hostname);
       }
       continue;
     }
