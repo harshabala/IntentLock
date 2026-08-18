@@ -1342,7 +1342,10 @@ function handleSessionStart(session, expectedGeneration = getStorageGeneration()
     if (latest.activeSession?.isActive) {
       throw new Error('An active session already exists.');
     }
-    const nextSession = sanitizeSessionEvents(session);
+    const nextSession = {
+      ...sanitizeSessionEvents(session),
+      generation: expectedGeneration,
+    };
     ensureMetrics(nextSession);
     if (!nextSession.metrics || nextSession.metrics.activeMs == null) {
       nextSession.metrics = createSessionMetrics();
@@ -1643,15 +1646,31 @@ function markFlushReceipt(session, key, part) {
   session.flushDwellReceipts = receipts;
 }
 
-function getFlushMetadata(payload) {
-  const fields = ['sessionId', 'generation', 'flushRequestId'];
+function getSessionContext(payload) {
+  const fields = ['sessionId', 'generation'];
   if (!fields.some(field => payload?.[field] !== undefined)) return null;
   if (
-    payload?.actionType !== 'PAGE_DWELL' ||
-    typeof payload.sessionId !== 'string' ||
+    typeof payload?.sessionId !== 'string' ||
     payload.sessionId.length === 0 ||
     payload.sessionId.length > 200 ||
-    !Number.isInteger(payload.generation) ||
+    (payload.generation !== undefined && !Number.isInteger(payload.generation))
+  ) {
+    return { invalid: true };
+  }
+  return {
+    sessionId: payload.sessionId,
+    generation: Number.isInteger(payload.generation) ? payload.generation : null,
+  };
+}
+
+function getFlushMetadata(payload) {
+  if (payload?.flushRequestId === undefined) return null;
+  const context = getSessionContext(payload);
+  if (
+    !context ||
+    context.invalid ||
+    payload?.actionType !== 'PAGE_DWELL' ||
+    !Number.isInteger(context?.generation) ||
     typeof payload.flushRequestId !== 'string' ||
     payload.flushRequestId.length === 0 ||
     payload.flushRequestId.length > 300
@@ -1659,8 +1678,8 @@ function getFlushMetadata(payload) {
     return { invalid: true };
   }
   return {
-    sessionId: payload.sessionId,
-    generation: payload.generation,
+    sessionId: context.sessionId,
+    generation: context.generation,
     requestId: payload.flushRequestId,
   };
 }
@@ -1678,8 +1697,9 @@ function flushEventResult(metadata, persisted, message = '') {
 }
 
 function handleContentEvent(payload, tabId, expectedGeneration = getStorageGeneration()) {
+  const sessionContext = getSessionContext(payload);
   const flushMetadata = getFlushMetadata(payload);
-  if (flushMetadata?.invalid) {
+  if (sessionContext?.invalid || flushMetadata?.invalid) {
     return Promise.resolve(flushEventResult(flushMetadata, false, 'Invalid final dwell metadata.'));
   }
   if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') {
@@ -1700,12 +1720,16 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
   ) return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
 
   if (
-    flushMetadata &&
-    (flushMetadata.generation !== expectedGeneration ||
+    sessionContext && (
+      (Number.isInteger(sessionContext.generation) && sessionContext.generation !== expectedGeneration) ||
+      (sessionContext.generation !== null && !Number.isInteger(sessionContext.generation)) ||
       expectedGeneration !== getStorageGeneration() ||
-      isStorageDeletionActive())
+      isStorageDeletionActive()
+    )
   ) {
-    return Promise.resolve(flushEventResult(flushMetadata, false, 'Final dwell session is stale.'));
+    return Promise.resolve(flushMetadata
+      ? flushEventResult(flushMetadata, false, 'Final dwell session is stale.')
+      : undefined);
   }
 
   const now = Date.now();
@@ -1754,6 +1778,10 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
       if (flushMetadata && session.id !== flushMetadata.sessionId) {
         throw new Error('Final dwell event belongs to a different session.');
       }
+      if (sessionContext && session.id !== sessionContext.sessionId) {
+        if (flushMetadata) throw new Error('Dwell event belongs to a different session.');
+        return;
+      }
       if (receiptKey && getFlushReceipt(session, receiptKey)?.metricsApplied) return;
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
@@ -1788,7 +1816,7 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     payload.url,
     extras,
     expectedGeneration,
-    flushMetadata?.sessionId || null,
+    sessionContext?.sessionId || null,
     receiptKey,
   );
   if (!flushMetadata) {

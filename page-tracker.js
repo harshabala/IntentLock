@@ -50,6 +50,7 @@
     let reportQueueVersion = 0;
     let reportSequence = 0;
     let pendingFinalFlushJob = null;
+    let pendingNavigationJob = null;
     const cleanups = [];
 
     function createReportId() {
@@ -103,6 +104,9 @@
     }
 
     function sendReport(job) {
+      if (job.reportGeneration !== pageGeneration) {
+        return Promise.reject(new Error('Report is stale.'));
+      }
       const dwellDeltaMs = Math.max(0, job.data.dwellMs - lastReportedActiveMs);
       const payload = {
         actionType: job.actionType,
@@ -151,9 +155,25 @@
       if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
         pendingFinalFlushJob = null;
       }
-      if (!pendingFinalFlushJob) return sendReport(job);
-      return Promise.resolve(sendReport(pendingFinalFlushJob))
-        .then(() => sendReport(job));
+      let prerequisite = null;
+      if (pendingFinalFlushJob) {
+        prerequisite = Promise.resolve(sendReport(pendingFinalFlushJob));
+      }
+      if (pendingNavigationJob && pendingNavigationJob.job !== job) {
+        const retryNavigation = () => {
+          const pending = pendingNavigationJob;
+          if (!pending) return undefined;
+          return Promise.resolve(sendReport(pending.job)).then((result) => {
+            if (pendingNavigationJob === pending) {
+              pendingNavigationJob = null;
+              resetForUrl(pending.nextUrl);
+            }
+            return result;
+          });
+        };
+        prerequisite = (prerequisite || Promise.resolve()).then(retryNavigation);
+      }
+      return prerequisite ? prerequisite.then(() => sendReport(job)) : sendReport(job);
     }
 
     function enqueueReportJob(job) {
@@ -217,12 +237,30 @@
       }).activeMs;
       const reportReceiptId = (result) => result?.response?.requestId || result?.receiptId || null;
       try {
-        flushPromise = Promise.resolve(report(
+        const retryNavigation = () => {
+          const pending = pendingNavigationJob;
+          if (!pending) return undefined;
+          return Promise.resolve(sendReport(pending.job)).then((result) => {
+            if (pendingNavigationJob === pending) {
+              pendingNavigationJob = null;
+              resetForUrl(pending.nextUrl);
+            }
+            return result;
+          });
+        };
+        const sendFinal = () => report(
           'PAGE_DWELL',
           retryJob ? retryJob.extra : extra,
           null,
           retryJob,
-        ))
+        );
+        const initialReport = retryJob || !pendingNavigationJob
+          ? sendFinal()
+          : Promise.resolve(retryNavigation()).then(sendFinal);
+        flushPromise = Promise.resolve(initialReport)
+          .then((result) => retryJob
+            ? Promise.resolve(retryNavigation()).then(() => result)
+            : result)
           .then((result) => {
             const finalResult = {
               flushed: true,
@@ -254,8 +292,25 @@
 
     function handleSpaNavigation(nextUrl) {
       if (!shouldReportSpaNavigation(currentUrl, nextUrl)) return;
-      report('SPA_NAVIGATION', { previousUrl: currentUrl, navigationUrl: nextUrl }, currentUrl);
-      resetForUrl(nextUrl);
+      const job = createReportJob(
+        'SPA_NAVIGATION',
+        { previousUrl: currentUrl, navigationUrl: nextUrl },
+        currentUrl,
+      );
+      const pending = { job, nextUrl };
+      pendingNavigationJob = pending;
+      const result = enqueueReportJob(job);
+      const complete = () => {
+        if (pendingNavigationJob === pending) {
+          pendingNavigationJob = null;
+          resetForUrl(nextUrl);
+        }
+      };
+      if (result && typeof result.then === 'function') {
+        result.then(complete, () => {});
+      } else {
+        complete();
+      }
     }
 
     function patchHistoryMethod(methodName) {
@@ -350,9 +405,22 @@
       });
     }
 
-    function stop() {
+    function stop({ discard = false } = {}) {
       if (!started) return;
-      report('PAGE_DWELL');
+      if (discard) {
+        pageGeneration += 1;
+        activeMs = 0;
+        lastReportedActiveMs = 0;
+        lastTick = now();
+        pendingFinalFlushJob = null;
+        pendingNavigationJob = null;
+        reportQueueVersion += 1;
+        reportQueuePending = false;
+        reportTail = Promise.resolve();
+        flushPromise = null;
+      } else {
+        report('PAGE_DWELL');
+      }
       started = false;
       while (cleanups.length > 0) {
         const cleanup = cleanups.pop();

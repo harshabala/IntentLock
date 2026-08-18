@@ -343,6 +343,66 @@ test('queued periodic reports reconcile a final failure before execution', async
   tracker.stop();
 });
 
+test('repeated final failures preserve SPA navigation and prior-page dwell', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/old-page';
+  let now = 0;
+  let finalFailures = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.flushCorrelationId) {
+        if (finalFailures < 2) {
+          finalFailures += 1;
+          return Promise.reject(new Error('final persistence failed'));
+        }
+        return Promise.resolve({
+          response: { status: 'ok', requestId: payload.reportId },
+          error: null,
+        });
+      }
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.flush({
+    sessionId: 'spa-session',
+    generation: 1,
+    flushCorrelationId: 'flush-1',
+  }), /final persistence failed/);
+
+  href = 'https://example.com/new-page';
+  pageTrackerRuntime.history.pushState({}, '', '/new-page');
+  now = 8_000;
+  await tracker.flush({
+    sessionId: 'spa-session',
+    generation: 1,
+    flushCorrelationId: 'flush-2',
+  });
+
+  const navigation = reports.find((payload) => payload.actionType === 'SPA_NAVIGATION');
+  assert.ok(navigation, 'the navigation report should survive repeated final failures');
+  assert.equal(navigation.url, 'https://example.com/old-page');
+  assert.equal(navigation.dwellMs, 5_000);
+
+  now = 11_000;
+  await tracker.flush({
+    sessionId: 'spa-session',
+    generation: 1,
+    flushCorrelationId: 'flush-3',
+  });
+  const laterDwell = reports.at(-1);
+  assert.equal(laterDwell.url, 'https://example.com/new-page');
+  assert.equal(laterDwell.dwellDeltaMs, 3_000);
+  tracker.stop();
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];

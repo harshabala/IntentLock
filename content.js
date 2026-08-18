@@ -9,6 +9,8 @@ let trackingActive = false;
 let pendingIntervention = null;
 let lastFlushRequestId = null;
 let lastFlushPromise = null;
+let trackerSessionKey = null;
+let trackerToken = null;
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -99,20 +101,32 @@ function flushFinalDwell(sessionId, generation, requestId) {
   return flushPromise;
 }
 
-function ensureTracker() {
+function ensureTracker(sessionToken = trackerToken) {
   if (pageTracker) return pageTracker;
-  pageTracker = createPageTracker({
+  let tracker;
+  tracker = createPageTracker({
     onReport: (payload) => {
-      if (typeof payload.flushCorrelationId === 'string') {
-        const { flushCorrelationId, reportId, ...eventPayload } = payload;
+      if (tracker !== pageTracker || sessionToken !== trackerToken) {
+        return Promise.reject(new Error('Tracker session is stale.'));
+      }
+      const scopedPayload = {
+        ...payload,
+        ...(sessionToken?.sessionId && !payload.sessionId ? { sessionId: sessionToken.sessionId } : {}),
+        ...(Number.isInteger(sessionToken?.generation) && !Number.isInteger(payload.generation)
+          ? { generation: sessionToken.generation }
+          : {}),
+      };
+      if (typeof scopedPayload.flushCorrelationId === 'string') {
+        const { flushCorrelationId, reportId, ...eventPayload } = scopedPayload;
         return sendContentEvent({
           ...eventPayload,
           flushRequestId: reportId || flushCorrelationId,
         }, true);
       }
-      return sendContentEvent(payload, Boolean(payload.flushRequestId));
+      return sendContentEvent(scopedPayload, Boolean(scopedPayload.flushRequestId));
     },
   });
+  pageTracker = tracker;
   return pageTracker;
 }
 
@@ -172,24 +186,49 @@ function ensureOverlay() {
   return overlay;
 }
 
-function startTracking() {
-  if (trackingActive) return;
-  trackingActive = true;
-  ensureTracker().start();
+function getTrackerSessionKey(session) {
+  if (!session?.id) return null;
+  const generation = Number.isInteger(session.generation) ? session.generation : 'legacy';
+  return `${session.id}:${generation}`;
 }
 
-function stopTracking() {
-  if (!trackingActive) return;
+function startTracking(session) {
+  const nextSessionKey = getTrackerSessionKey(session);
+  if (trackingActive && trackerSessionKey === nextSessionKey) return;
+  if (pageTracker) stopTracking({ discard: true });
+  trackerSessionKey = nextSessionKey;
+  trackerToken = { sessionId: session.id, generation: session.generation };
+  trackingActive = true;
+  ensureTracker(trackerToken).start();
+}
+
+function stopTracking({ discard = false } = {}) {
+  if (!trackingActive && !pageTracker) return;
+  const tracker = pageTracker;
   trackingActive = false;
-  if (pageTracker) pageTracker.stop();
+  if (discard) {
+    pageTracker = null;
+    trackerSessionKey = null;
+    trackerToken = null;
+    lastFlushRequestId = null;
+    lastFlushPromise = null;
+  }
+  if (tracker) tracker.stop(discard ? { discard: true } : undefined);
+  if (!discard) {
+    pageTracker = null;
+    trackerSessionKey = null;
+    trackerToken = null;
+    lastFlushRequestId = null;
+    lastFlushPromise = null;
+  }
 }
 
 function syncSessionState() {
   chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
     if (result.activeSession?.isActive && result.trackingEnabled !== false) {
-      startTracking();
+      startTracking(result.activeSession);
     } else {
-      stopTracking();
+      stopTracking({ discard: true });
     }
 
     if (result.trackingEnabled === false) {
@@ -214,7 +253,7 @@ function syncSessionState() {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (changes.trackingEnabled && changes.trackingEnabled.newValue === false) {
-    stopTracking();
+    stopTracking({ discard: true });
     if (overlay) overlay.hide();
     pendingIntervention = null;
     return;

@@ -112,3 +112,105 @@ test('failed final flushes are retried so later dwell can be persisted', async (
   assert.equal(contentEvents.length, 1);
   assert.equal(contentEvents[0].dwellDeltaMs, 4_000);
 });
+
+test('content tracking is recreated and stale reports are rejected at a session boundary', async () => {
+  const storageChangedListeners = [];
+  const runtimeMessageListeners = [];
+  const trackers = [];
+  const contentEvents = [];
+  let activeSession = { id: 'session-one', generation: 7, isActive: true };
+
+  const chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(message, callback) {
+        if (message.type === 'CONTENT_EVENT') {
+          contentEvents.push(message.payload);
+          callback({
+            status: 'ok',
+            persisted: true,
+            sessionId: message.payload.sessionId,
+            generation: message.payload.generation,
+            requestId: message.payload.flushRequestId,
+          });
+          return;
+        }
+        callback({ ok: false });
+      },
+      onMessage: {
+        addListener(listener) {
+          runtimeMessageListeners.push(listener);
+        },
+      },
+    },
+    storage: {
+      local: {
+        get(_keys, callback) {
+          callback({ activeSession, trackingEnabled: true });
+        },
+      },
+      onChanged: {
+        addListener(listener) {
+          storageChangedListeners.push(listener);
+        },
+      },
+    },
+  };
+
+  const context = createClassicContext({
+    chrome,
+    IntentLock: {
+      pageTracker: {
+        createPageTracker(options) {
+          const tracker = {
+            options,
+            starts: 0,
+            stops: [],
+            start() {
+              this.starts += 1;
+            },
+            stop(settings) {
+              this.stops.push(settings);
+            },
+          };
+          trackers.push(tracker);
+          return tracker;
+        },
+      },
+      interventionOverlay: {
+        createInterventionOverlay() {
+          return { hide() {}, show() {}, setError() {} };
+        },
+      },
+    },
+    document: { hidden: false, title: 'Example' },
+    window: {},
+    history: {},
+    location: { href: 'https://docs.example.com/session-boundary' },
+  });
+  await runClassicScript(new URL('../content.js', import.meta.url), context);
+
+  assert.equal(trackers.length, 1);
+  const firstTracker = trackers[0];
+  const previousSession = activeSession;
+  activeSession = { id: 'session-two', generation: 7, isActive: true };
+  storageChangedListeners[0]({
+    activeSession: { oldValue: previousSession, newValue: activeSession },
+  }, 'local');
+
+  assert.equal(trackers.length, 2);
+  assert.equal(firstTracker.stops.length, 1);
+  assert.equal(firstTracker.stops[0].discard, true);
+  assert.equal(trackers[1].starts, 1);
+  await assert.rejects(
+    firstTracker.options.onReport({
+      actionType: 'PAGE_DWELL',
+      url: 'https://docs.example.com/session-boundary',
+      dwellMs: 8_000,
+      dwellDeltaMs: 8_000,
+    }),
+    /stale/i,
+  );
+  assert.equal(contentEvents.length, 0);
+  assert.equal(runtimeMessageListeners.length, 1);
+});
