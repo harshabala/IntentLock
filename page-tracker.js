@@ -78,11 +78,11 @@
       });
     }
 
-    function flush() {
+    function flush(extra = {}) {
       if (!started) return Promise.resolve({ flushed: false });
       if (flushPromise) return flushPromise;
       try {
-        flushPromise = Promise.resolve(report('PAGE_DWELL'))
+        flushPromise = Promise.resolve(report('PAGE_DWELL', extra))
           .then(() => ({ flushed: true }))
           .finally(() => {
             flushPromise = null;

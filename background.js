@@ -250,6 +250,7 @@ async function flushTrackedTabs(sessionId, expectedGeneration) {
     .map((tab) => sendTabMessageBounded(tab.id, {
       type: 'FLUSH_DWELL',
       sessionId,
+      generation: expectedGeneration,
       requestId,
     }));
   await Promise.all(flushes);
@@ -952,7 +953,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     } else if (message.type === 'CONTENT_EVENT') {
       Promise.resolve(handleContentEvent(message.payload, sender.tab?.id, requestGeneration))
-        .then(() => sendResponse({ status: 'ok' }), () => sendResponse({ status: 'ok' }));
+        .then((result) => {
+          if (result?.flushAck) {
+            sendResponse({
+              status: result.flushAck.persisted ? 'ok' : 'error',
+              ...result.flushAck,
+            });
+            return;
+          }
+          sendResponse({ status: 'ok' });
+        }, (error) => {
+          if (message.payload?.flushRequestId) {
+            sendResponse({ status: 'error', message: error?.message || 'Content event persistence failed.' });
+            return;
+          }
+          sendResponse({ status: 'ok' });
+        });
     } else if (message.type === 'INTERVENTION_TRANSITION') {
       handleInterventionTransition(message, sender, requestGeneration).then((result) => {
         sendResponse(result);
@@ -1477,13 +1493,28 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
 
 // ── Event logging ──────────────────────────────────────────────────────
 
-function logEvent(actionType, url, extras = {}, expectedGeneration = getStorageGeneration()) {
+function logEvent(
+  actionType,
+  url,
+  extras = {},
+  expectedGeneration = getStorageGeneration(),
+  expectedSessionId = null,
+) {
   return enqueueSessionMutation(async () => {
     if (!isTrackableUrl(url)) return;
     const result = await storageGet(['activeSession', 'trackingEnabled']);
-    if (result.trackingEnabled === false) return;
+    if (result.trackingEnabled === false) {
+      if (expectedSessionId) throw new Error('Content event tracking is disabled.');
+      return;
+    }
     const session = sanitizeSessionEvents(result.activeSession);
-    if (!session || !session.isActive) return;
+    if (!session || !session.isActive) {
+      if (expectedSessionId) throw new Error('Content event session is no longer active.');
+      return;
+    }
+    if (expectedSessionId && session.id !== expectedSessionId) {
+      throw new Error('Content event belongs to a different session.');
+    }
 
     const event = {
       timestamp: Date.now(),
@@ -1502,8 +1533,48 @@ function logEvent(actionType, url, extras = {}, expectedGeneration = getStorageG
   }, expectedGeneration);
 }
 
+function getFlushMetadata(payload) {
+  const fields = ['sessionId', 'generation', 'flushRequestId'];
+  if (!fields.some(field => payload?.[field] !== undefined)) return null;
+  if (
+    payload?.actionType !== 'PAGE_DWELL' ||
+    typeof payload.sessionId !== 'string' ||
+    payload.sessionId.length === 0 ||
+    payload.sessionId.length > 200 ||
+    !Number.isInteger(payload.generation) ||
+    typeof payload.flushRequestId !== 'string' ||
+    payload.flushRequestId.length === 0 ||
+    payload.flushRequestId.length > 300
+  ) {
+    return { invalid: true };
+  }
+  return {
+    sessionId: payload.sessionId,
+    generation: payload.generation,
+    requestId: payload.flushRequestId,
+  };
+}
+
+function flushEventResult(metadata, persisted, message = '') {
+  return {
+    flushAck: {
+      persisted,
+      ...(metadata?.sessionId ? { sessionId: metadata.sessionId } : {}),
+      ...(Number.isInteger(metadata?.generation) ? { generation: metadata.generation } : {}),
+      ...(metadata?.requestId ? { requestId: metadata.requestId } : {}),
+      ...(message ? { message } : {}),
+    },
+  };
+}
+
 function handleContentEvent(payload, tabId, expectedGeneration = getStorageGeneration()) {
-  if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') return Promise.resolve();
+  const flushMetadata = getFlushMetadata(payload);
+  if (flushMetadata?.invalid) {
+    return Promise.resolve(flushEventResult(flushMetadata, false, 'Invalid final dwell metadata.'));
+  }
+  if (!Number.isInteger(tabId) || !payload || typeof payload !== 'object') {
+    return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
+  }
   const allowedActions = new Set(['PAGE_DWELL', 'SPA_NAVIGATION', 'PAGE_LOAD', 'TAB_SWITCH']);
   if (
     typeof payload.url !== 'string' ||
@@ -1516,7 +1587,16 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     (payload.navigationUrl !== undefined && (typeof payload.navigationUrl !== 'string' || payload.navigationUrl.length > 2048 || !isTrackableUrl(payload.navigationUrl))) ||
     (payload.dwellMs !== undefined && (!Number.isFinite(payload.dwellMs) || payload.dwellMs < 0 || payload.dwellMs > 86_400_000)) ||
     (payload.dwellDeltaMs !== undefined && (!Number.isFinite(payload.dwellDeltaMs) || payload.dwellDeltaMs < 0 || payload.dwellDeltaMs > 86_400_000))
-  ) return Promise.resolve();
+  ) return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Invalid content event.') : undefined);
+
+  if (
+    flushMetadata &&
+    (flushMetadata.generation !== expectedGeneration ||
+      expectedGeneration !== getStorageGeneration() ||
+      isStorageDeletionActive())
+  ) {
+    return Promise.resolve(flushEventResult(flushMetadata, false, 'Final dwell session is stale.'));
+  }
 
   const now = Date.now();
   const bucket = contentEventBuckets.get(tabId) || { startedAt: now, count: 0 };
@@ -1524,7 +1604,9 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     bucket.startedAt = now;
     bucket.count = 0;
   }
-  if (bucket.count >= MAX_CONTENT_EVENTS_PER_WINDOW) return Promise.resolve();
+  if (bucket.count >= MAX_CONTENT_EVENTS_PER_WINDOW) {
+    return Promise.resolve(flushMetadata ? flushEventResult(flushMetadata, false, 'Content event rate limit exceeded.') : undefined);
+  }
   bucket.count += 1;
   contentEventBuckets.set(tabId, bucket);
 
@@ -1534,6 +1616,11 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
   if (typeof payload.dwellDeltaMs === 'number') extras.dwellDeltaMs = payload.dwellDeltaMs;
   if (payload.previousUrl) extras.previousUrl = payload.previousUrl;
   if (payload.navigationUrl) extras.navigationUrl = payload.navigationUrl;
+  if (flushMetadata) {
+    extras.sessionId = flushMetadata.sessionId;
+    extras.generation = flushMetadata.generation;
+    extras.flushRequestId = flushMetadata.requestId;
+  }
 
   // Accumulate on-intent metrics from dwell deltas (not reconstructable from capped events)
   let metricWrite = Promise.resolve();
@@ -1544,9 +1631,18 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
   ) {
     metricWrite = enqueueSessionMutation(async () => {
       const result = await storageGet(['activeSession', 'trackingEnabled']);
-      if (result.trackingEnabled === false) return;
+      if (result.trackingEnabled === false) {
+        if (flushMetadata) throw new Error('Final dwell tracking is disabled.');
+        return;
+      }
       const session = sanitizeSessionEvents(result.activeSession);
-      if (!session?.isActive) return;
+      if (!session?.isActive) {
+        if (flushMetadata) throw new Error('Final dwell session is no longer active.');
+        return;
+      }
+      if (flushMetadata && session.id !== flushMetadata.sessionId) {
+        throw new Error('Final dwell event belongs to a different session.');
+      }
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
         ? (payload.previousUrl || payload.url)
@@ -1565,17 +1661,27 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
       });
       await storageSet({ activeSession: session });
       currentSession = session;
-    }, expectedGeneration).catch(() => {});
+    }, expectedGeneration);
+    if (!flushMetadata) metricWrite = metricWrite.catch(() => {});
   }
 
-  const eventWrite = logEvent(payload.actionType, payload.url, extras, expectedGeneration).catch(() => {});
+  let eventWrite = logEvent(
+    payload.actionType,
+    payload.url,
+    extras,
+    expectedGeneration,
+    flushMetadata?.sessionId || null,
+  );
+  if (!flushMetadata) eventWrite = eventWrite.catch(() => {});
 
   return Promise.all([metricWrite, eventWrite]).then(() => {
+    if (flushMetadata) return flushEventResult(flushMetadata, true);
     if (payload.actionType === 'PAGE_DWELL' || payload.actionType === 'SPA_NAVIGATION') {
       evaluateDrift(
         payload.actionType === 'SPA_NAVIGATION' ? (payload.navigationUrl || payload.url) : payload.url,
         tabId,
         expectedGeneration,
+        { skipLlm: payload.actionType === 'PAGE_DWELL' },
       );
     }
   });
@@ -1584,13 +1690,31 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
 // ── Drift evaluation ───────────────────────────────────────────────────
 
 const DRIFT_DEBOUNCE_MS = 5000;
+export const MAX_DRIFT_DEBOUNCE_ENTRIES = 512;
 const driftDebounce = new Map();
 
 function clearDriftDebounce() {
   driftDebounce.clear();
 }
 
-function evaluateDrift(url, tabId, expectedGeneration = getStorageGeneration()) {
+function rememberDriftEvaluation(key, timestamp) {
+  driftDebounce.delete(key);
+  driftDebounce.set(key, timestamp);
+  while (driftDebounce.size > MAX_DRIFT_DEBOUNCE_ENTRIES) {
+    driftDebounce.delete(driftDebounce.keys().next().value);
+  }
+}
+
+export function getDriftDebounceSize() {
+  return driftDebounce.size;
+}
+
+function evaluateDrift(
+  url,
+  tabId,
+  expectedGeneration = getStorageGeneration(),
+  { skipLlm = false } = {},
+) {
   if (!isTrackableUrl(url)) return;
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
     if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) return;
@@ -1605,7 +1729,7 @@ function evaluateDrift(url, tabId, expectedGeneration = getStorageGeneration()) 
     if ((now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
       return;
     }
-    driftDebounce.set(debounceKey, now);
+    rememberDriftEvaluation(debounceKey, now);
 
     // Check per-domain override cooldown
     const evaluatedDomain = extractDomain(url);
@@ -1663,6 +1787,8 @@ function evaluateDrift(url, tabId, expectedGeneration = getStorageGeneration()) 
       ).catch(() => {});
       return;
     }
+
+    if (skipLlm) return;
 
     checkDriftLLM(session.intent, url, session.events).then(res => {
       if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) return;

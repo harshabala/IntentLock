@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildDefaultPolicy } from '../heuristic-policy.js';
+import { getStorageGeneration } from '../storage-queue.js';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
@@ -58,8 +59,14 @@ globalThis.chrome = {
     },
     sendMessage: (tabId, message, callback) => {
       if (message?.type === 'FLUSH_DWELL' && finalDwellPayloads.has(tabId) && messageListener) {
+        const payload = {
+          ...finalDwellPayloads.get(tabId),
+          sessionId: message.sessionId,
+          generation: message.generation,
+          flushRequestId: message.requestId,
+        };
         messageListener(
-          { type: 'CONTENT_EVENT', payload: finalDwellPayloads.get(tabId) },
+          { type: 'CONTENT_EVENT', payload },
           { tab: { id: tabId } },
           (response) => callback?.({ status: response?.status || 'ok' }),
         );
@@ -673,6 +680,48 @@ test('PAGE_DWELL evaluates static pages after the dwell event is persisted', asy
   assert.ok(storageData.interventionStates, 'static dwell should create an intervention');
 });
 
+test('PAGE_DWELL does not call the configured provider for every snapshot', async () => {
+  const url = 'https://dwell-provider-check.example/work';
+  const previousFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"aligned":false,"confidence":0.9}' } }] }),
+    };
+  };
+  storageData = {
+    trackingEnabled: true,
+    llmProviderConfig: {
+      providerId: 'openai',
+      model: 'gpt-4o-mini',
+      baseUrl: 'https://api.openai.com/v1/chat/completions',
+      authType: 'bearer',
+      apiStyle: 'openai',
+    },
+    activeSession: makeSession('dwell-provider-session', 'coding the new feature'),
+  };
+  sessionStorageData.llmApiKey = 'test-provider-key';
+  await reloadConfig();
+
+  await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 30_000,
+      dwellDeltaMs: 30_000,
+    },
+  }, { tab: { id: 1 } });
+  await waitForCallbacks();
+  await waitForCallbacks();
+
+  if (previousFetch) globalThis.fetch = previousFetch;
+  else delete globalThis.fetch;
+  assert.equal(fetchCount, 0);
+});
+
 test('final session history includes the final dwell delta before it is written', async () => {
   const url = 'https://docs.example.com/work';
   storageData = {
@@ -729,6 +778,60 @@ test('session finalization flushes unreported tracker dwell into metrics and his
   assert.equal(ended.session.activeMs, 7_000);
   assert.equal(ended.session.metrics.activeMs, 7_000);
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
+});
+
+test('late final dwell events cannot write into a newer session', async () => {
+  const url = 'https://docs.example.com/late-dwell';
+  const generation = getStorageGeneration();
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('new-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 10_000,
+      dwellDeltaMs: 10_000,
+      sessionId: 'old-session',
+      generation,
+      flushRequestId: 'old-session:flush',
+    },
+  }, { tab: { id: 1 } });
+
+  assert.equal(response.status, 'error');
+  assert.equal(storageData.activeSession.id, 'new-session');
+  assert.deepEqual(storageData.activeSession.events, []);
+});
+
+test('final dwell event reports a write failure instead of acknowledging persistence', async () => {
+  const url = 'https://docs.example.com/failed-dwell';
+  const generation = getStorageGeneration();
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('failed-flush-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+  storageErrorMessage = 'dwell write failed';
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_DWELL',
+      url,
+      dwellMs: 10_000,
+      dwellDeltaMs: 10_000,
+      sessionId: 'failed-flush-session',
+      generation,
+      flushRequestId: 'failed-flush-session:flush',
+    },
+  }, { tab: { id: 1 } });
+
+  storageErrorMessage = null;
+  assert.equal(response.status, 'error');
 });
 
 test('related-domain marks do not carry into a new session', async () => {
@@ -824,4 +927,23 @@ test('drift debounce is independent for two tabs on the same URL', async () => {
   await waitForCallbacks();
 
   assert.equal(Object.keys(storageData.interventionStates || {}).length, 2);
+});
+
+test('drift debounce state is capped at its named limit', async () => {
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('debounce-cap-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const { MAX_DRIFT_DEBOUNCE_ENTRIES, getDriftDebounceSize } = await import('../background.js');
+  for (let tabId = 100; tabId < 100 + MAX_DRIFT_DEBOUNCE_ENTRIES + 5; tabId += 1) {
+    const url = `https://debounce-${tabId}.example/work`;
+    tabUrls.set(tabId, url);
+    tabUpdatedListener(tabId, { status: 'complete' }, { url });
+  }
+  await waitForCallbacks();
+  await waitForCallbacks();
+
+  assert.equal(getDriftDebounceSize(), MAX_DRIFT_DEBOUNCE_ENTRIES);
 });

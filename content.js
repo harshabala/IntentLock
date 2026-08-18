@@ -19,19 +19,23 @@ function sendRuntimeMessage(message) {
   });
 }
 
-function sendContentEvent(payload) {
-  return new Promise((resolve) => {
+function sendContentEvent(payload, requirePersistence = false) {
+  return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
       type: 'CONTENT_EVENT',
       payload,
     }, (response) => {
       const error = chrome.runtime.lastError;
+      if (requirePersistence && (error || response?.status !== 'ok' || response.persisted !== true)) {
+        reject(error || new Error(response?.message || 'Content event persistence was not acknowledged.'));
+        return;
+      }
       resolve({ response, error: error ? new Error(error.message) : null });
     });
   });
 }
 
-function flushFinalDwell(requestId) {
+function flushFinalDwell(sessionId, generation, requestId) {
   if (requestId && requestId === lastFlushRequestId && lastFlushPromise) {
     return lastFlushPromise;
   }
@@ -40,8 +44,19 @@ function flushFinalDwell(requestId) {
     return Promise.resolve({ status: 'ok', flushed: false });
   }
 
-  const flushPromise = Promise.resolve(pageTracker.flush())
-    .then(() => ({ status: 'ok', flushed: true }))
+  const flushPromise = Promise.resolve(pageTracker.flush({
+    sessionId,
+    generation,
+    flushRequestId: requestId,
+  }))
+    .then(() => ({
+      status: 'ok',
+      flushed: true,
+      persisted: true,
+      sessionId,
+      generation,
+      requestId,
+    }))
     .catch(() => ({ status: 'ok', flushed: false }));
   if (requestId) {
     lastFlushRequestId = requestId;
@@ -53,7 +68,7 @@ function flushFinalDwell(requestId) {
 function ensureTracker() {
   if (pageTracker) return pageTracker;
   pageTracker = createPageTracker({
-    onReport: (payload) => sendContentEvent(payload),
+    onReport: (payload) => sendContentEvent(payload, Boolean(payload.flushRequestId)),
   });
   return pageTracker;
 }
@@ -196,7 +211,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'FLUSH_DWELL') {
-    flushFinalDwell(message.requestId).then(sendResponse, () => {
+    flushFinalDwell(message.sessionId, message.generation, message.requestId).then(sendResponse, () => {
       sendResponse({ status: 'ok', flushed: false });
     });
     return true;

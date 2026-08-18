@@ -706,12 +706,17 @@ export function mergePolicyWithIntent(intentText, existingPolicy = null) {
   return base;
 }
 
-function matchesCustomDomain(hostname, domains) {
+function matchesCustomDomain(hostname, domains, pathname = '') {
   const host = normalizeHostname(hostname);
   if (!host || !Array.isArray(domains)) return false;
   return domains.some((domain) => {
-    const rule = parseDomainInput(domain).hostname;
-    return rule && (host === rule || host.endsWith(`.${rule}`));
+    const parsed = parseDomainInput(domain);
+    if (!parsed.hostname || (host !== parsed.hostname && !host.endsWith(`.${parsed.hostname}`))) {
+      return false;
+    }
+    if (!parsed.pathname) return true;
+    const path = normalizePath(pathname);
+    return path === parsed.pathname || path.startsWith(`${parsed.pathname}/`);
   });
 }
 
@@ -724,8 +729,8 @@ export function resolveDomainPolicy(hostname, policy) {
     const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
     const blockList = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [];
 
-    if (matchesCustomDomain(location.hostname, blockList)) return 'block';
-    if (matchesCustomDomain(location.hostname, allowList)) return 'allow';
+    if (matchesCustomDomain(location.hostname, blockList, location.pathname)) return 'block';
+    if (matchesCustomDomain(location.hostname, allowList, location.pathname)) return 'allow';
 
     const lookup = getSiteCategory(location.hostname, location.pathname);
     if (!lookup) return 'neutral';
@@ -740,18 +745,25 @@ export function getEffectiveBlockList(policy) {
   const blocked = new Set();
   const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
 
-  for (const cat of SITE_CATEGORIES) {
-    if (policy.categoryPolicies?.[cat.id] === 'block') {
-      for (const domain of cat.domains) {
-        const n = parseDomainInput(domain).hostname;
-        if (n && !matchesCustomDomain(n, allowList)) blocked.add(n);
+  for (const entry of DOMAIN_CATALOG) {
+    if (policy.categoryPolicies?.[entry.categoryId] !== 'block') continue;
+    if (entry.pathPattern) {
+      const baseEntry = DOMAIN_CATALOG.find(candidate => (
+        candidate.hostname === entry.hostname && !candidate.path && !candidate.pathPattern
+      ));
+      if (baseEntry && !matchesCustomDomain(baseEntry.hostname, allowList)) {
+        blocked.add(baseEntry.hostname);
       }
+      continue;
+    }
+    if (!matchesCustomDomain(entry.hostname, allowList, entry.path)) {
+      blocked.add(`${entry.hostname}${entry.path}`);
     }
   }
 
   for (const d of (Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [])) {
-    const n = parseDomainInput(d).hostname;
-    if (n) blocked.add(n);
+    const rule = parseDomainInput(d);
+    if (rule.hostname) blocked.add(`${rule.hostname}${rule.pathname}`);
   }
 
   return [...blocked];
@@ -810,6 +822,37 @@ function isCategoryAligned(hostname, pathname, intentCategoryId) {
   return aligned.includes(siteCat.categoryId);
 }
 
+function normalizeDwellForUrl(dwellEvents) {
+  const ordered = dwellEvents
+    .map((event, index) => ({ event, index }))
+    .sort((a, b) => (
+      (Number.isFinite(a.event.timestamp) ? a.event.timestamp : 0)
+      - (Number.isFinite(b.event.timestamp) ? b.event.timestamp : 0)
+      || a.index - b.index
+    ))
+    .map(({ event }) => event);
+  const firstDeltaIndex = ordered.findIndex(event => typeof event.dwellDeltaMs === 'number');
+  if (firstDeltaIndex < 0) {
+    return ordered.reduce((max, event) => Math.max(
+      max,
+      typeof event.dwellMs === 'number' ? Math.max(0, event.dwellMs) : 0,
+    ), 0);
+  }
+
+  const legacyBaseline = ordered.slice(0, firstDeltaIndex).reduce((max, event) => Math.max(
+    max,
+    typeof event.dwellMs === 'number' ? Math.max(0, event.dwellMs) : 0,
+  ), 0);
+  const firstDelta = ordered[firstDeltaIndex];
+  const firstSnapshotBaseline = typeof firstDelta.dwellMs === 'number'
+    ? Math.max(0, firstDelta.dwellMs - Math.max(0, firstDelta.dwellDeltaMs))
+    : 0;
+  const deltaTotal = ordered.reduce((total, event) => total + (
+    typeof event.dwellDeltaMs === 'number' ? Math.max(0, event.dwellDeltaMs) : 0
+  ), 0);
+  return Math.max(legacyBaseline, firstSnapshotBaseline) + deltaTotal;
+}
+
 /**
  * Same alignment rules as evaluatePolicyDrift, plus optional "mark related" hostnames (IL-3).
  * relatedHostnames: bare hostnames the user marked as work-related during override.
@@ -820,8 +863,9 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
   const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
     ? policy
     : buildDefaultPolicy('deep_work', 'balanced');
-  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains);
-  const customAllow = !customBlock && matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains);
+  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains, parsed.pathname);
+  if (customBlock) return false;
+  const customAllow = matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains, parsed.pathname);
   if (customAllow) return true;
   const terms = intentTerms(intent);
   const keywordAligned = isKeywordAligned(url, terms);
@@ -873,8 +917,9 @@ export function evaluatePolicyDrift({
   const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)
     && !keywordAligned && !categoryAligned;
   const isAligned = keywordAligned || categoryAligned || relatedAligned;
-  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains);
-  const customAllow = !customBlock && matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains);
+  const customBlock = matchesCustomDomain(parsed.hostname, safePolicy.customBlockDomains, parsed.pathname);
+  const customAllow = !customBlock
+    && matchesCustomDomain(parsed.hostname, safePolicy.customAllowDomains, parsed.pathname);
 
   // Custom rules are explicit user decisions: blocks win over allows, and an
   // allowed host is not reconsidered by later heuristic signals.
@@ -933,14 +978,7 @@ export function evaluatePolicyDrift({
     return ep && ep.hostname === parsed.hostname;
   }).length;
   const dwellEvents = recentEvents.filter(e => e.actionType === 'PAGE_DWELL' && e.url === url);
-  const hasDwellDeltas = dwellEvents.some(e => typeof e.dwellDeltaMs === 'number');
-  const dwellForUrl = hasDwellDeltas
-    ? dwellEvents.reduce((total, event) => (
-      total + (typeof event.dwellDeltaMs === 'number' ? Math.max(0, event.dwellDeltaMs) : 0)
-    ), 0)
-    : dwellEvents.reduce((max, event) => (
-      Math.max(max, typeof event.dwellMs === 'number' ? event.dwellMs : 0)
-    ), 0);
+  const dwellForUrl = normalizeDwellForUrl(dwellEvents);
 
   // +0.1 base for being on an unaligned domain
   let score = isAligned ? 0 : 0.1;

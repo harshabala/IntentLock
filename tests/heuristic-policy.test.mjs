@@ -11,6 +11,7 @@ import {
   resolveDomainPolicy,
   getEffectiveBlockList,
   evaluatePolicyDrift,
+  isUrlAligned,
   intentTerms,
 } from '../heuristic-policy.js';
 
@@ -205,6 +206,22 @@ test('getEffectiveBlockList excludes customAllowDomains', () => {
   assert.ok(!list.includes('youtube.com'), 'customAllowDomains should not be in block list');
 });
 
+test('getEffectiveBlockList preserves path-specific catalog and custom rules', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  policy.categoryPolicies.travel = 'block';
+  let list = getEffectiveBlockList(policy);
+  assert.ok(list.includes('google.com/travel'));
+  assert.ok(!list.includes('google.com'));
+
+  policy.customAllowDomains = ['google.com/travel'];
+  list = getEffectiveBlockList(policy);
+  assert.ok(!list.includes('google.com/travel'));
+
+  policy.customBlockDomains = ['example.com/work'];
+  list = getEffectiveBlockList(policy);
+  assert.ok(list.includes('example.com/work'));
+});
+
 test('mergePolicyWithIntent auto-classifies job_search text', () => {
   const policy = mergePolicyWithIntent('applying for software engineer jobs');
   assert.equal(policy.intentCategoryId, 'job_search');
@@ -321,6 +338,31 @@ test('dwell thresholds use delta events once and ignore repeated cumulative snap
   assert.ok(!at59.signals.some((signal) => signal.startsWith('repeated_domain:')));
 });
 
+test('mixed legacy cumulative and new dwell deltas are counted without double-counting', () => {
+  const policy = buildDefaultPolicy('coding', 'balanced');
+  const now = Date.now();
+  const url = 'https://reddit.com/r/programming';
+  const result = evaluatePolicyDrift({
+    intent: 'coding the new feature',
+    url,
+    events: [
+      { timestamp: now - 3_000, actionType: 'PAGE_DWELL', url, dwellMs: 60_000 },
+      {
+        timestamp: now - 2_000,
+        actionType: 'PAGE_DWELL',
+        url,
+        dwellMs: 120_000,
+        dwellDeltaMs: 60_000,
+      },
+    ],
+    policy,
+    now,
+  });
+
+  assert.equal(result.shouldIntervene, true);
+  assert.ok(result.signals.includes('dwell:120s'));
+});
+
 test('allowed domain does not trigger category block', () => {
   const policy = buildDefaultPolicy('coding', 'strict');
   const result = evaluatePolicyDrift({
@@ -369,6 +411,20 @@ test('custom allow and block rules match subdomains with block taking precedence
   assert.equal(resolveDomainPolicy('m.youtube.com', blockPolicy), 'block');
   assert.equal(result.shouldIntervene, true);
   assert.equal(result.reason, 'blocked_category');
+});
+
+test('custom blocks are never treated as aligned by alignment helpers', () => {
+  const policy = buildDefaultPolicy('research', 'balanced');
+  policy.customBlockDomains = ['youtube.com'];
+  assert.equal(
+    isUrlAligned(
+      'research YouTube API documentation',
+      'https://m.youtube.com/developers',
+      policy,
+      ['youtube.com'],
+    ),
+    false,
+  );
 });
 
 test('deep_work and writing categories align with work-oriented catalog sites', () => {

@@ -15,13 +15,13 @@
 | `classifyIntentCategory(text)` | function | Keyword-only intent classifier → `{categoryId, confidence, matchedKeywords}` |
 | `SITE_CATEGORIES` | `SiteCategory[]` | 21 site category definitions with domain lists |
 | `DOMAIN_TO_CATEGORY` | `Map<string, string>` | Built at module load; 529 entries |
-| `getSiteCategory(hostname)` | function | Looks up a hostname → `{categoryId, label}` or `null` |
+| `getSiteCategory(hostname, pathname?)` | function | Resolves the longest matching parent-domain suffix and optional path rule → `{categoryId, label}` or `null` |
 | `STRICTNESS_PRESETS` | object | `{strict, balanced, relaxed}` → categoryId → `'block'|'warn'|'allow'` |
 | `buildDefaultPolicy(intentCategoryId, strictness?)` | function | Returns a `HeuristicPolicy` object |
 | `mergePolicyWithIntent(intentText, existingPolicy?)` | function | Classifies intent and builds policy |
 | `normalizeHostname(h)` | internal | Strips `www.`, lowercases |
 | `resolveDomainPolicy(hostname, policy)` | function | Returns `'block'|'warn'|'allow'|'neutral'` |
-| `getEffectiveBlockList(policy)` | function | Returns `string[]` of all blocked hostnames |
+| `getEffectiveBlockList(policy)` | function | Returns `string[]` of all blocked hostnames and path rules |
 | `intentTerms(text)` | function | Tokenizes, strips stop words, deduplicates |
 | `CATEGORY_ALIGNMENT` | object | Maps intentCategoryId → aligned site category IDs |
 | `evaluatePolicyDrift(params)` | function | Main drift evaluator — returns `{shouldIntervene, score, reason, reasonLabel, signals}` |
@@ -84,11 +84,11 @@ No API call. Falls back to `null` category if the text is too vague — `buildDe
   label: string,
   description: string,
   defaultPolicy: 'block' | 'warn' | 'allow',
-  domains: string[],   // bare hostnames, lowercase, no protocol
+  domains: string[],   // hostnames with optional path rules, lowercase, no protocol
 }
 ```
 
-**21 categories, 529 unique domains.** A domain appears in exactly one category (first-write-wins in `DOMAIN_TO_CATEGORY`).
+**21 categories, 529 unique domains.** Overlapping entries use explicit category priority, and path-specific entries take precedence over hostname fallbacks.
 
 | Category ID | Default policy | Example domains |
 |-------------|---------------|-----------------|
@@ -115,9 +115,9 @@ No API call. Falls back to `null` category if the text is too vague — `buildDe
 | `health` | allow | myfitnesspal.com, headspace.com |
 | `travel` | allow | google.com/travel, airbnb.com |
 
-### `getSiteCategory(hostname)`
+### `getSiteCategory(hostname, pathname?)`
 
-Strips `www.`, lowercases, looks up in `DOMAIN_TO_CATEGORY`. Returns `{categoryId, label}` or `null`.
+Strips `www.`, lowercases, and resolves the longest matching parent-domain suffix. A matching path-specific entry such as `google.com/travel` takes precedence over the hostname fallback. Returns `{categoryId, label}` or `null`.
 
 ---
 
@@ -141,8 +141,8 @@ Stored in `chrome.storage.local` under the key `heuristicPolicy`, version 1:
 
 ### Precedence (highest to lowest)
 
-1. `customAllowDomains` match → **allow** (category block ignored)
-2. `customBlockDomains` match → **block** (category allow ignored)
+1. `customBlockDomains` match → **block** (always intervenes; category and allow rules are ignored)
+2. `customAllowDomains` match → **allow** (category block ignored for that host/subdomain or path rule)
 3. `categoryPolicies[DOMAIN_TO_CATEGORY[hostname]]`
 4. Domain not in any category → **neutral** (behavioral signals still score)
 
