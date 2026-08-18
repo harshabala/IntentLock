@@ -146,10 +146,20 @@
       reportTail = Promise.resolve();
     }
 
+    function sendQueuedReport(job) {
+      if (job.isFinalFlush) return sendReport(job);
+      if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
+        pendingFinalFlushJob = null;
+      }
+      if (!pendingFinalFlushJob) return sendReport(job);
+      return Promise.resolve(sendReport(pendingFinalFlushJob))
+        .then(() => sendReport(job));
+    }
+
     function enqueueReportJob(job) {
       if (reportQueuePending) {
         const version = ++reportQueueVersion;
-        const queued = reportTail.catch(() => {}).then(() => sendReport(job));
+        const queued = reportTail.catch(() => {}).then(() => sendQueuedReport(job));
         reportTail = queued;
         queued.then(
           () => finishReportQueue(version),
@@ -158,7 +168,7 @@
         return queued;
       }
 
-      const result = sendReport(job);
+      const result = sendQueuedReport(job);
       if (result && typeof result.then === 'function') {
         const version = ++reportQueueVersion;
         reportQueuePending = true;
@@ -177,9 +187,7 @@
       if (pendingFinalFlushJob && pendingFinalFlushJob.reportGeneration !== pageGeneration) {
         pendingFinalFlushJob = null;
       }
-      if (!pendingFinalFlushJob) return enqueueReportJob(job);
-      return Promise.resolve(enqueueReportJob(pendingFinalFlushJob))
-        .then(() => enqueueReportJob(job));
+      return enqueueReportJob(job);
     }
 
     function flush(extra = {}) {

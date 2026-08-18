@@ -303,6 +303,46 @@ test('periodic reports reconcile a pending final receipt before advancing baseli
   tracker.stop();
 });
 
+test('queued periodic reports reconcile a final failure before execution', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let finalAttempts = 0;
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.flushCorrelationId) {
+        finalAttempts += 1;
+        if (finalAttempts === 1) return Promise.reject(new Error('in-flight final failed'));
+        return Promise.resolve({ response: { status: 'ok', requestId: payload.reportId }, error: null });
+      }
+      return Promise.resolve();
+    },
+    getLocation: () => 'https://example.com/queued-periodic',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  const final = tracker.flush({
+    sessionId: 'queued-session',
+    generation: 1,
+    flushCorrelationId: 'flush-1',
+  });
+  now = 6_000;
+  const periodic = tracker.report('PAGE_DWELL');
+
+  await assert.rejects(final, /in-flight final failed/);
+  await periodic;
+
+  assert.equal(reports.length, 3);
+  assert.equal(reports[0].reportId, reports[1].reportId);
+  assert.equal(reports[0].dwellDeltaMs, 5_000);
+  assert.equal(reports[2].dwellDeltaMs, 1_000);
+  tracker.stop();
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];
