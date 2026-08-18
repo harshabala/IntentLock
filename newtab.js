@@ -498,31 +498,58 @@ document.addEventListener('DOMContentLoaded', () => {
     cancelBtn.addEventListener('click', () => closeModal());
     saveBtn.addEventListener('click', () => {
       const newIntent = textarea.value.trim();
-      if (newIntent && newIntent !== session.intent) {
-        chrome.storage.local.get(['activeSession'], (result) => {
-          const currentSession = result.activeSession;
-          if (currentSession) {
-            currentSession.intent = newIntent;
-            if (!dataDeletionInProgress) chrome.storage.local.set({ activeSession: currentSession });
-          }
-        });
-        intentTextElement.textContent = newIntent;
+      if (!newIntent || newIntent === session.intent) {
+        closeModal();
+        return;
       }
-      closeModal();
+      if (dataDeletionInProgress) {
+        setFieldError(textarea, 'Data deletion is in progress. Please try again afterward.');
+        return;
+      }
+      saveBtn.disabled = true;
+      chrome.runtime.sendMessage({
+        type: 'UPDATE_SESSION_INTENT',
+        sessionId: session.id,
+        intent: newIntent,
+      }, (response) => {
+        saveBtn.disabled = false;
+        if (chrome.runtime.lastError || response?.status !== 'ok' || !response?.session) {
+          setFieldError(textarea, 'This session ended or changed. Keep the active session and try again.');
+          return;
+        }
+        session.intent = response.session.intent;
+        intentTextElement.textContent = response.session.intent;
+        closeModal();
+      });
     });
   }
 
   // ── Session summary ─────────────────────────────────────────────────
 
   function endSession(container, session) {
-    if (timerInterval) clearInterval(timerInterval);
-
     chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, (response) => {
-      chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-        const endedSession = (response && response.session) ? response.session : session;
-        showSummary(container, endedSession);
+      if (chrome.runtime.lastError || response?.status !== 'ok' || !response?.session) {
+        showEndSessionFailure(container, session, response?.message || 'Unable to end the session.');
+        return;
+      }
+      if (timerInterval) clearInterval(timerInterval);
+      chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, (clearResponse) => {
+        if (chrome.runtime.lastError || clearResponse?.status !== 'ok') {
+          showEndSessionFailure(container, response.session, clearResponse?.message || 'Unable to clear the completed session.');
+          return;
+        }
+        showSummary(container, response.session);
       });
     });
+  }
+
+  function showEndSessionFailure(container, session, message) {
+    showActiveState(session);
+    const notice = document.createElement('p');
+    notice.className = 'field-error';
+    notice.setAttribute('role', 'alert');
+    notice.textContent = `${message} Your active session was kept. Try ending it again.`;
+    container.appendChild(notice);
   }
 
   function showSummary(container, session) {

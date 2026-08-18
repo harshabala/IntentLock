@@ -31,3 +31,46 @@ test('classic overlay refuses a pre-existing global API property', async () => {
     /IntentLock\.interventionOverlay is already defined/,
   );
 });
+
+test('fallback dismissal removes the lock tab only once for duplicate hide messages', async () => {
+  let runtimeListener = null;
+  let removeCount = 0;
+  const makeElement = () => ({
+    append: () => {},
+    appendChild: () => {},
+    setAttribute: () => {},
+    textContent: '',
+    className: '',
+  });
+  const context = await loadClassicScript(new URL('../intervention.js', import.meta.url), {
+    chrome: {
+      runtime: {
+        lastError: null,
+        onMessage: { addListener: (listener) => { runtimeListener = listener; } },
+        sendMessage: (_message, callback) => callback?.({}),
+      },
+      tabs: {
+        getCurrent: (callback) => callback({ id: 42 }),
+        remove: (_tabId, callback) => {
+          removeCount += 1;
+          callback();
+        },
+      },
+    },
+    document: {
+      addEventListener: () => {},
+      querySelector: () => makeElement(),
+      createElement: () => makeElement(),
+    },
+  });
+
+  assert.ok(context);
+  const responses = [];
+  runtimeListener({ type: 'HIDE_INTERVENTION' }, {}, (response) => responses.push(response));
+  runtimeListener({ type: 'HIDE_INTERVENTION' }, {}, (response) => responses.push(response));
+
+  assert.equal(removeCount, 1);
+  assert.equal(responses.length, 2);
+  assert.equal(responses[0].hidden, true);
+  assert.equal(responses[1].hidden, true);
+});

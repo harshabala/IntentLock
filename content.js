@@ -135,15 +135,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     stopTracking();
     if (overlay) overlay.hide();
     pendingIntervention = null;
+    return;
   }
-  if (changes.trackingEnabled?.newValue === true) {
-    chrome.storage.local.get(['activeSession'], (result) => {
-      if (result.activeSession?.isActive) startTracking();
-    });
-  } else if (changes.activeSession?.newValue?.isActive && changes.trackingEnabled?.newValue !== false) {
-    startTracking();
-  } else if (changes.activeSession && !changes.activeSession.newValue?.isActive) {
-    stopTracking();
+  if (changes.trackingEnabled?.newValue === true || changes.activeSession) {
+    syncSessionState();
   }
 });
 
@@ -161,7 +156,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       };
       ensureOverlay().show({
         reason: message.reason,
-        intent: message.intent,
+        intent: message.intent ?? pendingIntervention.intent ?? '',
         state: pendingIntervention,
       });
       sendResponse({ shown: true });

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
+let storageErrorMessage = null;
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -26,7 +27,8 @@ globalThis.chrome = {
   },
   runtime: {
     onMessage: { addListener: (fn) => { messageListener = fn; } },
-    getURL: (path) => `chrome-extension://mock/${path}`
+    getURL: (path) => `chrome-extension://mock/${path}`,
+    lastError: null,
   },
   alarms: {
     create: () => {},
@@ -76,6 +78,12 @@ globalThis.chrome = {
         callback(res);
       },
       set: (data, callback) => {
+        if (storageErrorMessage) {
+          chrome.runtime.lastError = { message: storageErrorMessage };
+          if (callback) callback();
+          chrome.runtime.lastError = null;
+          return;
+        }
         Object.assign(storageData, data);
         if (callback) callback();
       },
@@ -90,12 +98,37 @@ globalThis.chrome = {
         storageData = {};
         if (callback) callback();
       },
-    }
+    },
+    onChanged: { addListener: () => {} }
   }
 };
 
 // Import background.js to execute its loadConfig
 const { getInMemoryState, reloadConfig, createHistoryEntry } = await import('../background.js');
+
+function requestMessage(message) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (response) => {
+      if (settled) return;
+      settled = true;
+      resolve(response);
+    };
+    messageListener(message, {}, finish);
+    setTimeout(() => finish({ status: 'timeout' }), 100);
+  });
+}
+
+function makeSession(id, intent = id) {
+  return {
+    id,
+    intent,
+    startTime: Date.now(),
+    timeBudget: null,
+    isActive: true,
+    events: [],
+  };
+}
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
   // Verify initially loaded values (non-defaults)
@@ -196,4 +229,122 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
   assert.equal(stateAfter.currentSession, null);
   assert.equal(stateAfter.overrideCooldowns.size, 0);
   assert.equal(isLlmBackedOff(), false, 'LLM backoff should be cleared');
+});
+
+test('SESSION_STARTED rejects a session while tracking is disabled', async () => {
+  storageData = { trackingEnabled: false };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'SESSION_STARTED',
+    session: makeSession('disabled-session'),
+  });
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /tracking is disabled/i);
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('concurrent SESSION_STARTED messages keep the first active session authoritative', async () => {
+  storageData = { trackingEnabled: true };
+  await reloadConfig();
+
+  const firstRequest = requestMessage({ type: 'SESSION_STARTED', session: makeSession('first-session') });
+  const secondRequest = requestMessage({ type: 'SESSION_STARTED', session: makeSession('second-session') });
+  const [firstResponse, secondResponse] = await Promise.all([firstRequest, secondRequest]);
+
+  assert.equal(firstResponse.status, 'ok');
+  assert.equal(secondResponse.status, 'error');
+  assert.match(secondResponse.message, /active session/i);
+  assert.equal(storageData.activeSession.id, 'first-session');
+});
+
+test('intent edits require the expected active session and cannot resurrect a stale session', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('edit-session', 'old intent') };
+  await reloadConfig();
+
+  const updated = await requestMessage({
+    type: 'UPDATE_SESSION_INTENT',
+    sessionId: 'edit-session',
+    intent: 'new intent',
+  });
+
+  assert.equal(updated.status, 'ok');
+  assert.equal(storageData.activeSession.intent, 'new intent');
+
+  storageData = { trackingEnabled: true };
+  await reloadConfig();
+  const stale = await requestMessage({
+    type: 'UPDATE_SESSION_INTENT',
+    sessionId: 'edit-session',
+    intent: 'resurrected intent',
+  });
+
+  assert.equal(stale.status, 'error');
+  assert.match(stale.message, /stale|active session/i);
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('END_ACTIVE_SESSION returns an error when there is no active session', async () => {
+  storageData = { trackingEnabled: true };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'missing-session',
+  });
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /active session|already ended/i);
+  assert.equal(response.session, undefined);
+});
+
+test('END_ACTIVE_SESSION returns an error when finalization storage fails', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('failing-session') };
+  await reloadConfig();
+  storageErrorMessage = 'storage write failed';
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'failing-session',
+  });
+
+  storageErrorMessage = null;
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /storage write failed/i);
+  assert.equal(storageData.activeSession?.isActive, true);
+});
+
+test('unsupported content URLs are not recorded as session events', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('url-session') };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: {
+      actionType: 'PAGE_LOAD',
+      url: 'chrome://settings',
+    },
+  });
+
+  assert.deepEqual(response, { status: 'ok' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(storageData.activeSession.events, []);
+});
+
+test('history overrides ignore unsupported URLs', () => {
+  const entry = createHistoryEntry({
+    id: 'url-history-session',
+    intent: 'work',
+    startTime: 1000,
+    endTime: 2000,
+    timeBudget: null,
+    events: [
+      { actionType: 'OVERRIDE', url: 'chrome://settings', reflection: 'not a web page' },
+      { actionType: 'OVERRIDE', url: 'https://example.com', reflection: 'relevant' },
+    ],
+  });
+
+  assert.equal(entry.driftCount, 1);
+  assert.deepEqual(entry.overrides.map((override) => override.hostname), ['example.com']);
 });

@@ -2,6 +2,17 @@
 
 let interventionState = null;
 let currentTabId = null;
+let dismissalPromise = null;
+
+function isTrackableUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -61,9 +72,11 @@ function closeCurrentTab(onFailure = setError) {
 }
 
 function dismissFallbackLock(message) {
+  if (dismissalPromise) return dismissalPromise;
   interventionState = null;
   replaceWithMessage('Lock disabled', message);
-  void closeCurrentTab((error) => setError(error));
+  dismissalPromise = closeCurrentTab((error) => setError(error));
+  return dismissalPromise;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -150,7 +163,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   ]);
 
   if (sessionResult.activeSession?.isActive) {
-    currentIntent.textContent = sessionResult.activeSession.intent || 'No active session intent.';
+    currentIntent.textContent = stateResult.response?.state?.intent
+      || sessionResult.activeSession.intent
+      || 'No active session intent.';
   } else {
     currentIntent.textContent = 'No active session found.';
   }
@@ -220,7 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       if (!result) return;
 
-      if (interventionState.originalUrl) {
+      if (isTrackableUrl(interventionState.originalUrl)) {
         window.location.href = interventionState.originalUrl;
       } else {
         replaceWithMessage('Override accepted', 'You may continue your session.');

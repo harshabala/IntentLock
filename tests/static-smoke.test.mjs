@@ -184,6 +184,44 @@ test('tracking-disabled paths guard content and background work', async () => {
   assert.match(providers, /tracking_disabled/);
 });
 
+test('session lifecycle callers require confirmed background success', async () => {
+  const background = await text('background.js');
+  const newtab = await text('newtab.js');
+  const popup = await text('popup.js');
+
+  assert.match(background, /UPDATE_SESSION_INTENT/);
+  assert.match(background, /trackingEnabled.*?false/s);
+  assert.match(newtab, /type:\s*['"]UPDATE_SESSION_INTENT['"]/);
+  assert.match(newtab, /response\?\.status\s*!==\s*['"]ok['"]\s*\|\|\s*!response\?\.session/);
+  assert.match(popup, /response\?\.status\s*!==\s*['"]ok['"]\s*\|\|\s*!response\?\.session/);
+});
+
+test('tracking and intervention paths accept only web URLs', async () => {
+  const background = await text('background.js');
+  const intervention = await text('intervention.js');
+
+  assert.match(background, /new URL\(url\)[\s\S]*?protocol\s*===\s*['"]http:['"][\s\S]*?protocol\s*===\s*['"]https:['"]/);
+  assert.match(background, /payload\.url[\s\S]*?isTrackableUrl/);
+  assert.match(intervention, /isTrackableUrl\(interventionState\.originalUrl\)/);
+});
+
+test('content storage changes re-check tracking before restarting', async () => {
+  const content = await text('content.js');
+
+  assert.match(content, /changes\.activeSession[\s\S]*?syncSessionState\(\)/);
+  assert.match(content, /newValue\s*===\s*false[\s\S]*?pendingIntervention\s*=\s*null;\s*return;/);
+  assert.doesNotMatch(content, /else if \(changes\.activeSession\?\.newValue\?\.isActive[\s\S]*?startTracking\(\)/);
+});
+
+test('rehydrated intervention state carries intent and fallback dismissal is idempotent', async () => {
+  const background = await text('background.js');
+  const intervention = await text('intervention.js');
+
+  assert.match(background, /intent:\s*session\.intent/);
+  assert.match(background, /state\.intent\s*\?\?/);
+  assert.match(intervention, /dismissalPromise/);
+});
+
 test('newtab.js enforces maxLength on dynamically created textareas', async () => {
   const code = await text('newtab.js');
 

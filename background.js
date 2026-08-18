@@ -153,7 +153,15 @@ function interventionKey(sessionId, tabId) {
 
 function cloneInterventionStates(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return { ...value };
+  return Object.fromEntries(Object.entries(value).map(([key, state]) => [
+    key,
+    state && typeof state === 'object'
+      ? {
+        ...state,
+        originalUrl: isTrackableUrl(state.originalUrl) ? state.originalUrl : null,
+      }
+      : state,
+  ]));
 }
 
 function stateTabIds(state) {
@@ -251,11 +259,20 @@ function createTab(createProperties) {
 }
 
 async function persistInterventionStates(states) {
-  const entries = Object.keys(states);
+  const sanitizedStates = Object.fromEntries(Object.entries(states).map(([key, state]) => [
+    key,
+    state && typeof state === 'object'
+      ? {
+        ...state,
+        originalUrl: isTrackableUrl(state.originalUrl) ? state.originalUrl : null,
+      }
+      : state,
+  ]));
+  const entries = Object.keys(sanitizedStates);
   if (entries.length === 0) {
     await storageRemove(INTERVENTION_STATE_KEY);
   } else {
-    await storageSet({ [INTERVENTION_STATE_KEY]: states });
+    await storageSet({ [INTERVENTION_STATE_KEY]: sanitizedStates });
   }
 }
 
@@ -286,10 +303,10 @@ function createHistoryEntry(session) {
   const events = Array.isArray(session.events) ? session.events : [];
   const metrics = ensureMetrics(session);
   const overrides = events
-    .filter(e => e.actionType === 'OVERRIDE')
+    .filter(e => e.actionType === 'OVERRIDE' && (!e.url || isTrackableUrl(e.url)))
     .map(e => ({
       timestamp: e.timestamp || 0,
-      hostname: e.hostname || extractDomain(e.url) || null,
+      hostname: e.url ? extractDomain(e.url) : null,
       reflection: e.reflection || null,
     }));
   return {
@@ -309,6 +326,13 @@ function createHistoryEntry(session) {
     topDomains: topDomains(metrics, 5),
     reportViewed: false,
   };
+}
+
+function hasSupportedEventUrls(event) {
+  if (!event || typeof event !== 'object') return false;
+  return ['url', 'previousUrl', 'navigationUrl'].every((key) => (
+    event[key] == null || isTrackableUrl(event[key])
+  ));
 }
 
 // Idle tracking
@@ -357,13 +381,18 @@ chrome.idle.onStateChanged.addListener((newState) => {
 
 // Helper for trackable URLs
 function isTrackableUrl(url) {
-  if (!url) return false;
-  const ignoredSchemes = ['chrome://', 'chrome-extension://', 'chrome-search://', 'about:', 'file:'];
-  return !ignoredSchemes.some(scheme => url.startsWith(scheme));
+  if (typeof url !== 'string' || !url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 // Helper to extract bare hostname from a URL
 function extractDomain(url) {
+  if (!isTrackableUrl(url)) return null;
   try {
     return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
   } catch {
@@ -411,7 +440,15 @@ function handleReportViewed(sessionId, sendResponse) {
 // Centralized Session Ending Logic
 async function finalizeActiveSession(reflection = null, expectedSessionId = null) {
     const result = await storageGet(['activeSession', 'sessionHistory']);
-    const session = result.activeSession;
+    const session = result.activeSession
+      ? {
+        ...result.activeSession,
+        events: Array.isArray(result.activeSession.events)
+          ? result.activeSession.events.map((event) => ({ ...event }))
+          : [],
+        metrics: result.activeSession.metrics ? { ...result.activeSession.metrics } : undefined,
+      }
+      : null;
     if (!session || !session.isActive || (expectedSessionId && session.id !== expectedSessionId)) return null;
 
     session.isActive = false;
@@ -461,11 +498,21 @@ async function getInterventionStateForTab(tabId) {
   const result = await storageGet(['activeSession', INTERVENTION_STATE_KEY, 'trackingEnabled']);
   if (result.trackingEnabled === false) return null;
   if (!result.activeSession?.isActive) return null;
-  return stateForTab(
+  const state = stateForTab(
     cloneInterventionStates(result[INTERVENTION_STATE_KEY]),
     tabId,
     result.activeSession.id,
   );
+  if (!state) return null;
+  if (state.intent !== undefined) return state;
+  const hydratedState = { ...state };
+  const intent = state.intent ?? result.activeSession.intent ?? '';
+  Object.defineProperty(hydratedState, 'intent', {
+    configurable: true,
+    enumerable: false,
+    value: intent,
+  });
+  return hydratedState;
 }
 
 function findStateEntry(states, state) {
@@ -655,7 +702,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
     'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
-    'TEST_INTERVENTION', 'REPORT_VIEWED'
+    'TEST_INTERVENTION', 'REPORT_VIEWED', 'UPDATE_SESSION_INTENT', 'EDIT_INTENT', 'UPDATE_INTENT'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -672,6 +719,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'ok' });
       }, (error) => {
         sendResponse({ status: 'error', message: error.message || 'Unable to start the session.' });
+      });
+    } else if (['UPDATE_SESSION_INTENT', 'EDIT_INTENT', 'UPDATE_INTENT'].includes(message.type)) {
+      updateSessionIntent(message.intent, message.sessionId).then((session) => {
+        sendResponse({ status: 'ok', session });
+      }, (error) => {
+        sendResponse({ status: 'error', message: error.message || 'Unable to update the session intent.' });
       });
     } else if (message.type === 'OVERRIDE_INTERVENTION') {
       handleOverride(message.sessionData).then(() => {
@@ -722,9 +775,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'error', message: 'Unable to clear the completed session state.' });
       });
     } else if (message.type === 'END_ACTIVE_SESSION') {
-      endActiveSession(message.reflection, (endedSession) => {
+      endActiveSession(message.reflection, null, message.sessionId || null).then(async (endedSession) => {
+        if (!endedSession) {
+          if (!message.sessionId && Number.isInteger(sender?.tab?.id)) {
+            const latest = await storageGet([COMPLETED_TRANSITION_KEY]);
+            const alreadyFinalized = Object.values(cloneInterventionStates(latest[COMPLETED_TRANSITION_KEY]))
+              .some((transition) => transition?.tabId === sender.tab.id);
+            if (alreadyFinalized) {
+              sendResponse({ status: 'ok', session: null, idempotent: true });
+              return;
+            }
+          }
+          sendResponse({ status: 'error', message: 'There is no matching active session to end.' });
+          return;
+        }
         sendResponse({ status: 'ok', session: endedSession });
-      }, message.sessionId || null);
+      }, (error) => {
+        sendResponse({ status: 'error', message: error.message || 'Unable to end the active session.' });
+      });
     } else if (message.type === 'REPORT_VIEWED') {
       handleReportViewed(message.sessionId, sendResponse);
     } else if (message.type === 'LOG_ERROR') {
@@ -975,17 +1043,32 @@ migrateLlmStorage();
 
 function handleSessionStart(session) {
   return enqueueSessionMutation(async () => {
+    if (!session || typeof session !== 'object' || !session.id) {
+      throw new Error('A valid session is required.');
+    }
+    if (session.isActive !== true) {
+      overrideCooldowns.clear();
+      await storageRemove(['overrideCooldowns']);
+      throw new Error('A valid active session is required.');
+    }
+    const latest = await storageGet(['activeSession', 'trackingEnabled']);
+    if (latest.trackingEnabled === false) {
+      throw new Error('Tracking is disabled.');
+    }
+    if (latest.activeSession?.isActive) {
+      throw new Error('An active session already exists.');
+    }
     ensureMetrics(session);
     if (!session.metrics || session.metrics.activeMs == null) {
       session.metrics = createSessionMetrics();
     }
-    currentSession = session;
     clearDriftCache();
     clearLlmBackoff();
     await storageRemove(['llmBackoffUntil']);
     overrideCooldowns.clear(); // clear cooldowns on new session
     await storageRemove(['overrideCooldowns']);
     await storageSet({ activeSession: session });
+    currentSession = session;
 
     chrome.alarms.clear(timeBudgetAlarmName);
 
@@ -997,6 +1080,30 @@ function handleSessionStart(session) {
 
     await createTabGroup(session.intent);
     return session;
+  });
+}
+
+function updateSessionIntent(intent, expectedSessionId) {
+  return enqueueSessionMutation(async () => {
+    const nextIntent = typeof intent === 'string' ? intent.trim() : '';
+    if (!nextIntent || nextIntent.length > 250) {
+      throw new Error('Intent must be between 1 and 250 characters.');
+    }
+    const latest = await storageGet(['activeSession', 'trackingEnabled']);
+    const session = latest.activeSession;
+    if (latest.trackingEnabled === false) {
+      throw new Error('Tracking is disabled.');
+    }
+    if (!session?.isActive || !expectedSessionId || session.id !== expectedSessionId) {
+      throw new Error('The active session is stale or no longer exists.');
+    }
+    const updatedSession = {
+      ...session,
+      intent: nextIntent,
+    };
+    await storageSet({ activeSession: updatedSession });
+    currentSession = updatedSession;
+    return updatedSession;
   });
 }
 
@@ -1128,6 +1235,7 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
 
 function logEvent(actionType, url, extras = {}) {
   return enqueueSessionMutation(async () => {
+    if (!isTrackableUrl(url)) return;
     const result = await storageGet(['activeSession', 'trackingEnabled']);
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
@@ -1157,10 +1265,11 @@ function handleContentEvent(payload, tabId) {
     typeof payload.url !== 'string' ||
     payload.url.length === 0 ||
     payload.url.length > 2048 ||
+    !isTrackableUrl(payload.url) ||
     !allowedActions.has(payload.actionType) ||
     (payload.pageTitle !== undefined && (typeof payload.pageTitle !== 'string' || payload.pageTitle.length > 200)) ||
-    (payload.previousUrl !== undefined && (typeof payload.previousUrl !== 'string' || payload.previousUrl.length > 2048)) ||
-    (payload.navigationUrl !== undefined && (typeof payload.navigationUrl !== 'string' || payload.navigationUrl.length > 2048)) ||
+    (payload.previousUrl !== undefined && (typeof payload.previousUrl !== 'string' || payload.previousUrl.length > 2048 || !isTrackableUrl(payload.previousUrl))) ||
+    (payload.navigationUrl !== undefined && (typeof payload.navigationUrl !== 'string' || payload.navigationUrl.length > 2048 || !isTrackableUrl(payload.navigationUrl))) ||
     (payload.dwellMs !== undefined && (!Number.isFinite(payload.dwellMs) || payload.dwellMs < 0 || payload.dwellMs > 86_400_000)) ||
     (payload.dwellDeltaMs !== undefined && (!Number.isFinite(payload.dwellDeltaMs) || payload.dwellDeltaMs < 0 || payload.dwellDeltaMs > 86_400_000))
   ) return;
@@ -1228,6 +1337,7 @@ let lastEvaluatedTime = 0;
 const DRIFT_DEBOUNCE_MS = 5000;
 
 function evaluateDrift(url, tabId) {
+  if (!isTrackableUrl(url)) return;
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
@@ -1345,6 +1455,7 @@ function triggerIntervention(reason, tabId = null) {
     let targetTab = null;
     if (Number.isInteger(tabId)) {
       targetTab = await getTab(tabId);
+      if (targetTab?.url && !isTrackableUrl(targetTab.url)) return null;
     } else {
       const tabs = await queryTabs({ active: true, currentWindow: true });
       targetTab = tabs.find((tab) => (
@@ -1364,7 +1475,7 @@ function triggerIntervention(reason, tabId = null) {
     session.metrics.interventionCount = (session.metrics.interventionCount || 0) + 1;
 
     let fallbackTabId = null;
-    if (!targetTabId) {
+    if (!Number.isInteger(targetTabId)) {
       // Create a blank tab first so the state is persisted before extension-page code runs.
       const fallbackTab = await createTab({ url: 'about:blank' });
       fallbackTabId = Number.isInteger(fallbackTab?.id) ? fallbackTab.id : null;
@@ -1376,7 +1487,8 @@ function triggerIntervention(reason, tabId = null) {
       reason,
       originalTabId: targetTabId,
       fallbackTabId,
-      originalUrl: targetTab?.url || null,
+      originalUrl: isTrackableUrl(targetTab?.url) ? targetTab.url : null,
+      intent: session.intent || '',
       mode: 'pending',
       timestamp: Date.now(),
     };
@@ -1427,11 +1539,17 @@ function triggerIntervention(reason, tabId = null) {
 function handleOverride(sessionData) {
   if (!sessionData) return Promise.resolve();
   return enqueueSessionMutation(async () => {
-    currentSession = sessionData;
-    await storageSet({ activeSession: currentSession });
+    const updatedSession = {
+      ...sessionData,
+      events: Array.isArray(sessionData.events)
+        ? sessionData.events.filter(hasSupportedEventUrls)
+        : [],
+    };
+    await storageSet({ activeSession: updatedSession });
+    currentSession = updatedSession;
 
     // Set per-domain override cooldown from the most recent override event
-    const events = Array.isArray(sessionData?.events) ? sessionData.events : [];
+    const events = Array.isArray(currentSession?.events) ? currentSession.events : [];
     const lastOverride = events
       .filter(e => e.actionType === 'OVERRIDE' && e.url)
       .at(-1);

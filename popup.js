@@ -89,14 +89,36 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.className = 'complete-btn';
       btn.textContent = 'End session';
       btn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+        btn.disabled = true;
+        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, (response) => {
+          if (chrome.runtime.lastError || response?.status !== 'ok' || !response?.session) {
+            btn.disabled = false;
+            showEndSessionFailure(response?.message || 'Unable to end the session.');
+            return;
+          }
+          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, (clearResponse) => {
+            if (chrome.runtime.lastError || clearResponse?.status !== 'ok') {
+              btn.disabled = false;
+              showEndSessionFailure(clearResponse?.message || 'Unable to clear the completed session.');
+              return;
+            }
             chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
             window.close();
           });
         });
       });
       content.appendChild(btn);
+
+      function showEndSessionFailure(message) {
+        let notice = content.querySelector('.end-session-error');
+        if (!notice) {
+          notice = document.createElement('p');
+          notice.className = 'end-session-error';
+          notice.setAttribute('role', 'alert');
+          content.appendChild(notice);
+        }
+        notice.textContent = `${message} Your active session was kept. Try ending it again.`;
+      }
 
       const backoffUntil = result.llmBackoffUntil || 0;
       const isBackedOff = backoffUntil > Date.now();
