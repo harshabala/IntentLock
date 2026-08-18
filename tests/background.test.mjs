@@ -6,6 +6,7 @@ let sessionStorageData = {};
 let storageErrorMessage = null;
 let storageGetErrorMessage = null;
 let storageRemoveErrorMessage = null;
+let tabsCreateCount = 0;
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -18,14 +19,19 @@ let storageData = {
 };
 
 let messageListener = null;
+let idleStateChangedListener = null;
+let commandListener = null;
+let alarmListener = null;
+let tabUpdatedListener = null;
+let tabActivatedListener = null;
 
 globalThis.chrome = {
   idle: {
     setDetectionInterval: () => {},
-    onStateChanged: { addListener: () => {} }
+    onStateChanged: { addListener: (listener) => { idleStateChangedListener = listener; } }
   },
   commands: {
-    onCommand: { addListener: () => {} }
+    onCommand: { addListener: (listener) => { commandListener = listener; } }
   },
   runtime: {
     onMessage: { addListener: (fn) => { messageListener = fn; } },
@@ -35,15 +41,16 @@ globalThis.chrome = {
   alarms: {
     create: () => {},
     clear: () => {},
-    onAlarm: { addListener: () => {} }
+    onAlarm: { addListener: (listener) => { alarmListener = listener; } }
   },
   tabs: {
     query: (_query, callback) => {
       callback?.([]);
       return Promise.resolve([]);
     },
-    onUpdated: { addListener: () => {} },
-    onActivated: { addListener: () => {} }
+    create: () => { tabsCreateCount += 1; },
+    onUpdated: { addListener: (listener) => { tabUpdatedListener = listener; } },
+    onActivated: { addListener: (listener) => { tabActivatedListener = listener; } }
   },
   storage: {
     session: {
@@ -146,6 +153,10 @@ function makeSession(id, intent = id) {
     isActive: true,
     events: [],
   };
+}
+
+function waitForCallbacks() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
@@ -309,6 +320,38 @@ test('SESSION_STARTED propagates storage read failures without overwriting the a
   assert.equal(response.status, 'error');
   assert.match(response.message, /storage read failed/i);
   assert.equal(storageData.activeSession.id, 'existing-session');
+});
+
+test('lifecycle event callbacks handle storage read failures without acting on empty results', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('event-failure-session') };
+  await reloadConfig();
+  storageGetErrorMessage = 'event storage read failed';
+  tabsCreateCount = 0;
+  const loggedErrors = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => loggedErrors.push(args.join(' '));
+
+  try {
+    idleStateChangedListener('idle');
+    commandListener('toggle-session');
+    alarmListener({ name: 'intentlock-budget-alarm' });
+    tabUpdatedListener(1, { status: 'complete' }, { url: 'https://example.com' });
+    tabActivatedListener({ tabId: 1 });
+    await waitForCallbacks();
+  } finally {
+    console.error = originalConsoleError;
+    storageGetErrorMessage = null;
+  }
+
+  assert.equal(tabsCreateCount, 0);
+  assert.equal(storageData.activeSession.isActive, true);
+  assert.equal(storageData.isCurrentlyIdle, undefined);
+  assert.equal(loggedErrors.length, 5);
+  assert.match(loggedErrors.join('\n'), /Idle state storage read failed/);
+  assert.match(loggedErrors.join('\n'), /Toggle session storage read failed/);
+  assert.match(loggedErrors.join('\n'), /Alarm storage read failed/);
+  assert.match(loggedErrors.join('\n'), /Tab update storage read failed/);
+  assert.match(loggedErrors.join('\n'), /Tab activation storage read failed/);
 });
 
 test('delayed override cannot resurrect cleared session data', async () => {

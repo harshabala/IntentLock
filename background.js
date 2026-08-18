@@ -386,7 +386,7 @@ function broadcastIdleState(isIdle) {
 
 chrome.idle.onStateChanged.addListener((newState) => {
   const isIdle = (newState === 'idle' || newState === 'locked');
-  chrome.storage.local.get(['trackingEnabled'], (result) => {
+  storageGet(['trackingEnabled']).then((result) => {
     if (result.trackingEnabled === false) {
       isCurrentlyIdle = false;
       lastIdleTime = 0;
@@ -407,6 +407,8 @@ chrome.idle.onStateChanged.addListener((newState) => {
       });
     });
     broadcastIdleState(isIdle);
+  }).catch((error) => {
+    console.error('Idle state storage read failed:', error);
   });
 });
 
@@ -723,7 +725,7 @@ function handleSessionCleared(sendResponse) {
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'toggle-session') {
-    chrome.storage.local.get(['activeSession'], (result) => {
+    storageGet(['activeSession']).then((result) => {
       const session = result.activeSession;
       if (session && session.isActive) {
         endActiveSession(null, () => {
@@ -733,6 +735,8 @@ chrome.commands.onCommand.addListener((command) => {
       } else {
         chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') });
       }
+    }).catch((error) => {
+      console.error('Toggle session storage read failed:', error);
     });
   }
 });
@@ -1272,12 +1276,14 @@ function ungroupTabs() {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === timeBudgetAlarmName) {
     loadConfig().then(() => {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      storageGet(['activeSession', 'trackingEnabled']).then((result) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
           void triggerIntervention("Time budget exceeded. Are you still working on your intent?").catch(() => {});
         }
+      }).catch((error) => {
+        console.error('Alarm storage read failed:', error);
       });
     }).catch((error) => {
       console.error('Alarm config load failed:', error);
@@ -1290,7 +1296,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && isTrackableUrl(tab.url)) {
     loadConfig().then(() => {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      storageGet(['activeSession', 'trackingEnabled']).then((result) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
@@ -1298,6 +1304,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           addTabToGroup(tabId);
           evaluateDrift(tab.url, tabId);
         }
+      }).catch((error) => {
+        console.error('Tab update storage read failed:', error);
       });
     }).catch((error) => {
       console.error('Tab update config load failed:', error);
@@ -1307,7 +1315,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   loadConfig().then(() => {
-    chrome.storage.local.get(['trackingEnabled', 'activeSession', 'isCurrentlyIdle', 'lastIdleTime'], (result) => {
+    storageGet(['trackingEnabled', 'activeSession', 'isCurrentlyIdle', 'lastIdleTime']).then((result) => {
       if (result.trackingEnabled === false) return;
       const session = result.activeSession;
       if (session && session.isActive) {
@@ -1336,6 +1344,8 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
           }
         });
       }
+    }).catch((error) => {
+      console.error('Tab activation storage read failed:', error);
     });
   }).catch((error) => {
     console.error('Tab activation config load failed:', error);
