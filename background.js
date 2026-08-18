@@ -218,6 +218,50 @@ function sendTabMessage(tabId, message) {
   });
 }
 
+const FINAL_DWELL_FLUSH_TIMEOUT_MS = 1_000;
+
+function sendTabMessageBounded(tabId, message, timeoutMs = FINAL_DWELL_FLUSH_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve(result);
+    };
+    const timeoutId = setTimeout(() => finish({ response: null, error: new Error('Tab flush timed out.') }), timeoutMs);
+    try {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        const error = chrome.runtime.lastError;
+        finish({ response, error: error ? new Error(error.message) : null });
+      });
+    } catch (error) {
+      finish({ response: null, error });
+    }
+  });
+}
+
+async function flushTrackedTabs(sessionId, expectedGeneration) {
+  if (!sessionId || expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) return;
+  const tabs = await queryTabs({});
+  const requestId = `${sessionId}:${createNonce()}`;
+  const flushes = (Array.isArray(tabs) ? tabs : [])
+    .filter((tab) => Number.isInteger(tab?.id) && isTrackableUrl(tab.url))
+    .map((tab) => sendTabMessageBounded(tab.id, {
+      type: 'FLUSH_DWELL',
+      sessionId,
+      requestId,
+    }));
+  await Promise.all(flushes);
+}
+
+async function flushBeforeFinalization(expectedSessionId, expectedGeneration) {
+  const result = await storageGet(['activeSession']);
+  const session = result.activeSession;
+  if (!session?.isActive || (expectedSessionId && session.id !== expectedSessionId)) return;
+  await flushTrackedTabs(session.id, expectedGeneration);
+}
+
 function getTab(tabId) {
   return new Promise((resolve) => {
     chrome.tabs.get(tabId, (tab) => {
@@ -551,10 +595,11 @@ function endActiveSession(
   expectedSessionId = null,
   expectedGeneration = getStorageGeneration(),
 ) {
-  const operation = enqueueSessionMutation(
-    () => finalizeActiveSession(reflection, expectedSessionId),
-    expectedGeneration,
-  );
+  const operation = flushBeforeFinalization(expectedSessionId, expectedGeneration)
+    .then(() => enqueueSessionMutation(
+      () => finalizeActiveSession(reflection, expectedSessionId),
+      expectedGeneration,
+    ));
   if (callback) operation.then(callback, () => callback(null));
   return operation;
 }
@@ -585,6 +630,10 @@ async function handleInterventionTransition(message, sender, expectedGeneration 
   const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : message.tabId;
   if (!Number.isInteger(tabId)) {
     return { ok: false, error: 'Intervention transitions require a tab.' };
+  }
+
+  if (message.transition === 'end-session') {
+    await flushBeforeFinalization(message.sessionId, expectedGeneration);
   }
 
   return enqueueSessionMutation(async () => {

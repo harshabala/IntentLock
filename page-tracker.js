@@ -43,6 +43,7 @@
     let intervalId = null;
     let started = false;
     let idle = false;
+    let flushPromise = null;
     const cleanups = [];
 
     const isActive = () => isVisible() && !idle;
@@ -67,7 +68,7 @@
       const data = snapshot(urlOverride);
       const dwellDeltaMs = Math.max(0, data.dwellMs - lastReportedActiveMs);
       lastReportedActiveMs = data.dwellMs;
-      onReport({
+      return onReport({
         actionType,
         url: data.url,
         pageTitle: data.pageTitle,
@@ -75,6 +76,21 @@
         dwellDeltaMs,
         ...extra,
       });
+    }
+
+    function flush() {
+      if (!started) return Promise.resolve({ flushed: false });
+      if (flushPromise) return flushPromise;
+      try {
+        flushPromise = Promise.resolve(report('PAGE_DWELL'))
+          .then(() => ({ flushed: true }))
+          .finally(() => {
+            flushPromise = null;
+          });
+        return flushPromise;
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
 
     function resetForUrl(nextUrl) {
@@ -192,7 +208,7 @@
       }
     }
 
-    return { start, stop, report, snapshot, setIdle };
+    return { start, stop, report, snapshot, setIdle, flush };
   }
 
   function getNamespace() {

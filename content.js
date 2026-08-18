@@ -7,6 +7,8 @@ let pageTracker = null;
 let overlay = null;
 let trackingActive = false;
 let pendingIntervention = null;
+let lastFlushRequestId = null;
+let lastFlushPromise = null;
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -18,12 +20,34 @@ function sendRuntimeMessage(message) {
 }
 
 function sendContentEvent(payload) {
-  chrome.runtime.sendMessage({
-    type: 'CONTENT_EVENT',
-    payload,
-  }, () => {
-    void chrome.runtime.lastError;
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: 'CONTENT_EVENT',
+      payload,
+    }, (response) => {
+      const error = chrome.runtime.lastError;
+      resolve({ response, error: error ? new Error(error.message) : null });
+    });
   });
+}
+
+function flushFinalDwell(requestId) {
+  if (requestId && requestId === lastFlushRequestId && lastFlushPromise) {
+    return lastFlushPromise;
+  }
+
+  if (!trackingActive || !pageTracker?.flush) {
+    return Promise.resolve({ status: 'ok', flushed: false });
+  }
+
+  const flushPromise = Promise.resolve(pageTracker.flush())
+    .then(() => ({ status: 'ok', flushed: true }))
+    .catch(() => ({ status: 'ok', flushed: false }));
+  if (requestId) {
+    lastFlushRequestId = requestId;
+    lastFlushPromise = flushPromise;
+  }
+  return flushPromise;
 }
 
 function ensureTracker() {
@@ -168,6 +192,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (overlay) overlay.hide();
     pendingIntervention = null;
     sendResponse({ hidden: true });
+    return true;
+  }
+
+  if (message.type === 'FLUSH_DWELL') {
+    flushFinalDwell(message.requestId).then(sendResponse, () => {
+      sendResponse({ status: 'ok', flushed: false });
+    });
     return true;
   }
 

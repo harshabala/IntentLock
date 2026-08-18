@@ -9,6 +9,8 @@ let storageGetErrorMessage = null;
 let storageRemoveErrorMessage = null;
 let tabsCreateCount = 0;
 const tabUrls = new Map();
+let trackedTabs = [];
+const finalDwellPayloads = new Map();
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -47,14 +49,22 @@ globalThis.chrome = {
   },
   tabs: {
     query: (_query, callback) => {
-      callback?.([]);
-      return Promise.resolve([]);
+      callback?.(trackedTabs);
+      return Promise.resolve(trackedTabs);
     },
     create: () => { tabsCreateCount += 1; },
     get: (tabId, callback) => {
       callback?.({ id: tabId, url: tabUrls.get(tabId) || 'https://example.com' });
     },
-    sendMessage: (_tabId, message, callback) => {
+    sendMessage: (tabId, message, callback) => {
+      if (message?.type === 'FLUSH_DWELL' && finalDwellPayloads.has(tabId) && messageListener) {
+        messageListener(
+          { type: 'CONTENT_EVENT', payload: finalDwellPayloads.get(tabId) },
+          { tab: { id: tabId } },
+          (response) => callback?.({ status: response?.status || 'ok' }),
+        );
+        return;
+      }
       callback?.(message?.type === 'SHOW_INTERVENTION' ? { shown: true } : {});
     },
     update: (tabId, properties, callback) => {
@@ -689,6 +699,36 @@ test('final session history includes the final dwell delta before it is written'
   assert.equal(ended.status, 'ok');
   assert.equal(ended.session.activeMs, 5_000);
   assert.equal(storageData.sessionHistory.at(-1).activeMs, 5_000);
+});
+
+test('session finalization flushes unreported tracker dwell into metrics and history', async () => {
+  const url = 'https://docs.example.com/final-work';
+  trackedTabs = [{ id: 11, url }];
+  tabUrls.set(11, url);
+  finalDwellPayloads.set(11, {
+    actionType: 'PAGE_DWELL',
+    url,
+    dwellMs: 7_000,
+    dwellDeltaMs: 7_000,
+  });
+  storageData = {
+    trackingEnabled: true,
+    heuristicPolicy: buildDefaultPolicy('coding', 'balanced'),
+    activeSession: makeSession('flush-dwell-session', 'coding the new feature'),
+  };
+  await reloadConfig();
+
+  const ended = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'flush-dwell-session',
+  });
+
+  trackedTabs = [];
+  finalDwellPayloads.clear();
+  assert.equal(ended.status, 'ok');
+  assert.equal(ended.session.activeMs, 7_000);
+  assert.equal(ended.session.metrics.activeMs, 7_000);
+  assert.equal(storageData.sessionHistory.at(-1).activeMs, 7_000);
 });
 
 test('related-domain marks do not carry into a new session', async () => {

@@ -167,6 +167,35 @@ test('repeated dwell snapshots carry only the new dwell delta', () => {
   tracker.stop();
 });
 
+test('flush reports final dwell and is idempotent while persistence is pending', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let resolvePersistence;
+  const persistence = new Promise((resolve) => { resolvePersistence = resolve; });
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      return persistence;
+    },
+    getLocation: () => 'https://example.com/final',
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 7_000;
+  const first = tracker.flush();
+  const second = tracker.flush();
+
+  assert.strictEqual(first, second);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].dwellDeltaMs, 7_000);
+  resolvePersistence();
+  assert.equal((await first).flushed, true);
+  tracker.stop();
+});
+
 test('classic page tracker refuses a pre-existing global API property', async () => {
   await assert.rejects(
     loadClassicScript(new URL('../page-tracker.js', import.meta.url), {
