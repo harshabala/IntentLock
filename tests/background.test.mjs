@@ -4,6 +4,7 @@ import test from 'node:test';
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
 let storageErrorMessage = null;
+let storageGetErrorMessage = null;
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -36,6 +37,10 @@ globalThis.chrome = {
     onAlarm: { addListener: () => {} }
   },
   tabs: {
+    query: (_query, callback) => {
+      callback?.([]);
+      return Promise.resolve([]);
+    },
     onUpdated: { addListener: () => {} },
     onActivated: { addListener: () => {} }
   },
@@ -69,6 +74,12 @@ globalThis.chrome = {
     },
     local: {
       get: (keys, callback) => {
+        if (storageGetErrorMessage) {
+          chrome.runtime.lastError = { message: storageGetErrorMessage };
+          callback({});
+          chrome.runtime.lastError = null;
+          return;
+        }
         const res = {};
         for (const key of keys) {
           if (storageData[key] !== undefined) {
@@ -259,6 +270,40 @@ test('concurrent SESSION_STARTED messages keep the first active session authorit
   assert.equal(storageData.activeSession.id, 'first-session');
 });
 
+test('SESSION_STARTED reports deletion cancellation when it races with data deletion', async () => {
+  storageData = { trackingEnabled: true };
+  await reloadConfig();
+
+  const startRequest = requestMessage({
+    type: 'SESSION_STARTED',
+    session: makeSession('racing-session'),
+  });
+  const deletionRequest = requestMessage({ type: 'DELETE_ALL_DATA' });
+  const [startResponse, deletionResponse] = await Promise.all([startRequest, deletionRequest]);
+
+  assert.equal(deletionResponse.status, 'ok');
+  assert.equal(startResponse.status, 'error');
+  assert.equal(startResponse.code, 'SESSION_MUTATION_CANCELLED');
+  assert.match(startResponse.message, /cancel|delet/i);
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('SESSION_STARTED propagates storage read failures without overwriting the active session', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('existing-session') };
+  await reloadConfig();
+  storageGetErrorMessage = 'storage read failed';
+
+  const response = await requestMessage({
+    type: 'SESSION_STARTED',
+    session: makeSession('replacement-session'),
+  });
+
+  storageGetErrorMessage = null;
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /storage read failed/i);
+  assert.equal(storageData.activeSession.id, 'existing-session');
+});
+
 test('intent edits require the expected active session and cannot resurrect a stale session', async () => {
   storageData = { trackingEnabled: true, activeSession: makeSession('edit-session', 'old intent') };
   await reloadConfig();
@@ -325,11 +370,31 @@ test('unsupported content URLs are not recorded as session events', async () => 
       actionType: 'PAGE_LOAD',
       url: 'chrome://settings',
     },
-  });
+  }, { tab: { id: 1 } });
 
   assert.deepEqual(response, { status: 'ok' });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(storageData.activeSession.events, []);
+});
+
+test('HTTP and HTTPS content URLs are recorded as session events', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('supported-url-session') };
+  await reloadConfig();
+
+  await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: { actionType: 'PAGE_LOAD', url: 'http://example.com/http' },
+  }, { tab: { id: 1 } });
+  await requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: { actionType: 'PAGE_LOAD', url: 'https://example.com/https' },
+  }, { tab: { id: 1 } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(
+    storageData.activeSession.events.map((event) => event.url),
+    ['http://example.com/http', 'https://example.com/https'],
+  );
 });
 
 test('history overrides ignore unsupported URLs', () => {

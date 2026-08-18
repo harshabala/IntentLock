@@ -182,7 +182,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let timerInterval = null;
 
-  const wantReport = new URLSearchParams(location.search).get('report') === 'last';
+  const reportParams = new URLSearchParams(location.search);
+  const wantReport = reportParams.get('report') === 'last';
+  const cleanupWarning = reportParams.get('cleanup') === 'warning'
+    ? 'The session ended, but cleanup did not complete. The report is still available.'
+    : null;
 
   chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory'], (result) => {
     const container = document.querySelector('.lock-container');
@@ -194,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const history = sanitizeStoredHistory(result.sessionHistory);
       const last = history.length > 0 ? history[history.length - 1] : null;
       if (last) {
-        showSummary(container, last);
+        showSummary(container, last, cleanupWarning);
         return;
       }
     }
@@ -535,7 +539,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (timerInterval) clearInterval(timerInterval);
       chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, (clearResponse) => {
         if (chrome.runtime.lastError || clearResponse?.status !== 'ok') {
-          showEndSessionFailure(container, response.session, clearResponse?.message || 'Unable to clear the completed session.');
+          showSummary(
+            container,
+            response.session,
+            'The session ended, but cleanup did not complete. The report is still available.',
+          );
           return;
         }
         showSummary(container, response.session);
@@ -552,7 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
     container.appendChild(notice);
   }
 
-  function showSummary(container, session) {
+  function showSummary(container, session, cleanupWarning = null) {
     container.textContent = '';
 
     const header = document.createElement('div');
@@ -561,6 +569,14 @@ document.addEventListener('DOMContentLoaded', () => {
     h1.textContent = 'Session report';
     header.appendChild(h1);
     container.appendChild(header);
+
+    if (cleanupWarning) {
+      const warning = document.createElement('p');
+      warning.className = 'field-error';
+      warning.setAttribute('role', 'alert');
+      warning.textContent = cleanupWarning;
+      container.appendChild(warning);
+    }
 
     // Intent
     const intentBox = document.createElement('div');

@@ -196,6 +196,26 @@ test('session lifecycle callers require confirmed background success', async () 
   assert.match(popup, /response\?\.status\s*!==\s*['"]ok['"]\s*\|\|\s*!response\?\.session/);
 });
 
+test('lifecycle cleanup writes remain serialized through the session queue', async () => {
+  const background = await text('background.js');
+
+  assert.match(background, /function ungroupTabs\(\)[\s\S]*?enqueueSessionMutation/);
+  assert.doesNotMatch(background, /chrome\.storage\.local\.remove\(['"]sessionTabGroupId['"]\)/);
+  assert.doesNotMatch(background, /chrome\.storage\.local\.set\(\{\s*lastIdleTime:\s*0/);
+  assert.doesNotMatch(background, /chrome\.storage\.local\.set\(\{\s*overrideCooldowns:/);
+});
+
+test('ended-session cleanup failures still show the completed report with a warning', async () => {
+  const newtab = await text('newtab.js');
+  const popup = await text('popup.js');
+
+  assert.match(newtab, /showSummary\(\s*container,\s*response\.session,[\s\S]*?cleanup/);
+  assert.match(newtab, /cleanupWarning/);
+  assert.match(popup, /report=last&cleanup=warning/);
+  assert.doesNotMatch(newtab, /showEndSessionFailure\(container,\s*response\.session,[\s\S]*?clearResponse/);
+  assert.doesNotMatch(popup, /showEndSessionFailure\(clearResponse/);
+});
+
 test('tracking and intervention paths accept only web URLs', async () => {
   const background = await text('background.js');
   const intervention = await text('intervention.js');

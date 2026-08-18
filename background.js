@@ -61,8 +61,14 @@ const COMPLETED_TRANSITION_KEY = 'completedInterventionTransitions';
 const MAX_COMPLETED_TRANSITIONS = 100;
 
 function storageGet(keys) {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(result || {});
+    });
   });
 }
 
@@ -139,10 +145,19 @@ function storageSessionClear() {
   });
 }
 
-function enqueueSessionMutation(operation) {
-  const generation = getStorageGeneration();
+class SessionMutationCancelledError extends Error {
+  constructor() {
+    super('Session mutation cancelled because storage deletion is in progress.');
+    this.name = 'SessionMutationCancelledError';
+    this.code = 'SESSION_MUTATION_CANCELLED';
+  }
+}
+
+function enqueueSessionMutation(operation, expectedGeneration = getStorageGeneration()) {
   return enqueueStorageMutation(() => {
-    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return null;
+    if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) {
+      throw new SessionMutationCancelledError();
+    }
     return operation();
   });
 }
@@ -493,7 +508,7 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     await storageSet({ sessionHistory: history });
     await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns']);
     hideInterventionsFromTabs();
-    ungroupTabs();
+    await clearTabGroupState();
     currentSession = null;
     overrideCooldowns.clear();
     chrome.alarms.clear(timeBudgetAlarmName);
@@ -670,7 +685,7 @@ function handleSessionCleared(sendResponse) {
       contentEventBuckets.clear();
       clearDriftCache();
       clearLlmBackoff();
-      ungroupTabs();
+      await clearTabGroupState();
       chrome.alarms.clear(timeBudgetAlarmName);
       configPromise = null;
       endStorageDeletion();
@@ -722,12 +737,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  const requestGeneration = getStorageGeneration();
   loadConfig().then(() => {
     if (message.type === 'SESSION_STARTED') {
-      handleSessionStart(message.session).then(() => {
+      handleSessionStart(message.session, requestGeneration).then(() => {
         sendResponse({ status: 'ok' });
       }, (error) => {
-        sendResponse({ status: 'error', message: error.message || 'Unable to start the session.' });
+        sendResponse({
+          status: 'error',
+          ...(error?.code ? { code: error.code } : {}),
+          message: error.message || 'Unable to start the session.',
+        });
       });
     } else if (['UPDATE_SESSION_INTENT', 'EDIT_INTENT', 'UPDATE_INTENT'].includes(message.type)) {
       updateSessionIntent(message.intent, message.sessionId).then((session) => {
@@ -746,8 +766,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (currentSession) {
         sendResponse({ session: currentSession });
       } else {
-        chrome.storage.local.get(['activeSession'], (result) => {
+        storageGet(['activeSession']).then((result) => {
           sendResponse({ session: result.activeSession || null });
+        }, (error) => {
+          sendResponse({ status: 'error', message: error.message || 'Unable to read the active session.' });
         });
       }
     } else if (message.type === 'GET_INTERVENTION_STATE') {
@@ -766,7 +788,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
     } else if (message.type === 'SESSION_CLEARED') {
       enqueueSessionMutation(async () => {
-        ungroupTabs();
+        await clearTabGroupState();
         currentSession = null;
         clearDriftCache();
         clearLlmBackoff();
@@ -818,7 +840,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: error.message || 'Intervention transition failed.' });
       });
     } else if (message.type === 'TEST_INTERVENTION') {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      storageGet(['activeSession', 'trackingEnabled']).then((result) => {
         if (result.trackingEnabled === false) {
           sendResponse({ ok: false, error: 'Tracking is disabled.' });
           return;
@@ -833,8 +855,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           triggerIntervention('Test intervention — drift detection is working.', activeTab?.id || null);
           sendResponse({ ok: true });
         });
+      }, (error) => {
+        sendResponse({ ok: false, error: error.message || 'Unable to read the active session.' });
       });
     }
+  }).catch((error) => {
+    sendResponse({
+      status: 'error',
+      ...(error?.code ? { code: error.code } : {}),
+      message: error?.message || 'Unable to load session state.',
+    });
   });
   return true; // Keep channel open for async response
 });
@@ -844,13 +874,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function loadConfig() {
   if (configPromise) return configPromise;
   const generation = getStorageGeneration();
-  configPromise = new Promise((resolve) => {
+  configPromise = new Promise((resolve, reject) => {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
       'overrideCooldowns', 'heuristicPolicy', 'llmBackoffUntil',
       'relatedDomainMarks', 'sessionHistory'
     ], (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
       const data = result || {};
       if (generation !== getStorageGeneration() || isStorageDeletionActive()) {
         resolve();
@@ -1060,7 +1094,7 @@ migrateLlmStorage();
 
 // ── Session start ──────────────────────────────────────────────────────
 
-function handleSessionStart(session) {
+function handleSessionStart(session, expectedGeneration = getStorageGeneration()) {
   return enqueueSessionMutation(async () => {
     if (!session || typeof session !== 'object' || !session.id) {
       throw new Error('A valid session is required.');
@@ -1100,7 +1134,7 @@ function handleSessionStart(session) {
 
     await createTabGroup(nextSession.intent);
     return nextSession;
-  });
+  }, expectedGeneration);
 }
 
 function updateSessionIntent(intent, expectedSessionId) {
@@ -1158,7 +1192,7 @@ async function addTabToGroup(tabId) {
     // Verify the group still exists
     await chrome.tabGroups.get(sessionTabGroupId);
   } catch (e) {
-    ungroupTabs(); // Group closed, cleanup state
+    void ungroupTabs().catch(() => {}); // Group closed, cleanup state
     return;
   }
   try {
@@ -1168,9 +1202,13 @@ async function addTabToGroup(tabId) {
   }
 }
 
-function ungroupTabs() {
+async function clearTabGroupState() {
   sessionTabGroupId = null;
-  chrome.storage.local.remove('sessionTabGroupId');
+  await storageRemove('sessionTabGroupId');
+}
+
+function ungroupTabs() {
+  return enqueueSessionMutation(() => clearTabGroupState());
 }
 
 // ── Time budget alarm ──────────────────────────────────────────────────
@@ -1221,9 +1259,16 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
             const isCurrentlyIdleVal = result.isCurrentlyIdle || false;
             const lastIdleTimeVal = result.lastIdleTime || 0;
             if (!isCurrentlyIdleVal && lastIdleTimeVal > 0 && (Date.now() - lastIdleTimeVal < 10000)) {
-              chrome.storage.local.set({ lastIdleTime: 0 }, () => {
-                triggerIntervention("You were idle and immediately switched context. Are you still aligned?", activeInfo.tabId);
-              });
+              void enqueueSessionMutation(async () => {
+                const latest = await storageGet(['trackingEnabled']);
+                if (latest.trackingEnabled === false) return false;
+                await storageSet({ lastIdleTime: 0 });
+                return true;
+              }).then((reset) => {
+                if (reset) {
+                  triggerIntervention("You were idle and immediately switched context. Are you still aligned?", activeInfo.tabId);
+                }
+              }, () => {});
               return;
             }
 
@@ -1392,7 +1437,9 @@ function evaluateDrift(url, tabId) {
         expiredDomains.forEach(domain => overrideCooldowns.delete(domain));
       }
       if (mapChanged) {
-        chrome.storage.local.set({ overrideCooldowns: Array.from(overrideCooldowns.entries()) });
+        void enqueueSessionMutation(async () => {
+          await storageSet({ overrideCooldowns: Array.from(overrideCooldowns.entries()) });
+        }).catch(() => {});
       }
       if (hasCooldown) {
         return; // Still in cooldown — skip intervention

@@ -98,8 +98,10 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, (clearResponse) => {
             if (chrome.runtime.lastError || clearResponse?.status !== 'ok') {
-              btn.disabled = false;
-              showEndSessionFailure(clearResponse?.message || 'Unable to clear the completed session.');
+              chrome.tabs.create({
+                url: chrome.runtime.getURL('newtab.html?report=last&cleanup=warning'),
+              });
+              window.close();
               return;
             }
             chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
