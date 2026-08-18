@@ -537,16 +537,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (timerInterval) clearInterval(timerInterval);
+      const cleanupWarning = response.session.cleanupWarning || null;
       chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, (clearResponse) => {
         if (chrome.runtime.lastError || clearResponse?.status !== 'ok') {
           showSummary(
             container,
             response.session,
-            'The session ended, but cleanup did not complete. The report is still available.',
+            cleanupWarning || 'The session ended, but cleanup did not complete. The report is still available.',
           );
           return;
         }
-        showSummary(container, response.session);
+        showSummary(container, response.session, cleanupWarning);
       });
     });
   }

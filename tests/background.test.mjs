@@ -5,6 +5,7 @@ import test from 'node:test';
 let sessionStorageData = {};
 let storageErrorMessage = null;
 let storageGetErrorMessage = null;
+let storageRemoveErrorMessage = null;
 let storageData = {
   openaiApiKey: 'test-migration-key',
   activeSession: { id: 'session-123', intent: 'work', isActive: true, startTime: Date.now() },
@@ -100,6 +101,12 @@ globalThis.chrome = {
       },
       remove: (keys, callback) => {
         const keysArr = Array.isArray(keys) ? keys : [keys];
+        if (storageRemoveErrorMessage && keysArr.includes('sessionTabGroupId')) {
+          chrome.runtime.lastError = { message: storageRemoveErrorMessage };
+          if (callback) callback();
+          chrome.runtime.lastError = null;
+          return;
+        }
         for (const k of keysArr) {
           delete storageData[k];
         }
@@ -304,6 +311,56 @@ test('SESSION_STARTED propagates storage read failures without overwriting the a
   assert.equal(storageData.activeSession.id, 'existing-session');
 });
 
+test('delayed override cannot resurrect cleared session data', async () => {
+  const session = makeSession('override-race-session');
+  storageData = { trackingEnabled: true, activeSession: session };
+  await reloadConfig();
+
+  const overrideRequest = requestMessage({
+    type: 'OVERRIDE_INTERVENTION',
+    sessionData: { ...session, events: [{ actionType: 'OVERRIDE', url: 'https://example.com' }] },
+  });
+  const deletionRequest = requestMessage({ type: 'DELETE_ALL_DATA' });
+  const [overrideResponse, deletionResponse] = await Promise.all([overrideRequest, deletionRequest]);
+
+  assert.equal(deletionResponse.status, 'ok');
+  assert.equal(overrideResponse.status, 'error');
+  assert.equal(overrideResponse.code, 'SESSION_MUTATION_CANCELLED');
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('delayed content event cannot resurrect cleared session data', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('content-race-session') };
+  await reloadConfig();
+
+  const contentRequest = requestMessage({
+    type: 'CONTENT_EVENT',
+    payload: { actionType: 'PAGE_LOAD', url: 'https://example.com/after-delete' },
+  }, { tab: { id: 9 } });
+  const deletionRequest = requestMessage({ type: 'DELETE_ALL_DATA' });
+  const [contentResponse, deletionResponse] = await Promise.all([contentRequest, deletionRequest]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(contentResponse, { status: 'ok' });
+  assert.equal(deletionResponse.status, 'ok');
+  assert.equal(storageData.activeSession, undefined);
+});
+
+test('config read failures do not poison the next message-triggered reload', async () => {
+  storageData = { trackingEnabled: true };
+  storageGetErrorMessage = 'initial config read failed';
+  await assert.rejects(reloadConfig(), /initial config read failed/i);
+
+  storageGetErrorMessage = null;
+  const response = await requestMessage({
+    type: 'SESSION_STARTED',
+    session: makeSession('retry-after-config-failure'),
+  });
+
+  assert.equal(response.status, 'ok');
+  assert.equal(storageData.activeSession.id, 'retry-after-config-failure');
+});
+
 test('intent edits require the expected active session and cannot resurrect a stale session', async () => {
   storageData = { trackingEnabled: true, activeSession: makeSession('edit-session', 'old intent') };
   await reloadConfig();
@@ -358,6 +415,28 @@ test('END_ACTIVE_SESSION returns an error when finalization storage fails', asyn
   assert.equal(response.status, 'error');
   assert.match(response.message, /storage write failed/i);
   assert.equal(storageData.activeSession?.isActive, true);
+});
+
+test('END_ACTIVE_SESSION returns the completed report with a tab cleanup warning', async () => {
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('tab-cleanup-warning-session'),
+    sessionTabGroupId: 321,
+  };
+  await reloadConfig();
+  storageRemoveErrorMessage = 'tab group cleanup failed';
+
+  const response = await requestMessage({
+    type: 'END_ACTIVE_SESSION',
+    sessionId: 'tab-cleanup-warning-session',
+  });
+
+  storageRemoveErrorMessage = null;
+  assert.equal(response.status, 'ok');
+  assert.equal(response.session.isActive, false);
+  assert.match(response.session.cleanupWarning, /tab group cleanup failed/i);
+  assert.equal(storageData.activeSession, undefined);
+  assert.ok(Array.isArray(storageData.sessionHistory));
 });
 
 test('unsupported content URLs are not recorded as session events', async () => {

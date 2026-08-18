@@ -104,7 +104,8 @@ document.addEventListener('DOMContentLoaded', () => {
               window.close();
               return;
             }
-            chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+            const cleanupWarning = response.session.cleanupWarning ? '&cleanup=warning' : '';
+            chrome.tabs.create({ url: chrome.runtime.getURL(`newtab.html?report=last${cleanupWarning}`) });
             window.close();
           });
         });

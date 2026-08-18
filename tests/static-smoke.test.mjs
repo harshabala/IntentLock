@@ -211,9 +211,32 @@ test('ended-session cleanup failures still show the completed report with a warn
 
   assert.match(newtab, /showSummary\(\s*container,\s*response\.session,[\s\S]*?cleanup/);
   assert.match(newtab, /cleanupWarning/);
+  assert.match(newtab, /response\.session\.cleanupWarning/);
   assert.match(popup, /report=last&cleanup=warning/);
+  assert.match(popup, /response\.session\.cleanupWarning/);
   assert.doesNotMatch(newtab, /showEndSessionFailure\(container,\s*response\.session,[\s\S]*?clearResponse/);
   assert.doesNotMatch(popup, /showEndSessionFailure\(clearResponse/);
+});
+
+test('message session mutations preserve their request generation', async () => {
+  const background = await text('background.js');
+
+  assert.match(background, /handleSessionStart\(message\.session,\s*requestGeneration\)/);
+  assert.match(background, /updateSessionIntent\(message\.intent,\s*message\.sessionId,\s*requestGeneration\)/);
+  assert.match(background, /handleOverride\(message\.sessionData,\s*requestGeneration\)/);
+  assert.match(background, /handleInterventionTransition\(message,\s*sender,\s*requestGeneration\)/);
+  assert.match(background, /handleContentEvent\(message\.payload,\s*sender\.tab\?\.id,\s*requestGeneration\)/);
+  assert.match(background, /endActiveSession\(\s*message\.reflection,\s*null,\s*message\.sessionId \|\| null,\s*requestGeneration,?\s*\)/);
+});
+
+test('config rejection resets its cache and event callers handle reload failures', async () => {
+  const background = await text('background.js');
+
+  assert.match(background, /configPromise[\s\S]*?catch\([\s\S]*?configPromise\s*=\s*null/);
+  assert.match(background, /loadConfig\(\)\.catch\(/);
+  assert.match(background, /chrome\.alarms\.onAlarm[\s\S]*?loadConfig\(\)\.then[\s\S]*?\.catch\(/);
+  assert.match(background, /chrome\.tabs\.onUpdated[\s\S]*?loadConfig\(\)\.then[\s\S]*?\.catch\(/);
+  assert.match(background, /chrome\.tabs\.onActivated[\s\S]*?loadConfig\(\)\.then[\s\S]*?\.catch\(/);
 });
 
 test('tracking and intervention paths accept only web URLs', async () => {
