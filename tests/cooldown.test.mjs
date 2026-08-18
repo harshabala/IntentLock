@@ -14,6 +14,7 @@ let tabsGetMock = (tabId) => ({ id: tabId, url: '' });
 let tabsQueryMock = (queryInfo) => [];
 let tabsUpdateCalls = [];
 let tabsSendMessageCalls = [];
+const RECENT_ACTIVE_SESSION_START = Date.now() - 1_000;
 
 globalThis.chrome = {
   idle: {
@@ -145,15 +146,18 @@ function triggerTabActivated(activeInfo) {
 function triggerMessage(message, sender = {}) {
   return new Promise((resolve) => {
     let responded = false;
+    let hasAsyncListener = false;
     const sendResponse = (response) => {
+      if (responded) return;
       responded = true;
       resolve(response);
     };
     for (const listener of messageListeners) {
       const isAsync = listener(message, sender, sendResponse);
-      if (!isAsync && !responded) {
-        resolve();
-      }
+      if (isAsync) hasAsyncListener = true;
+    }
+    if (!hasAsyncListener && !responded) {
+      resolve();
     }
   });
 }
@@ -170,7 +174,7 @@ test('Set Cooldown on Override sets a cooldown in memory and local storage', asy
       id: 'session-123',
       intent: 'writing code',
       isActive: true,
-      startTime: Date.now(),
+      startTime: RECENT_ACTIVE_SESSION_START,
       events: []
     }
   };
@@ -187,6 +191,7 @@ test('Set Cooldown on Override sets a cooldown in memory and local storage', asy
       id: 'session-123',
       intent: 'writing code',
       isActive: true,
+      startTime: RECENT_ACTIVE_SESSION_START,
       events: [
         {
           timestamp: now,
@@ -196,7 +201,6 @@ test('Set Cooldown on Override sets a cooldown in memory and local storage', asy
       ]
     }
   });
-
   // Check in-memory state
   const overrideCooldowns = state.overrideCooldowns;
   assert.ok(overrideCooldowns.has('facebook.com'), 'cooldown map should have facebook.com');
@@ -219,7 +223,7 @@ test('Cooldown Bypass avoids triggering interventions during active cooldown', a
       id: 'session-123',
       intent: 'writing code',
       isActive: true,
-      startTime: Date.now(),
+      startTime: RECENT_ACTIVE_SESSION_START,
       events: []
     },
     customDistractionSites: ['facebook.com'],
@@ -261,7 +265,7 @@ test('Subdomain Matching matches subdomains bidirectionally', async () => {
       id: 'session-123',
       intent: 'writing code',
       isActive: true,
-      startTime: Date.now(),
+      startTime: RECENT_ACTIVE_SESSION_START,
       events: []
     },
     customDistractionSites: ['facebook.com', 'instagram.com'],
@@ -305,7 +309,7 @@ test('Session Reset Cleanup clears active cooldowns on SESSION_STARTED and SESSI
       id: 'session-123',
       intent: 'writing code',
       isActive: true,
-      startTime: Date.now(),
+      startTime: RECENT_ACTIVE_SESSION_START,
       events: []
     }
   };
@@ -317,10 +321,16 @@ test('Session Reset Cleanup clears active cooldowns on SESSION_STARTED and SESSI
   // 1. Check SESSION_STARTED resets cooldowns
   state.overrideCooldowns.set('facebook.com', futureExpiry);
   storageData.overrideCooldowns = [['facebook.com', futureExpiry]];
+  storageData.activeSession.isActive = false;
 
   await triggerMessage({
     type: 'SESSION_STARTED',
-    session: { id: 'new-session-456', intent: 'writing tests', startTime: Date.now() }
+    session: {
+      id: 'new-session-456',
+      intent: 'writing tests',
+      isActive: true,
+      startTime: RECENT_ACTIVE_SESSION_START,
+    }
   });
 
   assert.equal(state.overrideCooldowns.size, 0, 'overrideCooldowns map in memory should be cleared on session start');

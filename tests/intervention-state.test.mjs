@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const root = new URL('../', import.meta.url);
+const RECENT_ACTIVE_SESSION_START = Date.now() - 1_000;
 
 function makeChrome(initialStorage = {}, initialTabs = {}) {
   const storageData = structuredClone(initialStorage);
@@ -170,7 +171,7 @@ async function readText(path) {
 
 test('interventions are scoped per session/tab and carry a nonce', async () => {
   const harness = await loadBackground(
-    { activeSession: { id: 'session-1', intent: 'write', isActive: true, startTime: 1, events: [] } },
+    { activeSession: { id: 'session-1', intent: 'write', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] } },
     {
       1: { url: 'https://example.test/one' },
       2: { url: 'https://example.test/two' },
@@ -197,17 +198,17 @@ test('restart-safe state can be rehydrated for the requesting tab only', async (
     nonce: 'nonce-1',
     reason: 'drift',
     originalTabId: 7,
-    originalUrl: 'https://example.test/work',
+    originalUrl: 'https://example.test',
     mode: 'overlay',
     timestamp: 10,
     intent: 'work',
   };
   const harness = await loadBackground(
     {
-      activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+      activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] },
       interventionStates: { 'session-1:7': state },
     },
-    { 7: { url: state.originalUrl }, 8: { url: 'https://example.test/other' } },
+    { 7: { url: `${state.originalUrl}/work` }, 8: { url: 'https://example.test/other' } },
   );
 
   const matching = await harness.send({ type: 'GET_INTERVENTION_STATE' }, { tab: { id: 7 } });
@@ -217,7 +218,7 @@ test('restart-safe state can be rehydrated for the requesting tab only', async (
 });
 
 test('stale or wrong-tab transitions are rejected without changing the session', async () => {
-  const session = { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] };
+  const session = { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] };
   const state = {
     sessionId: 'session-1',
     nonce: 'nonce-1',
@@ -256,7 +257,7 @@ test('stale or wrong-tab transitions are rejected without changing the session',
 
 test('end-session transition and repeated end are idempotent', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -291,7 +292,7 @@ test('repeating the same nonce-bound end-session transition is an idempotent suc
     nonce: 'nonce-1',
   };
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -315,7 +316,7 @@ test('repeating the same nonce-bound end-session transition is an idempotent suc
 
 test('close-tab keeps the intervention state when Chrome cannot close the tab', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -344,7 +345,7 @@ test('close-tab keeps the intervention state when Chrome cannot close the tab', 
 
 test('removing a tab cleans only its intervention state', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: RECENT_ACTIVE_SESSION_START, events: [] },
     interventionStates: {
       'session-1:7': { sessionId: 'session-1', nonce: 'a', originalTabId: 7, originalUrl: 'https://a.test', mode: 'overlay', timestamp: 1 },
       'session-1:8': { sessionId: 'session-1', nonce: 'b', originalTabId: 8, originalUrl: 'https://b.test', mode: 'overlay', timestamp: 1 },
