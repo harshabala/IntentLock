@@ -603,6 +603,63 @@ test('final flush waits for an in-flight SPA navigation report', async () => {
   }
 });
 
+test('final flush retries a failed normal receipt before completing SPA navigation', async () => {
+  installBrowserMocks();
+  const reports = [];
+  let href = 'https://example.com/normal-race-old';
+  let now = 0;
+  let normalAttempts = 0;
+  let rejectNormalRetry;
+  const normalRetryPersistence = new Promise((resolve, reject) => {
+    rejectNormalRetry = reject;
+  });
+  const tracker = createPageTracker({
+    onReport: (payload) => {
+      reports.push(payload);
+      if (payload.actionType === 'PAGE_DWELL' && !payload.flushCorrelationId) {
+        normalAttempts += 1;
+        if (normalAttempts === 1) return Promise.reject(new Error('normal write failed'));
+        if (normalAttempts === 2) return normalRetryPersistence;
+      }
+      return Promise.resolve({ response: { status: 'ok' }, error: null });
+    },
+    getLocation: () => href,
+    isVisible: () => true,
+    now: () => now,
+  });
+
+  tracker.start();
+  now = 5_000;
+  await assert.rejects(tracker.report('PAGE_DWELL'), /normal write failed/);
+
+  href = 'https://example.com/normal-race-new';
+  pageTrackerRuntime.history.pushState({}, '', '/normal-race-new');
+  const final = tracker.flush({
+    sessionId: 'normal-race-session',
+    generation: 1,
+    flushCorrelationId: 'normal-race-flush',
+  });
+  rejectNormalRetry(new Error('normal retry failed'));
+
+  try {
+    await final;
+    const normalReports = reports.filter((payload) => (
+      payload.actionType === 'PAGE_DWELL' && !payload.flushCorrelationId
+    ));
+    assert.equal(normalAttempts, 3);
+    assert.equal(normalReports.length, 3);
+    assert.equal(normalReports[0].reportId, normalReports[1].reportId);
+    assert.equal(normalReports[1].reportId, normalReports[2].reportId);
+    assert.equal(
+      reports.filter((payload) => payload.actionType === 'SPA_NAVIGATION').length,
+      1,
+    );
+  } finally {
+    await final.catch(() => {});
+    tracker.stop({ discard: true });
+  }
+});
+
 test('overlapping reports serialize so each active interval is counted once', async () => {
   installBrowserMocks();
   const reports = [];

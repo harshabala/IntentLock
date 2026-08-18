@@ -109,6 +109,7 @@
     }
 
     function sendReport(job) {
+      if (job.inFlightPromise) return job.inFlightPromise;
       if (job.reportGeneration !== pageGeneration) {
         return Promise.reject(new Error('Report is stale.'));
       }
@@ -149,7 +150,17 @@
         }
       };
       if (result && typeof result.then === 'function') {
-        return Promise.resolve(result).then(settleReport, handleFailure);
+        const reportPromise = Promise.resolve(result).then(settleReport, handleFailure);
+        job.inFlightPromise = reportPromise;
+        reportPromise.then(
+          () => {
+            if (job.inFlightPromise === reportPromise) job.inFlightPromise = null;
+          },
+          () => {
+            if (job.inFlightPromise === reportPromise) job.inFlightPromise = null;
+          },
+        );
+        return reportPromise;
       }
       return settleReport(result);
     }
@@ -174,6 +185,15 @@
       return true;
     }
 
+    function retryPendingNormalReport() {
+      if (pendingNormalReportJob && pendingNormalReportJob.reportGeneration !== pageGeneration) {
+        pendingNormalReportJob = null;
+      }
+      return pendingNormalReportJob
+        ? Promise.resolve(sendReport(pendingNormalReportJob))
+        : Promise.resolve();
+    }
+
     function retryPendingNavigation() {
       if (pendingNavigationRetryPromise) return pendingNavigationRetryPromise;
       let retryPromise;
@@ -194,6 +214,7 @@
             pending.inFlightPromise = null;
             try {
               const result = await inFlight;
+              await retryPendingNormalReport();
               if (completeNavigation(pending)) {
                 lastResult = result;
                 rebased = true;
@@ -203,6 +224,7 @@
               // Retry the exact navigation payload below after its initial write fails.
             }
           }
+          await retryPendingNormalReport();
           const result = await sendReport(pending.job);
           if (!completeNavigation(pending)) continue;
           lastResult = result;
