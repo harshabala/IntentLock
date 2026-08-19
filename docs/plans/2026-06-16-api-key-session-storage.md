@@ -1,10 +1,12 @@
 # Task 1: API Key Migration and Secure Session Storage Implementation Plan
 
+> **Status: Superseded.** This historical plan predates the current runtime behavior: API keys use session storage when available and otherwise remain memory-only. No persistent local fallback is supported.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Secure the OpenAI API key by storing it in `chrome.storage.session` instead of `chrome.storage.local`, implement migration on startup/options load, update options UI text/notice, and update the test runner to mock session storage correctly.
 
-**Architecture:** We will update `llm.js`'s `getApiKey()` helper to read from session storage with a local storage fallback. In `background.js` startup, we will check if a key exists in local storage and migrate it to session storage. In `options.js`, we will handle options load migration, saving to session storage, and clearing session storage on reset. In `options.html`, we will update the text description and add a notice. In `newtab.js`, we will check the API key from session storage with fallback. In `tests/llm.test.mjs`, we will update the mock to include `chrome.storage.session`.
+**Architecture:** The current implementation reads API keys from session storage and keeps them memory-only when session storage is unavailable. Startup removes legacy local aliases rather than using them as a persistent fallback. In `options.js`, keys are saved to session storage when available and cleared on reset. In `options.html`, we update the text description and add a notice. In `newtab.js`, we read the key from session storage and require re-entry when it is unavailable. In `tests/llm.test.mjs`, we update the mock to include `chrome.storage.session`.
 
 **Tech Stack:** JavaScript (ES6+), Chrome Extension APIs (Manifest V3), Node.js Test Runner.
 
@@ -84,7 +86,7 @@ async function getApiKey() {
 **Step 2: Commit**
 ```bash
 git add llm.js
-git commit -m "security: update getApiKey helper to read from session storage with fallback"
+git commit -m "security: update getApiKey helper for session-only storage"
 ```
 
 ---
@@ -160,7 +162,7 @@ git commit -m "docs: update settings page descriptions for secure session storag
 - Modify: `/Users/harshabalakrishnan/Documents/Projects/IntentLock/newtab.js`
 
 **Step 1: Check for API Key in session storage**
-Read API key from `chrome.storage.session` with fallback.
+Read API key from `chrome.storage.session`; if unavailable, keep it memory-only and require re-entry.
 
 **Step 2: Commit**
 ```bash
