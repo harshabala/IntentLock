@@ -173,10 +173,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const finishProviderSwitch = () => {
       updateProviderUI(providerSelect.value);
     };
+    const failProviderSwitch = () => {
+      if (deletionInProgress) return;
+      showProviderStorageError('Could not clear the previous provider key. Try again.');
+      updateProviderUI(providerSelect.value);
+    };
 
     if (chrome.storage.session) {
       void guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
-        .then(finishProviderSwitch);
+        .then((cleared) => {
+          if (cleared) finishProviderSwitch();
+          else failProviderSwitch();
+        })
+        .catch(failProviderSwitch);
     } else {
       finishProviderSwitch();
     }
@@ -271,6 +280,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!localResult.llmProviderConfig && !deletionInProgress) {
         void guardedStorageSet({
           llmProviderConfig: getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
+        }).then((saved) => {
+          if (!saved && !deletionInProgress) {
+            showProviderStorageError('Could not initialize provider settings. See Diagnostics below.');
+          }
+        }).catch(() => {
+          if (!deletionInProgress) {
+            showProviderStorageError('Could not initialize provider settings. See Diagnostics below.');
+          }
         });
       }
 
@@ -362,6 +379,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function showProviderStorageError(message) {
+    showStatus(providerStatus, message);
+    logError({
+      type: ERROR_TYPES.STORAGE,
+      message,
+      details: { action: 'provider_storage' },
+      source: 'options',
+    });
+  }
+
   openDiagnosticsBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
   });
@@ -416,34 +443,45 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     const finish = () => {
+      saveProviderBtn.disabled = false;
       hasSavedApiKey = hasSavedApiKey || Boolean(key);
       apiKeyInput.value = '';
       updateProviderUI(config.providerId);
       showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
     };
+    const failProviderSave = (message = 'Could not save provider settings. See Diagnostics below.') => {
+      saveProviderBtn.disabled = false;
+      if (deletionInProgress) return;
+      showProviderStorageError(message);
+    };
+    saveProviderBtn.disabled = true;
     void guardedStorageSet({ llmProviderConfig: config }).then((savedConfig) => {
-      if (!savedConfig || deletionInProgress) return;
+      if (deletionInProgress) {
+        saveProviderBtn.disabled = false;
+        return;
+      }
+      if (!savedConfig) {
+        failProviderSave();
+        return;
+      }
       if (key) {
         return guardedStorageSet({ llmApiKey: key }, chrome.storage.session).then((savedKey) => {
-          if (!savedKey || deletionInProgress) return;
+          if (deletionInProgress) {
+            saveProviderBtn.disabled = false;
+            return;
+          }
+          if (!savedKey) {
+            failProviderSave('Could not save the API key. See Diagnostics below.');
+            return;
+          }
           finish();
         });
       }
 
       finish();
-    }).catch((error) => {
-      if (deletionInProgress) return;
-      {
-        const msg = 'Could not save provider settings.';
-        showStatus(providerStatus, `${msg} See Diagnostics below.`);
-        logError({
-          type: ERROR_TYPES.STORAGE,
-          message: msg,
-          details: { error: error?.message },
-          source: 'options',
-        });
-      }
+    }).catch(() => {
+      failProviderSave();
     });
   });
 

@@ -953,6 +953,17 @@ document.addEventListener('DOMContentLoaded', () => {
         continueBtn.textContent = 'CONTINUE';
       }
 
+      function failOnboardingStorage(message) {
+        setOnboardingStatus(message, true);
+        logError({
+          type: ERROR_TYPES.STORAGE,
+          message,
+          details: { providerId: 'none', action: 'onboarding_provider_storage' },
+          source: 'onboarding',
+        });
+        resetContinueButton();
+      }
+
       const actionsRow = document.createElement('div');
       actionsRow.className = 'onboarding-actions';
 
@@ -975,25 +986,50 @@ document.addEventListener('DOMContentLoaded', () => {
             continueBtn.textContent = 'Saving...';
 
             const clearStoredKey = (done) => {
-              if (dataDeletionInProgress) return;
+              if (dataDeletionInProgress) {
+                resetContinueButton();
+                return;
+              }
               const clear = chrome.storage.session
                 ? guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
                 : Promise.resolve(true);
               clear.then((cleared) => {
-                if (cleared && !dataDeletionInProgress) done();
+                if (dataDeletionInProgress) {
+                  resetContinueButton();
+                  return;
+                }
+                if (!cleared) {
+                  failOnboardingStorage('Could not clear the previous provider key. Try again.');
+                  return;
+                }
+                done();
+              }).catch(() => {
+                failOnboardingStorage('Could not clear the previous provider key. Try again.');
               });
             };
 
             clearStoredKey(() => {
-              if (dataDeletionInProgress) return;
+              if (dataDeletionInProgress) {
+                resetContinueButton();
+                return;
+              }
               void guardedStorageSet({ llmProviderConfig: { providerId: 'none' } }).then((saved) => {
-                if (!saved || dataDeletionInProgress) return;
+                if (dataDeletionInProgress) {
+                  resetContinueButton();
+                  return;
+                }
+                if (!saved) {
+                  failOnboardingStorage('Could not save provider settings. Try again.');
+                  return;
+                }
                 chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
                   if (chrome.runtime.lastError) {
                     // Ignore runtime errors on background sync
                   }
                 });
                 showStep3();
+              }).catch(() => {
+                failOnboardingStorage('Could not save provider settings. Try again.');
               });
             });
             return;
@@ -1054,8 +1090,17 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
             void guardedStorageSet({ llmProviderConfig: providerConfig }).then((saved) => {
-              if (!saved || dataDeletionInProgress) return;
+              if (dataDeletionInProgress) {
+                resetContinueButton();
+                return;
+              }
+              if (!saved) {
+                failSetup('Could not save provider settings. Try again.');
+                return;
+              }
               completeSetup();
+            }).catch(() => {
+              failSetup('Could not save provider settings. Try again.');
             });
           };
 
@@ -1069,7 +1114,17 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
             void guardedStorageSet({ llmApiKey: apiKey }, chrome.storage.session).then((saved) => {
-              if (saved && !dataDeletionInProgress) saveProvider();
+              if (dataDeletionInProgress) {
+                resetContinueButton();
+                return;
+              }
+              if (!saved) {
+                failSetup('Could not save the API key. Try again.');
+                return;
+              }
+              saveProvider();
+            }).catch(() => {
+              failSetup('Could not save the API key. Try again.');
             });
           } else {
             const clearStoredKey = (done) => {
@@ -1077,7 +1132,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? guardedStorageRemove(['llmApiKey', 'openaiApiKey'], chrome.storage.session)
                 : Promise.resolve(true);
               clear.then((cleared) => {
-                if (cleared && !dataDeletionInProgress) done();
+                if (dataDeletionInProgress) {
+                  resetContinueButton();
+                  return;
+                }
+                if (!cleared) {
+                  failSetup('Could not clear the previous provider key. Try again.');
+                  return;
+                }
+                done();
+              }).catch(() => {
+                failSetup('Could not clear the previous provider key. Try again.');
               });
             };
             clearStoredKey(saveProvider);

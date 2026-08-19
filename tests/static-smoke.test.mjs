@@ -132,6 +132,30 @@ test('diagnostics deletion lifecycle preserves the generation and handles failur
   assert.match(diagnostics, /DATA_DELETION_FAILED[\s\S]*endStorageDeletion\(message\.generation\)/);
 });
 
+test('provider-save failures surface and restore UI controls', async () => {
+  const options = await text('options.js');
+  const newtab = await text('newtab.js');
+  const optionsProviderSave = options.slice(
+    options.indexOf("saveProviderBtn.addEventListener('click'")
+  );
+  const heuristicsSave = newtab.slice(
+    newtab.indexOf('if (heuristicsInput.checked)'),
+    newtab.indexOf('const providerId =', newtab.indexOf('if (heuristicsInput.checked)')),
+  );
+  const providerSave = newtab.slice(newtab.indexOf('const saveProvider ='));
+
+  assert.match(optionsProviderSave, /saveProviderBtn\.disabled\s*=\s*true/);
+  assert.match(options, /function\s+showProviderStorageError/);
+  assert.match(optionsProviderSave, /if \(!savedConfig\) \{[\s\S]*failProviderSave\(/);
+  assert.match(optionsProviderSave, /if \(!savedKey\) \{[\s\S]*failProviderSave\(/);
+  assert.match(optionsProviderSave, /saveProviderBtn\.disabled\s*=\s*false/);
+  assert.match(heuristicsSave, /if \(!saved\) \{[\s\S]*failOnboardingStorage\(/);
+  assert.match(heuristicsSave, /if \(!cleared\) \{[\s\S]*failOnboardingStorage\(/);
+  assert.match(providerSave, /if \(!saved\) \{[\s\S]*failSetup\(/);
+  assert.match(providerSave, /if \(!cleared\) \{[\s\S]*failSetup\(/);
+  assert.match(newtab, /resetContinueButton\(\)/);
+});
+
 test('options.html includes privacy note and diagnostics access', async () => {
   const html = await text('options.html');
   assert.match(html, /privacy-note/);

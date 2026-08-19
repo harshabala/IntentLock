@@ -186,3 +186,14 @@ test('initialization preserves deletion started before the tombstone read comple
     storageData = previousData;
   }
 });
+
+test('stale deletion-start generations cannot reactivate a completed barrier', async () => {
+  storageData = { deletionTombstone: { generation: 2, active: false } };
+  const freshQueue = await import(`../storage-queue.js?stale-start=${Date.now()}-${Math.random()}`);
+
+  await freshQueue.initializeStorageGeneration();
+  freshQueue.endStorageDeletion(2);
+  assert.equal(freshQueue.isStorageDeletionActive(), false);
+  assert.equal(freshQueue.beginStorageDeletion(1), 2);
+  assert.equal(freshQueue.isStorageDeletionActive(), false);
+});

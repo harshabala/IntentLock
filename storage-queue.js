@@ -103,6 +103,7 @@ void initializeStorageGeneration();
 
 export function beginStorageDeletion(generation = null) {
   if (Number.isInteger(generation)) {
+    if (generation <= storageGeneration && !deletionActive) return storageGeneration;
     storageGeneration = Math.max(storageGeneration, generation);
   } else {
     storageGeneration += 1;
