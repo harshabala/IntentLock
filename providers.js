@@ -10,7 +10,7 @@ import {
 import { redactSecrets } from './privacy-utils.js';
 import {
   getStorageGeneration,
-  isPersistedStorageWriteAllowed,
+  invokeWithStorageWriteBarrier,
   isStorageDeletionActive,
   registerStorageDeletionStartHandler,
   registerStorageDeletionWaiter,
@@ -147,9 +147,7 @@ async function assertTrackingEnabled(providerId) {
 }
 
 async function fetchWithTimeout(url, options, timeoutMs = PROVIDER_TIMEOUT_MS) {
-  if (!await isPersistedStorageWriteAllowed(getStorageGeneration())) {
-    throw dataDeletionError(options.providerId);
-  }
+  const invocationGeneration = getStorageGeneration();
   const controller = options.controller
     || (typeof AbortController === 'function' ? new AbortController() : null);
   const requestOptions = { ...options };
@@ -158,8 +156,13 @@ async function fetchWithTimeout(url, options, timeoutMs = PROVIDER_TIMEOUT_MS) {
   if (controller) activeProviderControllers.add(controller);
   const timer = setTimeout(() => controller?.abort(), timeoutMs);
   try {
-    return await fetch(url, controller ? { ...requestOptions, signal: controller.signal } : requestOptions);
+    return await invokeWithStorageWriteBarrier(invocationGeneration, () => (
+      fetch(url, controller ? { ...requestOptions, signal: controller.signal } : requestOptions)
+    ));
   } catch (error) {
+    if (error?.code === 'STORAGE_GENERATION_STALE' || isStorageDeletionActive()) {
+      throw dataDeletionError(options.providerId);
+    }
     if (error?.name === 'AbortError') {
       if (isStorageDeletionActive()) throw dataDeletionError(options.providerId);
       const timeoutError = new Error('Provider request timed out.');
@@ -245,9 +248,14 @@ export function getDefaultProviderConfig(providerId = DEFAULT_PROVIDER_ID) {
   };
 }
 
+export function getEffectiveAuthType(providerId, config = {}) {
+  if (providerId === 'custom') return config.authType || PROVIDERS.custom.authType;
+  return getProvider(providerId).authType;
+}
+
 export function providerRequiresApiKey(providerId, config = {}) {
   if (providerId === 'custom') {
-    return (config.authType || 'bearer') !== 'none';
+    return getEffectiveAuthType(providerId, config) !== 'none';
   }
   return getProvider(providerId).requiresApiKey;
 }
@@ -371,9 +379,7 @@ export async function getLlmConfig() {
 async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, authType, providerId }) {
   const headers = { 'Content-Type': 'application/json' };
   let url = baseUrl;
-  const effectiveAuthType = providerId === 'custom'
-    ? authType
-    : getProvider(providerId).authType;
+  const effectiveAuthType = getEffectiveAuthType(providerId, { authType });
 
   if (effectiveAuthType === 'bearer' && apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;

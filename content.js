@@ -12,6 +12,7 @@ let lastFlushPromise = null;
 let trackerSessionKey = null;
 let trackerToken = null;
 let dataDeletionInProgress = false;
+let trackingSyncEpoch = 0;
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -193,14 +194,17 @@ function getTrackerSessionKey(session) {
   return `${session.id}:${generation}`;
 }
 
-function startTracking(session) {
+function startTracking(session, expectedEpoch = trackingSyncEpoch) {
+  if (dataDeletionInProgress || expectedEpoch !== trackingSyncEpoch) return false;
   const nextSessionKey = getTrackerSessionKey(session);
   if (trackingActive && trackerSessionKey === nextSessionKey) return;
   if (pageTracker) stopTracking({ discard: true, reportFinal: false });
+  if (dataDeletionInProgress || expectedEpoch !== trackingSyncEpoch) return false;
   trackerSessionKey = nextSessionKey;
   trackerToken = { sessionId: session.id, generation: session.generation };
   trackingActive = true;
   ensureTracker(trackerToken).start();
+  return true;
 }
 
 function stopTracking({ discard = false, reportFinal = true } = {}) {
@@ -229,9 +233,14 @@ function syncSessionState() {
     stopTracking({ discard: true, reportFinal: false });
     return;
   }
+  const syncEpoch = trackingSyncEpoch;
   chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+    if (dataDeletionInProgress || syncEpoch !== trackingSyncEpoch) {
+      stopTracking({ discard: true, reportFinal: false });
+      return;
+    }
     if (result.activeSession?.isActive && result.trackingEnabled !== false) {
-      startTracking(result.activeSession);
+      startTracking(result.activeSession, syncEpoch);
     } else {
       stopTracking({ discard: true, reportFinal: false });
     }
@@ -243,6 +252,7 @@ function syncSessionState() {
     }
 
     sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE' }).then(({ response }) => {
+      if (dataDeletionInProgress || syncEpoch !== trackingSyncEpoch) return;
       if (response?.ok && response.state) {
         pendingIntervention = response.state;
         ensureOverlay().show({
@@ -259,6 +269,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (dataDeletionInProgress) return;
   if (changes.trackingEnabled && changes.trackingEnabled.newValue === false) {
+    trackingSyncEpoch += 1;
     stopTracking({ discard: true, reportFinal: false });
     if (overlay) overlay.hide();
     pendingIntervention = null;
@@ -271,6 +282,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'DATA_DELETION_STARTED') {
+    trackingSyncEpoch += 1;
     dataDeletionInProgress = true;
     stopTracking({ discard: true, reportFinal: false });
     if (overlay) overlay.hide();
@@ -280,10 +292,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'DATA_DELETED' || message.type === 'DATA_DELETION_FAILED') {
+    trackingSyncEpoch += 1;
     dataDeletionInProgress = false;
     stopTracking({ discard: true, reportFinal: false });
     if (message.type === 'DATA_DELETED' && overlay) overlay.hide();
     pendingIntervention = null;
+    if (message.type === 'DATA_DELETION_FAILED') syncSessionState();
     sendResponse?.({ status: 'ok' });
     return true;
   }

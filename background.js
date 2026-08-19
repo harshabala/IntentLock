@@ -28,11 +28,18 @@ import {
 } from './privacy-utils.js';
 import {
   beginStorageDeletion,
-  DELETION_TOMBSTONE_KEY,
+  completeStorageDeletion,
   endStorageDeletion,
   enqueueStorageMutation,
+  getStorageMutationGeneration,
   getStorageGeneration,
   isStorageDeletionActive,
+  runWithStorageGeneration,
+  StorageGenerationError,
+  writeDeletionTombstone,
+  writeStorageClear,
+  writeStorageRemove,
+  writeStorageSet,
   waitForStorageDeletionWork,
 } from './storage-queue.js';
 
@@ -40,7 +47,7 @@ registerBackoffCallback((until) => {
   const generation = getStorageGeneration();
   void enqueueStorageMutation(() => {
     if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-    return storageSet({ llmBackoffUntil: until });
+    return storageSet({ llmBackoffUntil: until }, generation);
   });
 });
 
@@ -64,6 +71,24 @@ let configPromise = null;
 const INTERVENTION_STATE_KEY = 'interventionStates';
 const COMPLETED_TRANSITION_KEY = 'completedInterventionTransitions';
 const MAX_COMPLETED_TRANSITIONS = 100;
+const SESSION_SCOPED_STORAGE_KEYS = [
+  'activeSession',
+  'overrideCooldowns',
+  'relatedDomainMarks',
+  'sessionTabGroupId',
+  'isCurrentlyIdle',
+  'lastIdleTime',
+  INTERVENTION_STATE_KEY,
+  'interventionState',
+  COMPLETED_TRANSITION_KEY,
+  'llmBackoffUntil',
+  'pendingSession',
+  'pendingDeletion',
+  'deletionPending',
+  'sessionMetadata',
+  'sessionDeletionPending',
+  'activeSessionMetadata',
+];
 
 function storageGet(keys) {
   return new Promise((resolve, reject) => {
@@ -77,31 +102,15 @@ function storageGet(keys) {
   });
 }
 
-function storageSet(values) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set(values, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
+function storageSet(values, expectedGeneration = getStorageMutationGeneration(), options = {}) {
+  return writeStorageSet(values, chrome.storage.local, expectedGeneration, options);
 }
 
-function storageRemove(keys) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.remove(keys, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
+function storageRemove(keys, expectedGeneration = getStorageMutationGeneration(), options = {}) {
+  return writeStorageRemove(keys, chrome.storage.local, expectedGeneration, options);
 }
 
-function storageClear() {
+function storageClear(expectedGeneration = getStorageMutationGeneration()) {
   return storageRemove([
     'activeSession',
     'sessionHistory',
@@ -120,24 +129,22 @@ function storageClear() {
     'llmApiKey',
     'openaiApiKey',
     'llmBackoffUntil',
+    'pendingSession',
+    'pendingDeletion',
+    'deletionPending',
+    'sessionMetadata',
+    'sessionDeletionPending',
+    'activeSessionMetadata',
     'heuristicPolicy',
     'relatedDomainMarks',
     'theme',
     'hasSeenOnboarding',
-  ]);
+  ], expectedGeneration, { mode: 'during-deletion' });
 }
 
-function storageSessionClear() {
+function storageSessionClear(expectedGeneration = getStorageMutationGeneration()) {
   if (typeof chrome.storage.session?.clear !== 'function') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    chrome.storage.session.clear(() => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
+  return writeStorageClear(chrome.storage.session, expectedGeneration, { mode: 'during-deletion' });
 }
 
 class SessionMutationCancelledError extends Error {
@@ -162,7 +169,7 @@ function enqueueSessionMutation(operation, expectedGeneration = getStorageGenera
     if (expectedGeneration !== getStorageGeneration() || isStorageDeletionActive()) {
       throw new SessionMutationCancelledError();
     }
-    return operation();
+    return runWithStorageGeneration(expectedGeneration, operation);
   });
 }
 
@@ -855,35 +862,39 @@ function handleSessionCleared(sendResponse) {
   // Advance the generation before entering the queue so already-created
   // logging/finalization operations cannot write after this deletion.
   const generation = beginStorageDeletion();
-  const tombstone = { generation, active: true };
-  storageSet({ [DELETION_TOMBSTONE_KEY]: tombstone }).then(() => {
+  writeDeletionTombstone(generation, true).then((started) => {
+    if (!started) throw new StorageGenerationError('Unable to establish the deletion barrier.');
     chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED', generation }, () => {
       void chrome.runtime.lastError;
     });
     hideInterventionsFromTabs();
     enqueueStorageMutation(async () => {
       try {
-        await waitForStorageDeletionWork();
-        await storageClear();
-        await storageSessionClear();
-        currentSession = null;
-        trackingEnabled = true;
-        customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
-        sessionTabGroupId = null;
-        heuristicPolicy = null;
-        isCurrentlyIdle = false;
-        lastIdleTime = 0;
-        relatedDomainMarks = {};
-        relatedDomainMarksSessionId = null;
-        overrideCooldowns.clear();
-        contentEventBuckets.clear();
-        clearDriftCache();
-        clearDriftDebounce();
-        clearLlmBackoff();
-        await clearTabGroupState();
-        chrome.alarms.clear(timeBudgetAlarmName);
-        configPromise = null;
-        await storageSet({ [DELETION_TOMBSTONE_KEY]: { generation, active: false } });
+        await runWithStorageGeneration(generation, async () => {
+          await waitForStorageDeletionWork();
+          await storageClear(generation);
+          await storageSessionClear(generation);
+          currentSession = null;
+          trackingEnabled = true;
+          customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
+          sessionTabGroupId = null;
+          heuristicPolicy = null;
+          isCurrentlyIdle = false;
+          lastIdleTime = 0;
+          relatedDomainMarks = {};
+          relatedDomainMarksSessionId = null;
+          overrideCooldowns.clear();
+          contentEventBuckets.clear();
+          clearDriftCache();
+          clearDriftDebounce();
+          clearLlmBackoff();
+          await clearTabGroupState();
+          chrome.alarms.clear(timeBudgetAlarmName);
+          configPromise = null;
+        });
+        if (!await completeStorageDeletion(generation)) {
+          throw new StorageGenerationError('Deletion was superseded by a newer storage generation.');
+        }
         endStorageDeletion(generation);
         await loadConfig();
         chrome.runtime.sendMessage?.({ type: 'DATA_DELETED', generation }, () => {
@@ -891,11 +902,7 @@ function handleSessionCleared(sendResponse) {
         });
         sendResponse({ status: 'ok' });
       } catch (error) {
-        try {
-          await storageSet({ [DELETION_TOMBSTONE_KEY]: { generation, active: false, failed: true } });
-        } catch {
-          // Preserve the original deletion error for the caller.
-        }
+        await writeDeletionTombstone(generation, false).catch(() => {});
         endStorageDeletion(generation);
         chrome.runtime.sendMessage?.({
           type: 'DATA_DELETION_FAILED',
@@ -907,7 +914,7 @@ function handleSessionCleared(sendResponse) {
         sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
       }
     });
-  }, (error) => {
+  }).catch((error) => {
     endStorageDeletion(generation);
     chrome.runtime.sendMessage?.({
       type: 'DATA_DELETION_FAILED',
@@ -1029,6 +1036,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           'overrideCooldowns',
           COMPLETED_TRANSITION_KEY,
           'relatedDomainMarks',
+          'llmBackoffUntil',
         ]);
         configPromise = null;
         relatedDomainMarks = {};
@@ -1163,23 +1171,24 @@ function loadConfig() {
               retentionMs: SESSION_RETENTION_MS,
               maxEntries: MAX_SESSION_HISTORY,
             }),
-          });
+          }, generation);
         });
       }
+      let activeSessionPersistence = null;
       if (data.activeSession && data.activeSession.isActive) {
         currentSession = sanitizeSessionEvents(data.activeSession);
         if (!currentSession) {
-          void enqueueStorageMutation(() => {
+          activeSessionPersistence = enqueueStorageMutation(() => {
             if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-            return storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState']);
+            return storageRemove(SESSION_SCOPED_STORAGE_KEYS, generation);
           });
         } else {
           ensureMetrics(currentSession);
         }
         if (currentSession && hasUnsupportedSessionEvents(data.activeSession)) {
-          void enqueueStorageMutation(() => {
+          activeSessionPersistence = enqueueStorageMutation(() => {
             if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-            return storageSet({ activeSession: currentSession });
+            return storageSet({ activeSession: currentSession }, generation);
           });
         }
 
@@ -1210,7 +1219,7 @@ function loadConfig() {
         heuristicPolicy = migrateLegacyDistractionSites(data.customDistractionSites);
         void enqueueStorageMutation(() => {
           if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-          return storageSet({ heuristicPolicy });
+          return storageSet({ heuristicPolicy }, generation);
         });
       } else {
         heuristicPolicy = buildDefaultPolicy('deep_work', 'balanced');
@@ -1250,7 +1259,11 @@ function loadConfig() {
         relatedDomainMarks = {};
         relatedDomainMarksSessionId = null;
       }
-      resolve();
+      if (activeSessionPersistence) {
+        activeSessionPersistence.then(() => resolve(), () => resolve());
+      } else {
+        resolve();
+      }
     });
   });
   const trackedConfigPromise = pendingConfigPromise.catch((error) => {
@@ -1307,69 +1320,57 @@ chrome.storage.onChanged?.addListener((changes, areaName) => {
   }
 });
 
-function migrateLlmStorage() {
-  if (typeof chrome === 'undefined' || !chrome.storage?.session || !chrome.storage?.local) {
-    return;
-  }
+function storageAreaGet(area, keys) {
+  if (!area?.get) return Promise.resolve({});
+  return new Promise((resolve, reject) => {
+    area.get(keys, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(result || {});
+    });
+  });
+}
+
+export async function migrateLlmStorage() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
 
   const generation = getStorageGeneration();
   const migrationStillCurrent = () => (
     generation === getStorageGeneration() && !isStorageDeletionActive()
   );
+  const localRes = await storageAreaGet(chrome.storage.local, ['llmApiKey', 'openaiApiKey']);
+  if (!migrationStillCurrent()) return;
 
-  chrome.storage.local.get(['llmApiKey', 'openaiApiKey', 'llmProviderConfig'], (localRes) => {
-    if (!migrationStillCurrent()) return;
-    chrome.storage.session.get(['openaiApiKey', 'llmApiKey'], (sessionRes) => {
-      if (!migrationStillCurrent()) return;
-      const existingSessionKey = sessionRes?.llmApiKey || null;
-      const legacyKey = existingSessionKey
-        || sessionRes?.openaiApiKey
-        || localRes?.llmApiKey
-        || localRes?.openaiApiKey;
-      const sessionUpdates = {};
-      const sessionRemovals = [];
-      const localRemovals = [];
+  const session = chrome.storage.session;
+  const sessionRes = await storageAreaGet(session, ['openaiApiKey', 'llmApiKey']);
+  if (!migrationStillCurrent()) return;
 
-      if (legacyKey && !existingSessionKey) {
-        sessionUpdates.llmApiKey = legacyKey;
-      }
-      if (sessionRes?.openaiApiKey) {
-        sessionRemovals.push('openaiApiKey');
-      }
-      if (localRes?.llmApiKey) localRemovals.push('llmApiKey');
-      if (localRes?.openaiApiKey) localRemovals.push('openaiApiKey');
+  const localRemovals = ['llmApiKey', 'openaiApiKey']
+    .filter((key) => localRes?.[key] !== undefined);
+  const sessionRemovals = sessionRes?.openaiApiKey !== undefined ? ['openaiApiKey'] : [];
+  const existingSessionKey = sessionRes?.llmApiKey || null;
+  const legacyKey = existingSessionKey
+    || sessionRes?.openaiApiKey
+    || localRes?.llmApiKey
+    || localRes?.openaiApiKey;
 
-      const applySessionMigration = () => {
-        if (!migrationStillCurrent()) return;
-        if (localRemovals.length > 0) {
-          chrome.storage.local.remove(localRemovals);
-        }
-      };
-
-      if (Object.keys(sessionUpdates).length > 0) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (latestSession) => {
-          if (!migrationStillCurrent()) return;
-          const hasNewerKey = latestSession?.llmApiKey || latestSession?.openaiApiKey;
-          const persistMigration = () => {
-            if (sessionRemovals.length > 0) {
-              chrome.storage.session.remove(sessionRemovals, applySessionMigration);
-            } else {
-              applySessionMigration();
-            }
-          };
-          if (hasNewerKey) {
-            persistMigration();
-            return;
-          }
-          chrome.storage.session.set(sessionUpdates, persistMigration);
-        });
-      } else {
-        applySessionMigration();
-      }
-    });
-  });
+  if (session?.set && legacyKey && !existingSessionKey) {
+    await writeStorageSet({ llmApiKey: legacyKey }, session, generation);
+  }
+  if (session?.remove && sessionRemovals.length > 0) {
+    await writeStorageRemove(sessionRemovals, session, generation);
+  }
+  // Local aliases are always removed, including when session storage is not
+  // available. Without a session area the key remains memory-only/absent.
+  if (localRemovals.length > 0) {
+    await storageRemove(localRemovals, generation);
+  }
 }
-migrateLlmStorage();
+void migrateLlmStorage().catch((error) => {
+  console.warn('LLM key migration failed:', error);
+});
 
 // ── Session start ──────────────────────────────────────────────────────
 
@@ -1490,7 +1491,11 @@ async function addTabToGroup(tabId) {
 
 async function clearTabGroupState() {
   sessionTabGroupId = null;
-  await storageRemove('sessionTabGroupId');
+  await storageRemove(
+    'sessionTabGroupId',
+    getStorageMutationGeneration(),
+    isStorageDeletionActive() ? { mode: 'during-deletion' } : {},
+  );
 }
 
 function ungroupTabs() {
@@ -1898,7 +1903,9 @@ function handleContentEvent(payload, tabId, expectedGeneration = getStorageGener
     });
   }
 
-  return Promise.all([metricWrite, eventWrite]).then(() => {
+  return Promise.allSettled([metricWrite, eventWrite]).then((results) => {
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
     if (flushMetadata) return flushEventResult(flushMetadata, true);
     if (payload.actionType === 'PAGE_DWELL' || payload.actionType === 'SPA_NAVIGATION') {
       evaluateDrift(

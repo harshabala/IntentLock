@@ -223,6 +223,7 @@ const {
   reloadConfig,
   createHistoryEntry,
   triggerIntervention,
+  migrateLlmStorage,
 } = await import('../background.js');
 
 function requestMessage(message, sender = {}, timeoutMs = 100) {
@@ -374,6 +375,71 @@ test('delete-all leaves a persisted tombstone that rejects stale-context writes'
   assert.equal(storageData.activeSession, undefined);
 });
 
+test('background writes reject a persisted active deletion tombstone', async () => {
+  const generation = getStorageGeneration() + 1;
+  storageData = {
+    trackingEnabled: true,
+    activeSession: makeSession('stale-write-session', 'old intent'),
+    deletionTombstone: { generation, active: true },
+  };
+  await reloadConfig();
+
+  const response = await requestMessage({
+    type: 'UPDATE_SESSION_INTENT',
+    sessionId: 'stale-write-session',
+    intent: 'must not persist',
+  });
+
+  assert.equal(response.status, 'error');
+  assert.equal(storageData.activeSession.intent, 'old intent');
+  storageData.deletionTombstone = { generation, active: false };
+});
+
+test('deletion completion does not publish success after a newer tombstone wins', async () => {
+  storageData = { trackingEnabled: true, activeSession: makeSession('superseded-delete-session') };
+  await reloadConfig();
+  const originalSet = chrome.storage.local.set;
+  let activeGeneration = null;
+  chrome.storage.local.set = (values, callback) => {
+    if (values.deletionTombstone?.active === true) {
+      activeGeneration = values.deletionTombstone.generation;
+    }
+    if (values.deletionTombstone?.active === false && Number.isInteger(activeGeneration)) {
+      storageData.deletionTombstone = { generation: activeGeneration + 1, active: true };
+      callback?.();
+      return;
+    }
+    originalSet(values, callback);
+  };
+
+  try {
+    const response = await requestMessage({ type: 'DELETE_ALL_DATA' });
+    assert.equal(response.status, 'error');
+    assert.equal(storageData.deletionTombstone.active, true);
+    assert.equal(storageData.deletionTombstone.generation, activeGeneration + 1);
+  } finally {
+    chrome.storage.local.set = originalSet;
+    storageData.deletionTombstone = { generation: activeGeneration + 1, active: false };
+    endStorageDeletion(activeGeneration + 1);
+  }
+});
+
+test('legacy local API aliases are removed when session storage is unavailable', async () => {
+  const previousSession = chrome.storage.session;
+  storageData = {
+    llmApiKey: 'legacy-llm-key',
+    openaiApiKey: 'legacy-openai-key',
+  };
+  chrome.storage.session = undefined;
+  try {
+    await migrateLlmStorage();
+    assert.equal(storageData.llmApiKey, undefined);
+    assert.equal(storageData.openaiApiKey, undefined);
+  } finally {
+    chrome.storage.session = previousSession;
+  }
+});
+
 test('expired active sessions are abandoned instead of retained indefinitely', async () => {
   storageData = {
     trackingEnabled: true,
@@ -387,6 +453,42 @@ test('expired active sessions are abandoned instead of retained indefinitely', a
 
   assert.equal(getInMemoryState().currentSession, null);
   assert.equal(storageData.activeSession, undefined);
+});
+
+test('abandoning an active session clears all session-scoped state', async () => {
+  storageData = {
+    trackingEnabled: true,
+    activeSession: {
+      ...makeSession('expired-cleanup-session'),
+      startTime: Date.now() - ACTIVE_SESSION_RETENTION_MS - 1,
+    },
+    overrideCooldowns: [['stale.example', Date.now() + 60_000]],
+    relatedDomainMarks: { sessionId: 'expired-cleanup-session', marks: { 'stale.example': { count: 1 } } },
+    sessionTabGroupId: 42,
+    isCurrentlyIdle: true,
+    lastIdleTime: Date.now(),
+    interventionStates: { 'expired-cleanup-session:1': { sessionId: 'expired-cleanup-session' } },
+    interventionState: { sessionId: 'expired-cleanup-session' },
+    completedInterventionTransitions: { old: { tabId: 1 } },
+    llmBackoffUntil: Date.now() + 60_000,
+  };
+
+  await reloadConfig();
+
+  for (const key of [
+    'activeSession',
+    'overrideCooldowns',
+    'relatedDomainMarks',
+    'sessionTabGroupId',
+    'isCurrentlyIdle',
+    'lastIdleTime',
+    'interventionStates',
+    'interventionState',
+    'completedInterventionTransitions',
+    'llmBackoffUntil',
+  ]) {
+    assert.equal(storageData[key], undefined, `${key} should be cleared for an abandoned session`);
+  }
 });
 
 test('SESSION_STARTED rejects a session while tracking is disabled', async () => {

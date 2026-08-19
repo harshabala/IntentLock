@@ -41,6 +41,7 @@ import {
   validateProviderConfig,
   isLlmConfigured,
   getLlmConfig,
+  getEffectiveAuthType,
   chatCompletion,
 } from '../providers.js';
 
@@ -53,6 +54,12 @@ test('providerRequiresApiKey respects local and custom auth settings', () => {
   assert.equal(providerRequiresApiKey('gemini'), true);
   assert.equal(providerRequiresApiKey('custom', { authType: 'none' }), false);
   assert.equal(providerRequiresApiKey('custom', { authType: 'bearer' }), true);
+});
+
+test('custom query authentication is the effective disclosure mode', () => {
+  assert.equal(getEffectiveAuthType('custom', { authType: 'query' }), 'query');
+  assert.equal(getEffectiveAuthType('custom', { authType: 'bearer' }), 'bearer');
+  assert.equal(getEffectiveAuthType('gemini', {}), 'query');
 });
 
 test('validateApiKey enforces provider-specific key formats', () => {
@@ -240,6 +247,56 @@ test('deletion blocks a provider fetch that races after the tracking read', asyn
     assert.equal(result.error.code, 'data_deletion');
   } finally {
     endStorageDeletion();
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.fetch = previousFetch;
+    globalThis.chrome.storage.local.get = previousLocalGet;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+  }
+});
+
+test('tombstone flip immediately before provider fetch blocks invocation', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousFetch = globalThis.fetch;
+  const previousLocalGet = globalThis.chrome.storage.local.get;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  let tombstoneReads = 0;
+  let fetchCalled = false;
+  storageData.llmProviderConfig = {
+    providerId: 'ollama',
+    model: 'llama3.2',
+    baseUrl: 'http://localhost:11434/api/chat',
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
+  globalThis.chrome.storage.local.get = (keys, callback) => {
+    const keysArr = Array.isArray(keys) ? keys : [keys];
+    if (keysArr.length === 1 && keysArr[0] === 'deletionTombstone') {
+      tombstoneReads += 1;
+      const readNumber = tombstoneReads;
+      if (readNumber === 2) {
+        storageData.deletionTombstone = { generation: 1, active: true };
+      }
+      callback({ deletionTombstone: storageData.deletionTombstone || { generation: 0, active: false } });
+      return;
+    }
+    const result = {};
+    for (const key of keysArr) {
+      if (storageData[key] !== undefined) result[key] = storageData[key];
+    }
+    callback(result);
+  };
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    return { ok: true, json: async () => ({ message: { content: '{}' } }) };
+  };
+
+  try {
+    const result = await chatCompletion('tombstone flip before fetch');
+    assert.equal(fetchCalled, false);
+    assert.equal(result.error.code, 'data_deletion');
+    assert.ok(tombstoneReads >= 2, 'the fetch barrier should re-read the persisted tombstone');
+  } finally {
+    endStorageDeletion();
+    delete storageData.deletionTombstone;
     storageData.llmProviderConfig = previousConfig;
     globalThis.fetch = previousFetch;
     globalThis.chrome.storage.local.get = previousLocalGet;

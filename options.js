@@ -3,6 +3,7 @@ import {
   DEFAULT_PROVIDER_ID,
   getProvider,
   getDefaultProviderConfig,
+  getEffectiveAuthType,
   providerRequiresApiKey,
   validateApiKey,
   validateProviderConfig,
@@ -103,10 +104,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateProviderUI(providerId = providerSelect.value) {
     const provider = getProvider(providerId);
+    const formConfig = getFormConfig();
     const cloudProvider = isCloudProvider(providerId);
     providerDescription.textContent = provider.description;
     if (privacyNote) {
-      privacyNote.textContent = provider.authType === 'query'
+      privacyNote.textContent = getEffectiveAuthType(providerId, formConfig) === 'query'
         ? 'When AI is enabled, your verbatim declared intent and minimized origin-only browsing context are sent directly to your chosen provider. Query-auth authentication places the API key in the provider URL; data is not sent through IntentLock servers.'
         : 'When AI is enabled, your verbatim declared intent and minimized origin-only browsing context are sent directly to your chosen provider. Data is not sent through IntentLock servers.';
     }
@@ -136,7 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ? 'Full URL to your provider endpoint.'
         : '';
 
-    const needsKey = providerRequiresApiKey(providerId, getFormConfig());
+    const needsKey = providerRequiresApiKey(providerId, formConfig);
     apiKeyGroup.classList.toggle('hidden', !needsKey);
     apiKeyInput.placeholder = hasSavedApiKey && needsKey
       ? 'Key saved — enter new key to replace'

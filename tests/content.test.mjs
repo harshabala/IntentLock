@@ -218,3 +218,90 @@ test('content tracking is recreated and stale reports are rejected at a session 
   assert.equal(trackers[1].stops.at(-1).discard, true);
   assert.equal(trackers[1].stops.at(-1).reportFinal, false);
 });
+
+test('tracking opt-out invalidates a delayed session sync before restarting tracking', async () => {
+  const storageChangedListeners = [];
+  const runtimeMessageListeners = [];
+  const trackers = [];
+  const pendingReads = [];
+  let delayReads = false;
+  let activeSession = { id: 'session-one', generation: 7, isActive: true };
+
+  const chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(_message, callback) {
+        callback?.({ ok: false });
+      },
+      onMessage: {
+        addListener(listener) {
+          runtimeMessageListeners.push(listener);
+        },
+      },
+    },
+    storage: {
+      local: {
+        get(_keys, callback) {
+          if (delayReads) {
+            pendingReads.push(() => callback({ activeSession, trackingEnabled: true }));
+            return;
+          }
+          callback({ activeSession, trackingEnabled: true });
+        },
+      },
+      onChanged: {
+        addListener(listener) {
+          storageChangedListeners.push(listener);
+        },
+      },
+    },
+  };
+
+  const context = createClassicContext({
+    chrome,
+    IntentLock: {
+      pageTracker: {
+        createPageTracker(options) {
+          const tracker = {
+            options,
+            stops: [],
+            start() {},
+            stop(settings) {
+              this.stops.push(settings);
+            },
+          };
+          trackers.push(tracker);
+          return tracker;
+        },
+      },
+      interventionOverlay: {
+        createInterventionOverlay() {
+          return { hide() {}, show() {}, setError() {} };
+        },
+      },
+    },
+    document: { hidden: false, title: 'Example' },
+    window: {},
+    history: {},
+    location: { href: 'https://docs.example.com/opt-out-race' },
+  });
+  await runClassicScript(new URL('../content.js', import.meta.url), context);
+
+  assert.equal(trackers.length, 1);
+  delayReads = true;
+  activeSession = { id: 'session-two', generation: 7, isActive: true };
+  storageChangedListeners[0]({
+    activeSession: { oldValue: { id: 'session-one' }, newValue: activeSession },
+  }, 'local');
+  assert.equal(pendingReads.length, 1);
+
+  storageChangedListeners[0]({
+    trackingEnabled: { oldValue: true, newValue: false },
+  }, 'local');
+  assert.equal(trackers[0].stops.at(-1).discard, true);
+  assert.equal(trackers.length, 1);
+
+  pendingReads.shift()();
+  assert.equal(trackers.length, 1);
+  assert.equal(runtimeMessageListeners.length, 1);
+});

@@ -78,6 +78,46 @@ test('diagnostic details discard provider bodies, prompts, and private URLs', as
   assert.equal(entry.details.url, undefined);
 });
 
+test('legacy diagnostic entries whitelist top-level and nested fields', async () => {
+  storageData = {
+    errorLog: [{
+      id: 'legacy-entry',
+      timestamp: Date.now(),
+      type: 'api',
+      source: 'provider',
+      message: 'structured failure',
+      providerId: 'custom',
+      bodyText: 'private provider response',
+      prompt: 'private intent echo',
+      url: 'https://private.example.test/path?token=secret',
+      details: {
+        code: 'api_error',
+        status: 500,
+        providerId: 'custom',
+        nested: {
+          model: 'safe-model',
+          bodyText: 'nested private body',
+          url: 'https://private.example.test/nested',
+        },
+      },
+    }],
+  };
+
+  const [entry] = await getErrorLog();
+  assert.deepEqual(Object.keys(entry).sort(), ['details', 'id', 'message', 'source', 'timestamp', 'type']);
+  assert.equal(entry.providerId, undefined);
+  assert.equal(entry.bodyText, undefined);
+  assert.equal(entry.prompt, undefined);
+  assert.equal(entry.url, undefined);
+  assert.deepEqual(entry.details, {
+    code: 'api_error',
+    status: 500,
+    providerId: 'custom',
+    nested: { model: 'safe-model' },
+  });
+  assert.deepEqual(Object.keys(storageData.errorLog[0]).sort(), ['details', 'id', 'message', 'source', 'timestamp', 'type']);
+});
+
 test('logError stores entries locally with sanitized details', async () => {
   storageData = { errorLog: [] };
   await logError({
