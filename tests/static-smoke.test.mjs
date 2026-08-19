@@ -328,11 +328,14 @@ test('live numeric displays use tabular-nums for stable alignment', async () => 
 });
 
 test('custom query-auth disclosure and authoritative storage routing are explicit', async () => {
-  const [optionsSource, backgroundSource, newtabSource, privacyPolicy] = await Promise.all([
+  const [optionsSource, backgroundSource, newtabSource, storageQueueSource, privacyPolicy, schema, development] = await Promise.all([
     text('options.js'),
     text('background.js'),
     text('newtab.js'),
+    text('storage-queue.js'),
     text('docs/privacy-policy.md'),
+    text('docs/storage-schema.md'),
+    text('docs/development.md'),
   ]);
 
   assert.match(optionsSource, /getEffectiveAuthType\(providerId,\s*formConfig\)\s*===\s*['"]query['"]/);
@@ -341,4 +344,8 @@ test('custom query-auth disclosure and authoritative storage routing are explici
   assert.doesNotMatch(privacyPolicy, /local-storage fallback/i);
   assert.match(privacyPolicy, /memory-only|must be re-entered/i);
   assert.match(newtabSource, /query authentication|API key.*URL|request URL/i);
+  assert.match(storageQueueSource, /runtime\.sendMessage/);
+  assert.match(backgroundSource, /STORAGE_MUTATION/);
+  assert.doesNotMatch(schema, /local.*llmApiKey.*fallback|local `llmApiKey` fallback/i);
+  assert.doesNotMatch(development, /local `llmApiKey` fallback/i);
 });

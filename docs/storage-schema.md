@@ -214,6 +214,6 @@ lastIdleTime: number   // timestamp when idle state began, 0 if not idle
 | `openaiApiKey` | string | API key — never written to `local` storage |
 | `llmApiKey` | string | Alias used by some provider paths |
 
-The API key is kept here when this storage area is available — it is never synced, never backed up, and never survives a browser restart. If session storage is unavailable, the provider path may use the local `llmApiKey` fallback. The user must re-enter the key after closing Chrome when session storage is used.
+The API key is kept here when this storage area is available — it is never synced, never backed up, and never survives a browser restart. If session storage is unavailable, the key remains memory-only and the user must re-enter it; no persistent local fallback is used.
 
 On startup, `background.js` checks `chrome.storage.local` for a legacy `openaiApiKey` (written by versions before 1.2.1) and migrates it to session storage, removing the local copy.

@@ -424,6 +424,42 @@ test('deletion completion does not publish success after a newer tombstone wins'
   }
 });
 
+test('authoritative storage mutation rejects a persisted tombstone race', async () => {
+  const generation = getStorageGeneration();
+  const previousLocalGet = chrome.storage.local.get;
+  let tombstoneReads = 0;
+  storageData = {
+    deletionTombstone: { generation, active: false },
+  };
+  chrome.storage.local.get = (keys, callback) => {
+    const keysArr = Array.isArray(keys) ? keys : [keys];
+    if (keysArr.length === 1 && keysArr[0] === 'deletionTombstone') {
+      tombstoneReads += 1;
+      if (tombstoneReads === 2) {
+        storageData.deletionTombstone = { generation: generation + 1, active: true };
+      }
+    }
+    previousLocalGet(keys, callback);
+  };
+
+  try {
+    const response = await requestMessage({
+      type: 'STORAGE_MUTATION',
+      operation: 'set',
+      area: 'local',
+      generation,
+      values: { shouldNotPersist: true },
+    });
+    assert.deepEqual(response, { status: 'ok', saved: false });
+    assert.equal(storageData.shouldNotPersist, undefined);
+    assert.ok(tombstoneReads >= 2);
+  } finally {
+    chrome.storage.local.get = previousLocalGet;
+    storageData.deletionTombstone = { generation: generation + 1, active: false };
+    endStorageDeletion(generation + 1);
+  }
+});
+
 test('legacy local API aliases are removed when session storage is unavailable', async () => {
   const previousSession = chrome.storage.session;
   storageData = {

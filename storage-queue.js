@@ -6,8 +6,10 @@ let deletionActive = false;
 let generationInitializationPromise = null;
 let generationInitialized = false;
 let ambientStorageGeneration = null;
+let storageMutationLock = Promise.resolve();
 
 export const DELETION_TOMBSTONE_KEY = 'deletionTombstone';
+export const STORAGE_MUTATION_MESSAGE = 'STORAGE_MUTATION';
 const deletionStartHandlers = new Set();
 const deletionWorkWaiters = new Set();
 
@@ -221,9 +223,65 @@ function storageRuntimeError() {
   return typeof chrome !== 'undefined' ? chrome.runtime?.lastError : null;
 }
 
+function enqueueAuthoritativeStorageMutation(operation) {
+  const next = storageMutationLock.then(operation, operation);
+  storageMutationLock = next.catch(() => {});
+  return next;
+}
+
+function storageAreaName(target) {
+  if (typeof chrome === 'undefined' || typeof window === 'undefined' || !target) return null;
+  if (target === chrome.storage?.session) return 'session';
+  if (target === chrome.storage?.local) return 'local';
+  return null;
+}
+
+function requestAuthoritativeStorageMutation(operation, target, generation, payload) {
+  const runtime = typeof chrome !== 'undefined' ? chrome.runtime : null;
+  const area = storageAreaName(target);
+  if (typeof runtime?.sendMessage !== 'function' || !area) return null;
+
+  return new Promise((resolve) => {
+    try {
+      runtime.sendMessage({
+        type: STORAGE_MUTATION_MESSAGE,
+        operation,
+        area,
+        generation,
+        ...payload,
+      }, (response) => {
+        if (runtime.lastError) {
+          resolve(false);
+          return;
+        }
+        resolve(response?.saved === true);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+function tombstoneAllowsStartMutation(tombstone, expectedGeneration) {
+  const persistedGeneration = tombstone?.generation;
+  return expectedGeneration === storageGeneration
+    && isStorageDeletionActive()
+    && (!Number.isInteger(persistedGeneration) || persistedGeneration <= expectedGeneration);
+}
+
+function tombstoneAllowsMutationAtPoint(tombstone, expectedGeneration, mode) {
+  if (mode === 'start-deletion') {
+    return tombstoneAllowsStartMutation(tombstone, expectedGeneration);
+  }
+  if (mode === 'during-deletion' || mode === 'complete-deletion') {
+    return tombstoneAllowsDeletionWrite(tombstone, expectedGeneration);
+  }
+  return tombstoneAllowsNormalWrite(tombstone, expectedGeneration);
+}
+
 function storageMutationBarrier(target, methodName, args, expectedGeneration, options = {}) {
   const { mode = 'normal', silent = false } = options;
-  return initializeStorageGeneration().then(() => new Promise((resolve, reject) => {
+  return enqueueAuthoritativeStorageMutation(() => initializeStorageGeneration().then(() => new Promise((resolve, reject) => {
     const rejectStale = () => {
       if (silent) resolve(false);
       else reject(new StorageGenerationError());
@@ -236,8 +294,8 @@ function storageMutationBarrier(target, methodName, args, expectedGeneration, op
         rejectStale();
         return;
       }
-      // Resolve the method and make the in-memory epoch check immediately
-      // before invoking it. No await or promise callback can interleave here.
+      // Resolve the method first so an adversarial storage implementation that
+      // flips the persisted tombstone while exposing it is checked below.
       const method = target[methodName];
       const stillCurrent = mode === 'normal'
         ? generation === storageGeneration && !isStorageDeletionActive()
@@ -246,18 +304,34 @@ function storageMutationBarrier(target, methodName, args, expectedGeneration, op
         rejectStale();
         return;
       }
-      try {
-        method.call(target, ...args, () => {
-          const error = storageRuntimeError();
-          if (error) {
-            reject(new Error(error.message));
-            return;
-          }
-          resolve(true);
-        });
-      } catch (error) {
-        reject(error);
-      }
+      // This read is part of the authoritative service-worker mutation lock:
+      // no storage mutation is issued until the persisted epoch agrees with
+      // the in-memory epoch at the final call boundary.
+      readPersistedTombstone((latest) => {
+        if (!tombstoneAllowsMutationAtPoint(latest, generation, mode)) {
+          rejectStale();
+          return;
+        }
+        const stillCurrentAtMutation = mode === 'normal'
+          ? generation === storageGeneration && !isStorageDeletionActive()
+          : generation === storageGeneration && isStorageDeletionActive();
+        if (!stillCurrentAtMutation) {
+          rejectStale();
+          return;
+        }
+        try {
+          method.call(target, ...args, () => {
+            const error = storageRuntimeError();
+            if (error) {
+              reject(new Error(error.message));
+              return;
+            }
+            resolve(true);
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
     };
 
     if (generation !== storageGeneration) {
@@ -297,25 +371,46 @@ function storageMutationBarrier(target, methodName, args, expectedGeneration, op
         invoke(tombstoneAllowsNormalWrite(second, generation));
       });
     });
-  }));
+  })));
 }
 
 export function writeStorageSet(values, area = null, expectedGeneration = null, options = {}) {
   const target = storageAreaOrDefault(area);
   if (!target?.set) return Promise.resolve(false);
-  return storageMutationBarrier(target, 'set', [values], expectedGeneration, options);
+  return initializeStorageGeneration().then(() => {
+    const generation = Number.isInteger(expectedGeneration)
+      ? expectedGeneration
+      : getStorageMutationGeneration();
+    const authoritative = requestAuthoritativeStorageMutation('set', target, generation, { values });
+    if (authoritative) return authoritative;
+    return storageMutationBarrier(target, 'set', [values], generation, options);
+  });
 }
 
 export function writeStorageRemove(keys, area = null, expectedGeneration = null, options = {}) {
   const target = storageAreaOrDefault(area);
   if (!target?.remove) return Promise.resolve(false);
-  return storageMutationBarrier(target, 'remove', [keys], expectedGeneration, options);
+  return initializeStorageGeneration().then(() => {
+    const generation = Number.isInteger(expectedGeneration)
+      ? expectedGeneration
+      : getStorageMutationGeneration();
+    const authoritative = requestAuthoritativeStorageMutation('remove', target, generation, { keys });
+    if (authoritative) return authoritative;
+    return storageMutationBarrier(target, 'remove', [keys], generation, options);
+  });
 }
 
 export function writeStorageClear(area = null, expectedGeneration = null, options = {}) {
   const target = storageAreaOrDefault(area);
   if (!target?.clear) return Promise.resolve(false);
-  return storageMutationBarrier(target, 'clear', [], expectedGeneration, options);
+  return initializeStorageGeneration().then(() => {
+    const generation = Number.isInteger(expectedGeneration)
+      ? expectedGeneration
+      : getStorageMutationGeneration();
+    const authoritative = requestAuthoritativeStorageMutation('clear', target, generation, {});
+    if (authoritative) return authoritative;
+    return storageMutationBarrier(target, 'clear', [], generation, options);
+  });
 }
 
 export function guardedStorageSet(values, area = null, expectedGeneration = null) {
@@ -324,6 +419,9 @@ export function guardedStorageSet(values, area = null, expectedGeneration = null
     const generation = Number.isInteger(expectedGeneration)
       ? expectedGeneration
       : getStorageMutationGeneration();
+    const target = storageAreaOrDefault(area);
+    const authoritative = requestAuthoritativeStorageMutation('set', target, generation, { values });
+    if (authoritative) return authoritative;
     return writeStorageSet(values, area, generation, { silent: true });
   });
 }
@@ -334,6 +432,9 @@ export function guardedStorageRemove(keys, area = null, expectedGeneration = nul
     const generation = Number.isInteger(expectedGeneration)
       ? expectedGeneration
       : getStorageMutationGeneration();
+    const target = storageAreaOrDefault(area);
+    const authoritative = requestAuthoritativeStorageMutation('remove', target, generation, { keys });
+    if (authoritative) return authoritative;
     return writeStorageRemove(keys, area, generation, { silent: true });
   });
 }

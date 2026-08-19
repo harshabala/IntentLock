@@ -31,10 +31,12 @@ import {
   completeStorageDeletion,
   endStorageDeletion,
   enqueueStorageMutation,
+  initializeStorageGeneration,
   getStorageMutationGeneration,
   getStorageGeneration,
   isStorageDeletionActive,
   runWithStorageGeneration,
+  STORAGE_MUTATION_MESSAGE,
   StorageGenerationError,
   writeDeletionTombstone,
   writeStorageClear,
@@ -145,6 +147,35 @@ function storageClear(expectedGeneration = getStorageMutationGeneration()) {
 function storageSessionClear(expectedGeneration = getStorageMutationGeneration()) {
   if (typeof chrome.storage.session?.clear !== 'function') return Promise.resolve();
   return writeStorageClear(chrome.storage.session, expectedGeneration, { mode: 'during-deletion' });
+}
+
+function handleAuthoritativeStorageMutation(message, sendResponse) {
+  initializeStorageGeneration().then(() => enqueueStorageMutation(async () => {
+    const generation = getStorageGeneration();
+    if (!Number.isInteger(message.generation) || message.generation !== generation || isStorageDeletionActive()) {
+      return false;
+    }
+    const area = message.area === 'session'
+      ? chrome.storage.session
+      : message.area === 'local'
+        ? chrome.storage.local
+        : null;
+    if (!area) return false;
+    if (message.operation === 'set' && message.values && typeof message.values === 'object') {
+      return writeStorageSet(message.values, area, generation, { silent: true });
+    }
+    if (message.operation === 'remove' && message.keys) {
+      return writeStorageRemove(message.keys, area, generation, { silent: true });
+    }
+    if (message.operation === 'clear') {
+      return writeStorageClear(area, generation, { silent: true });
+    }
+    return false;
+  })).then((saved) => {
+    sendResponse({ status: 'ok', saved: saved === true });
+  }, (error) => {
+    sendResponse({ status: 'error', saved: false, message: error?.message || 'Storage mutation failed.' });
+  });
 }
 
 class SessionMutationCancelledError extends Error {
@@ -954,10 +985,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
     'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
-    'TEST_INTERVENTION', 'REPORT_VIEWED', 'UPDATE_SESSION_INTENT', 'EDIT_INTENT', 'UPDATE_INTENT'
+    'TEST_INTERVENTION', 'REPORT_VIEWED', 'UPDATE_SESSION_INTENT', 'EDIT_INTENT', 'UPDATE_INTENT',
+    STORAGE_MUTATION_MESSAGE,
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
+  }
+
+  if (message.type === STORAGE_MUTATION_MESSAGE) {
+    handleAuthoritativeStorageMutation(message, sendResponse);
+    return true;
   }
 
   if (message.type === 'DELETE_ALL_DATA') {
@@ -965,8 +1002,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  const requestGeneration = getStorageGeneration();
   loadConfig().then(() => {
+    const requestGeneration = getStorageGeneration();
     if (message.type === 'SESSION_STARTED') {
       handleSessionStart(message.session, requestGeneration).then(() => {
         sendResponse({ status: 'ok' });
@@ -1146,8 +1183,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function loadConfig() {
   if (configPromise) return configPromise;
-  const generation = getStorageGeneration();
-  const pendingConfigPromise = new Promise((resolve, reject) => {
+  const pendingConfigPromise = initializeStorageGeneration().then(() => new Promise((resolve, reject) => {
+    const generation = getStorageGeneration();
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
@@ -1267,7 +1304,7 @@ function loadConfig() {
         resolve();
       }
     });
-  });
+  }));
   const trackedConfigPromise = pendingConfigPromise.catch((error) => {
     if (configPromise === trackedConfigPromise) configPromise = null;
     throw error;
@@ -1338,6 +1375,7 @@ function storageAreaGet(area, keys) {
 export async function migrateLlmStorage() {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
 
+  await initializeStorageGeneration();
   const generation = getStorageGeneration();
   const migrationStillCurrent = () => (
     generation === getStorageGeneration() && !isStorageDeletionActive()

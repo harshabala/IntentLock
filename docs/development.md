@@ -180,7 +180,7 @@ No other files need to change — the settings grid and policy schema pick it up
 - **No `eval`, no `innerHTML` with user input** anywhere in the codebase
 - **No remote code** — all domain data and rules ship in the extension package. `providers.js` makes `fetch()` calls only when the user has configured a provider and a session is active (LLM inference, not code loading)
 - **No telemetry** — `heuristicPolicy` and all session data stay in `chrome.storage.local`
-- **API key storage** — `chrome.storage.session` is cleared on browser close when available; a local `llmApiKey` fallback is used only when session storage is unavailable.
+- **API key storage** — `chrome.storage.session` is cleared on browser close when available; when session storage is unavailable, keys remain memory-only and must be re-entered. No persistent local fallback is used.
 - **Tracking switch is authoritative** — disabling tracking stops content tracking, background event/drift evaluation, and provider calls.
 - **Provider endpoint policy** — built-in cloud endpoints are fixed; custom cloud endpoints require HTTPS, and local HTTP endpoints must be loopback-only. Gemini query-key authentication is the only built-in exception because the provider requires it.
 - **Provider context minimization** — LLM prompts receive origin-only browsing context (no path, query, or fragment) and explicitly mark page-derived values as untrusted data.

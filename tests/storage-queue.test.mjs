@@ -103,6 +103,42 @@ test('deletion beginning after validation prevents the pending storage mutation'
   }
 });
 
+test('persisted tombstone flip immediately before mutation prevents the write', async () => {
+  const generation = queue.getStorageGeneration();
+  storageData.deletionTombstone = { generation, active: false };
+  let setAccesses = 0;
+  let setCalled = false;
+  const originalSet = chrome.storage.local.set;
+  Object.defineProperty(chrome.storage.local, 'set', {
+    configurable: true,
+    get() {
+      setAccesses += 1;
+      if (setAccesses === 2) {
+        storageData.deletionTombstone = { generation: generation + 1, active: true };
+      }
+      return (values, callback) => {
+        setCalled = true;
+        originalSet(values, callback);
+      };
+    },
+  });
+
+  try {
+    const saved = await queue.guardedStorageSet({ persistedRaceWrite: true });
+    assert.equal(saved, false);
+    assert.equal(setCalled, false);
+    assert.equal(storageData.persistedRaceWrite, undefined);
+  } finally {
+    Object.defineProperty(chrome.storage.local, 'set', {
+      configurable: true,
+      writable: true,
+      value: originalSet,
+    });
+    queue.endStorageDeletion(generation + 1);
+    storageData.deletionTombstone = { generation: generation + 1, active: false };
+  }
+});
+
 test('fresh contexts use an inactive persisted generation for guarded writes', async () => {
   storageData = { deletionTombstone: { generation: 41, active: false } };
   const freshQueue = await import(`../storage-queue.js?fresh-inactive=${Date.now()}-${Math.random()}`);
