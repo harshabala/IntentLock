@@ -20,9 +20,24 @@ import {
 } from './error-log.js';
 import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
 
+let activeDeletionGeneration = null;
+
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'DATA_DELETION_STARTED') beginStorageDeletion(message.generation);
+  if (message?.type === 'DATA_DELETION_STARTED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (generation === null && activeDeletionGeneration !== null) return;
+    if (generation !== null && activeDeletionGeneration !== null && generation < activeDeletionGeneration) return;
+    activeDeletionGeneration = generation;
+    beginStorageDeletion(message.generation);
+  }
   if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (
+      (generation !== null && activeDeletionGeneration !== generation)
+      || (generation === null && activeDeletionGeneration !== null)
+      || (generation !== null && activeDeletionGeneration === null)
+    ) return;
+    activeDeletionGeneration = null;
     endStorageDeletion(message.generation);
   }
 });

@@ -69,6 +69,7 @@ const contentEventBuckets = new Map();
 const CONTENT_EVENT_WINDOW_MS = 60_000;
 const MAX_CONTENT_EVENTS_PER_WINDOW = 120;
 let configPromise = null;
+let activeDeletionGeneration = null;
 
 const INTERVENTION_STATE_KEY = 'interventionStates';
 const COMPLETED_TRANSITION_KEY = 'completedInterventionTransitions';
@@ -893,6 +894,7 @@ function handleSessionCleared(sendResponse) {
   // Advance the generation before entering the queue so already-created
   // logging/finalization operations cannot write after this deletion.
   const generation = beginStorageDeletion();
+  activeDeletionGeneration = generation;
   writeDeletionTombstone(generation, true).then((started) => {
     if (!started) throw new StorageGenerationError('Unable to establish the deletion barrier.');
     chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED', generation }, () => {
@@ -926,15 +928,31 @@ function handleSessionCleared(sendResponse) {
         if (!await completeStorageDeletion(generation)) {
           throw new StorageGenerationError('Deletion was superseded by a newer storage generation.');
         }
+        if (activeDeletionGeneration !== generation) {
+          throw new StorageGenerationError('Deletion was superseded by a newer storage generation.');
+        }
         endStorageDeletion(generation);
         await loadConfig();
+        if (activeDeletionGeneration !== generation) {
+          throw new StorageGenerationError('Deletion was superseded by a newer storage generation.');
+        }
+        activeDeletionGeneration = null;
         chrome.runtime.sendMessage?.({ type: 'DATA_DELETED', generation }, () => {
           void chrome.runtime.lastError;
         });
         sendResponse({ status: 'ok' });
       } catch (error) {
+        if (activeDeletionGeneration !== generation) {
+          sendResponse({ status: 'error', message: 'Deletion was superseded by a newer storage generation.' });
+          return;
+        }
         await writeDeletionTombstone(generation, false).catch(() => {});
+        if (activeDeletionGeneration !== generation) {
+          sendResponse({ status: 'error', message: 'Deletion was superseded by a newer storage generation.' });
+          return;
+        }
         endStorageDeletion(generation);
+        activeDeletionGeneration = null;
         chrome.runtime.sendMessage?.({
           type: 'DATA_DELETION_FAILED',
           generation,
@@ -946,7 +964,12 @@ function handleSessionCleared(sendResponse) {
       }
     });
   }).catch((error) => {
+    if (activeDeletionGeneration !== generation) {
+      sendResponse({ status: 'error', message: 'Deletion was superseded by a newer storage generation.' });
+      return;
+    }
     endStorageDeletion(generation);
+    activeDeletionGeneration = null;
     chrome.runtime.sendMessage?.({
       type: 'DATA_DELETION_FAILED',
       generation,
@@ -1376,37 +1399,44 @@ export async function migrateLlmStorage() {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
 
   await initializeStorageGeneration();
-  const generation = getStorageGeneration();
-  const migrationStillCurrent = () => (
-    generation === getStorageGeneration() && !isStorageDeletionActive()
-  );
-  const localRes = await storageAreaGet(chrome.storage.local, ['llmApiKey', 'openaiApiKey']);
-  if (!migrationStillCurrent()) return;
+  await enqueueStorageMutation(async () => {
+    const generation = getStorageGeneration();
+    const migrationStillCurrent = () => (
+      generation === getStorageGeneration() && !isStorageDeletionActive()
+    );
+    const localRes = await storageAreaGet(chrome.storage.local, ['llmApiKey', 'openaiApiKey']);
+    if (!migrationStillCurrent()) return;
 
-  const session = chrome.storage.session;
-  const sessionRes = await storageAreaGet(session, ['openaiApiKey', 'llmApiKey']);
-  if (!migrationStillCurrent()) return;
+    const session = chrome.storage.session;
+    const sessionRes = await storageAreaGet(session, ['openaiApiKey', 'llmApiKey']);
+    if (!migrationStillCurrent()) return;
 
-  const localRemovals = ['llmApiKey', 'openaiApiKey']
-    .filter((key) => localRes?.[key] !== undefined);
-  const sessionRemovals = sessionRes?.openaiApiKey !== undefined ? ['openaiApiKey'] : [];
-  const existingSessionKey = sessionRes?.llmApiKey || null;
-  const legacyKey = existingSessionKey
-    || sessionRes?.openaiApiKey
-    || localRes?.llmApiKey
-    || localRes?.openaiApiKey;
+    const localRemovals = ['llmApiKey', 'openaiApiKey']
+      .filter((key) => localRes?.[key] !== undefined);
+    const sessionRemovals = sessionRes?.openaiApiKey !== undefined ? ['openaiApiKey'] : [];
+    const existingSessionKey = sessionRes?.llmApiKey || null;
+    const legacyKey = sessionRes?.openaiApiKey
+      || localRes?.llmApiKey
+      || localRes?.openaiApiKey;
 
-  if (session?.set && legacyKey && !existingSessionKey) {
-    await writeStorageSet({ llmApiKey: legacyKey }, session, generation);
-  }
-  if (session?.remove && sessionRemovals.length > 0) {
-    await writeStorageRemove(sessionRemovals, session, generation);
-  }
-  // Local aliases are always removed, including when session storage is not
-  // available. Without a session area the key remains memory-only/absent.
-  if (localRemovals.length > 0) {
-    await storageRemove(localRemovals, generation);
-  }
+    if (session?.set && legacyKey && !existingSessionKey) {
+      // A provider save can arrive between the initial read and this write.
+      // Re-read immediately before migrating so a newer session key wins.
+      const latestSession = await storageAreaGet(session, ['llmApiKey', 'openaiApiKey']);
+      if (!migrationStillCurrent()) return;
+      if (!latestSession?.llmApiKey) {
+        await writeStorageSet({ llmApiKey: legacyKey }, session, generation);
+      }
+    }
+    if (session?.remove && sessionRemovals.length > 0) {
+      await writeStorageRemove(sessionRemovals, session, generation);
+    }
+    // Local aliases are always removed, including when session storage is not
+    // available. Without a session area the key remains memory-only/absent.
+    if (localRemovals.length > 0) {
+      await storageRemove(localRemovals, generation);
+    }
+  });
 }
 void migrateLlmStorage().catch((error) => {
   console.warn('LLM key migration failed:', error);

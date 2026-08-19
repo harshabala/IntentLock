@@ -12,6 +12,7 @@ let lastFlushPromise = null;
 let trackerSessionKey = null;
 let trackerToken = null;
 let dataDeletionInProgress = false;
+let activeDeletionGeneration = null;
 let trackingSyncEpoch = 0;
 
 function sendRuntimeMessage(message) {
@@ -282,8 +283,18 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'DATA_DELETION_STARTED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (generation === null && activeDeletionGeneration !== null) {
+      sendResponse?.({ status: 'ignored' });
+      return true;
+    }
+    if (generation !== null && activeDeletionGeneration !== null && generation < activeDeletionGeneration) {
+      sendResponse?.({ status: 'ignored' });
+      return true;
+    }
     trackingSyncEpoch += 1;
     dataDeletionInProgress = true;
+    activeDeletionGeneration = generation;
     stopTracking({ discard: true, reportFinal: false });
     if (overlay) overlay.hide();
     pendingIntervention = null;
@@ -292,8 +303,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'DATA_DELETED' || message.type === 'DATA_DELETION_FAILED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (
+      (generation !== null && activeDeletionGeneration !== generation)
+      || (generation === null && activeDeletionGeneration !== null)
+      || (generation !== null && activeDeletionGeneration === null)
+    ) {
+      sendResponse?.({ status: 'ignored' });
+      return true;
+    }
     trackingSyncEpoch += 1;
     dataDeletionInProgress = false;
+    activeDeletionGeneration = null;
     stopTracking({ discard: true, reportFinal: false });
     if (message.type === 'DATA_DELETED' && overlay) overlay.hide();
     pendingIntervention = null;

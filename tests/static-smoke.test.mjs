@@ -156,6 +156,37 @@ test('provider-save failures surface and restore UI controls', async () => {
   assert.match(newtab, /resetContinueButton\(\)/);
 });
 
+test('deletion consumers fence completion messages by generation', async () => {
+  const background = await text('background.js');
+  const content = await text('content.js');
+  const newtab = await text('newtab.js');
+  const options = await text('options.js');
+
+  for (const source of [background, content, newtab, options]) {
+    assert.match(source, /activeDeletionGeneration/);
+    assert.match(source, /message\.generation/);
+    assert.match(source, /DATA_DELETION_FAILED/);
+  }
+  assert.match(content, /generation\s*<\s*activeDeletionGeneration/);
+  assert.match(newtab, /generation\s*<\s*activeDeletionGeneration/);
+  assert.match(options, /generation\s*<\s*activeDeletionGeneration/);
+});
+
+test('guarded non-provider writes surface false results and restore controls', async () => {
+  const options = await text('options.js');
+  const newtab = await text('newtab.js');
+
+  assert.match(options, /heuristicPolicy: updated[\s\S]*saved\s*!==\s*true/);
+  assert.match(options, /trackingEnabled: enabled[\s\S]*saved\s*!==\s*true/);
+  assert.match(options, /theme[\s\S]*saved\s*!==\s*true/);
+  assert.match(options, /saveSitesBtn\.disabled\s*=\s*false/);
+  assert.match(options, /trackingToggle\.checked\s*=\s*!enabled/);
+  assert.match(newtab, /heuristicPolicy: policy[\s\S]*saved\s*!==\s*true/);
+  assert.match(newtab, /hasSeenOnboarding: true[\s\S]*saved\s*!==\s*true/);
+  assert.match(newtab, /updatedPolicy[\s\S]*saved\s*!==\s*true/);
+  assert.match(newtab, /saveBtn\.disabled\s*=\s*false/);
+});
+
 test('options.html includes privacy note and diagnostics access', async () => {
   const html = await text('options.html');
   assert.match(html, /privacy-note/);

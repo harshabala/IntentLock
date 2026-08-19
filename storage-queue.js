@@ -6,6 +6,7 @@ let deletionActive = false;
 let generationInitializationPromise = null;
 let generationInitialized = false;
 let generationInitializing = false;
+let pendingExternalStartGeneration = null;
 let ambientStorageGeneration = null;
 let storageMutationLock = Promise.resolve();
 
@@ -74,6 +75,15 @@ function readPersistedTombstone(onRead = null) {
       ) {
         deletionActive = false;
       }
+      if (
+        generationInitializing
+        && Number.isInteger(pendingExternalStartGeneration)
+        && tombstone?.active !== true
+        && Number.isInteger(tombstone?.generation)
+        && tombstone.generation >= pendingExternalStartGeneration
+      ) {
+        deletionActive = false;
+      }
       if (resolve) resolve(tombstone);
       else onRead(tombstone);
     });
@@ -89,11 +99,20 @@ export function initializeStorageGeneration() {
   if (generationInitialized) return Promise.resolve(storageGeneration);
   if (!generationInitializationPromise) {
     generationInitializing = true;
-    generationInitializationPromise = readPersistedTombstone().then(() => {
+    generationInitializationPromise = readPersistedTombstone().then((tombstone) => {
+      if (
+        Number.isInteger(pendingExternalStartGeneration)
+        && tombstone?.active !== true
+        && Number.isInteger(tombstone?.generation)
+        && tombstone.generation >= pendingExternalStartGeneration
+      ) {
+        deletionActive = false;
+      }
       generationInitialized = true;
       return storageGeneration;
     }).finally(() => {
       generationInitializing = false;
+      pendingExternalStartGeneration = null;
     });
   }
   return generationInitializationPromise;
@@ -101,11 +120,17 @@ export function initializeStorageGeneration() {
 
 void initializeStorageGeneration();
 
-export function beginStorageDeletion(generation = null) {
+export function beginStorageDeletion(generation = null, { local = generation === null } = {}) {
   if (Number.isInteger(generation)) {
     if (generation <= storageGeneration && !deletionActive) return storageGeneration;
+    if (generationInitializing && !local) {
+      pendingExternalStartGeneration = Math.max(pendingExternalStartGeneration || 0, generation);
+    } else if (local) {
+      pendingExternalStartGeneration = null;
+    }
     storageGeneration = Math.max(storageGeneration, generation);
   } else {
+    pendingExternalStartGeneration = null;
     storageGeneration += 1;
   }
   deletionActive = true;
@@ -122,6 +147,7 @@ export function beginStorageDeletion(generation = null) {
 export function endStorageDeletion(generation = null) {
   if (Number.isInteger(generation) && generation !== storageGeneration) return false;
   if (Number.isInteger(generation)) storageGeneration = generation;
+  pendingExternalStartGeneration = null;
   deletionActive = false;
   return true;
 }

@@ -41,15 +41,27 @@ import {
 } from './storage-queue.js';
 
 let dataDeletionInProgress = false;
+let activeDeletionGeneration = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (generation === null && activeDeletionGeneration !== null) return;
+    if (generation !== null && activeDeletionGeneration !== null && generation < activeDeletionGeneration) return;
     dataDeletionInProgress = true;
-    beginStorageDeletion(message.generation);
+    activeDeletionGeneration = generation;
+    beginStorageDeletion(generation);
   }
   if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
+    const generation = Number.isInteger(message.generation) ? message.generation : null;
+    if (
+      (generation !== null && activeDeletionGeneration !== generation)
+      || (generation === null && activeDeletionGeneration !== null)
+      || (generation !== null && activeDeletionGeneration === null)
+    ) return;
     dataDeletionInProgress = false;
-    endStorageDeletion(message.generation);
+    activeDeletionGeneration = null;
+    endStorageDeletion(generation);
   }
 });
 
@@ -753,6 +765,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Onboarding wizard ────────────────────────────────────────────────
 
   function showOnboardingWizard(container) {
+    function showWizardStorageError(message) {
+      let statusEl = container.querySelector('.onboarding-status');
+      if (!statusEl) {
+        statusEl = document.createElement('p');
+        statusEl.className = 'onboarding-status';
+        statusEl.setAttribute('role', 'alert');
+        statusEl.setAttribute('aria-live', 'polite');
+        container.appendChild(statusEl);
+      }
+      statusEl.textContent = message;
+      statusEl.classList.remove('hidden');
+      statusEl.classList.add('onboarding-status-error');
+      logError({
+        type: ERROR_TYPES.STORAGE,
+        message,
+        details: { action: 'onboarding_storage' },
+        source: 'onboarding',
+      });
+    }
+
     function showStep1() {
       container.textContent = '';
 
@@ -1174,11 +1206,32 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    function finishOnboarding() {
-      if (dataDeletionInProgress) return;
+    function finishOnboarding(event = null, control = event?.currentTarget) {
+      if (dataDeletionInProgress) {
+        if (control) control.disabled = false;
+        return;
+      }
+      const originalText = control?.textContent;
+      const restoreControl = () => {
+        if (!control) return;
+        control.disabled = false;
+        control.textContent = originalText === 'Saving...' ? 'SAVE POLICY' : originalText;
+      };
+      if (control) control.disabled = true;
       void guardedStorageSet({ hasSeenOnboarding: true }).then((saved) => {
-        if (!saved || dataDeletionInProgress) return;
+        if (dataDeletionInProgress) {
+          restoreControl();
+          return;
+        }
+        if (saved !== true) {
+          restoreControl();
+          showWizardStorageError('Could not save onboarding progress. Try again.');
+          return;
+        }
         showNewSessionForm(container);
+      }).catch(() => {
+        restoreControl();
+        if (!dataDeletionInProgress) showWizardStorageError('Could not save onboarding progress. Try again.');
       });
     }
 
@@ -1264,7 +1317,17 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         void guardedStorageSet({ heuristicPolicy: policy }).then((saved) => {
-          if (!saved || dataDeletionInProgress) return;
+          if (dataDeletionInProgress) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'SAVE POLICY';
+            return;
+          }
+          if (saved !== true) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'SAVE POLICY';
+            showWizardStorageError('Could not save policy. Try again.');
+            return;
+          }
           if (chrome.runtime.lastError) {
             statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
             statusEl.classList.remove('hidden');
@@ -1275,7 +1338,11 @@ document.addEventListener('DOMContentLoaded', () => {
           chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
             void chrome.runtime.lastError;
           });
-          finishOnboarding();
+          finishOnboarding(null, saveBtn);
+        }).catch(() => {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'SAVE POLICY';
+          if (!dataDeletionInProgress) showWizardStorageError('Could not save policy. Try again.');
         });
       });
 
@@ -1501,6 +1568,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const startBtn = document.getElementById('start-btn');
       const intent = intentInput.value.trim();
       const timeBudget = parseInt(timeBudgetInput.value, 10);
+      const showPolicyStorageError = () => {
+        let notice = form.querySelector('.storage-error');
+        if (!notice) {
+          notice = document.createElement('div');
+          notice.className = 'api-notice storage-error';
+          form.insertBefore(notice, form.firstChild);
+        }
+        notice.textContent = 'Could not save the selected policy. Try again.';
+        logError({
+          type: ERROR_TYPES.STORAGE,
+          message: notice.textContent,
+          details: { action: 'session_policy' },
+          source: 'session_start',
+        });
+      };
 
       if (!intent) {
         setFieldError(intentInput, 'Please declare your intent.');
@@ -1541,9 +1623,17 @@ document.addEventListener('DOMContentLoaded', () => {
               updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
             }
             if (!dataDeletionInProgress) {
-              void guardedStorageSet({ heuristicPolicy: updatedPolicy });
+              void guardedStorageSet({ heuristicPolicy: updatedPolicy }).then((saved) => {
+                if (dataDeletionInProgress) return;
+                if (saved !== true) {
+                  showPolicyStorageError();
+                  return;
+                }
+                chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
+              }).catch(() => {
+                if (!dataDeletionInProgress) showPolicyStorageError();
+              });
             }
-            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
           }
         });
       }

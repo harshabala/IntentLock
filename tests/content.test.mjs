@@ -214,9 +214,12 @@ test('content tracking is recreated and stale reports are rejected at a session 
   assert.equal(contentEvents.length, 0);
   assert.equal(runtimeMessageListeners.length, 1);
 
-  runtimeMessageListeners[0]({ type: 'DATA_DELETION_STARTED' });
+  runtimeMessageListeners[0]({ type: 'DATA_DELETION_STARTED', generation: 7 });
   assert.equal(trackers[1].stops.at(-1).discard, true);
   assert.equal(trackers[1].stops.at(-1).reportFinal, false);
+  const trackerCountDuringDeletion = trackers.length;
+  runtimeMessageListeners[0]({ type: 'DATA_DELETION_FAILED', generation: 6 });
+  assert.equal(trackers.length, trackerCountDuringDeletion);
 });
 
 test('tracking opt-out invalidates a delayed session sync before restarting tracking', async () => {

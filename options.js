@@ -58,17 +58,29 @@ document.addEventListener('DOMContentLoaded', () => {
   let deleteArmed = false;
   let deleteArmTimer = null;
   let deletionInProgress = false;
+  let activeDeletionGeneration = null;
   let hasSavedApiKey = false;
   let providerAdvancedOpen = false;
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'DATA_DELETION_STARTED') {
+      const generation = Number.isInteger(message.generation) ? message.generation : null;
+      if (generation === null && activeDeletionGeneration !== null) return;
+      if (generation !== null && activeDeletionGeneration !== null && generation < activeDeletionGeneration) return;
       deletionInProgress = true;
-      beginStorageDeletion(message.generation);
+      activeDeletionGeneration = generation;
+      beginStorageDeletion(generation);
     }
     if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
+      const generation = Number.isInteger(message.generation) ? message.generation : null;
+      if (
+        (generation !== null && activeDeletionGeneration !== generation)
+        || (generation === null && activeDeletionGeneration !== null)
+        || (generation !== null && activeDeletionGeneration === null)
+      ) return;
       deletionInProgress = false;
-      endStorageDeletion(message.generation);
+      activeDeletionGeneration = null;
+      endStorageDeletion(generation);
       if (message.type === 'DATA_DELETION_FAILED') {
         deleteDataBtn.disabled = false;
         deleteDataBtn.textContent = 'Delete all data';
@@ -379,14 +391,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function showProviderStorageError(message) {
-    showStatus(providerStatus, message);
+  function showStorageError(statusEl, message, action = 'storage_write') {
+    showStatus(statusEl, message);
     logError({
       type: ERROR_TYPES.STORAGE,
       message,
-      details: { action: 'provider_storage' },
+      details: { action },
       source: 'options',
     });
+  }
+
+  function showProviderStorageError(message) {
+    showStorageError(providerStatus, message, 'provider_storage');
   }
 
   openDiagnosticsBtn.addEventListener('click', () => {
@@ -506,10 +522,23 @@ document.addEventListener('DOMContentLoaded', () => {
         ? result.heuristicPolicy
         : buildDefaultPolicy('deep_work', 'balanced');
       const updated = { ...current, categoryPolicies, customBlockDomains, customAllowDomains, setupCompleted: true };
+      saveSitesBtn.disabled = true;
       void guardedStorageSet({ heuristicPolicy: updated }).then((saved) => {
-        if (!saved || deletionInProgress) return;
+        if (deletionInProgress) {
+          saveSitesBtn.disabled = false;
+          return;
+        }
+        if (saved !== true) {
+          saveSitesBtn.disabled = false;
+          showStorageError(sitesStatus, 'Could not save site policies. Try again.', 'heuristic_policy');
+          return;
+        }
+        saveSitesBtn.disabled = false;
         showStatus(sitesStatus, 'Site policies saved.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      }).catch(() => {
+        saveSitesBtn.disabled = false;
+        if (!deletionInProgress) showStorageError(sitesStatus, 'Could not save site policies. Try again.', 'heuristic_policy');
       });
     });
   });
@@ -521,12 +550,20 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     void guardedStorageSet({ trackingEnabled: enabled }).then((saved) => {
-      if (!saved || deletionInProgress) return;
+      if (deletionInProgress) {
+        trackingToggle.checked = !enabled;
+        return;
+      }
+      if (saved !== true) {
+        trackingToggle.checked = !enabled;
+        showStorageError(dataStatus, 'Could not change tracking. Try again.', 'tracking');
+        return;
+      }
       showStatus(dataStatus, enabled ? 'Tracking enabled.' : 'Tracking disabled.');
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    }).catch((error) => {
+    }).catch(() => {
       trackingToggle.checked = !enabled;
-      showStatus(dataStatus, `Could not change tracking: ${error.message}`);
+      if (!deletionInProgress) showStorageError(dataStatus, 'Could not change tracking. Try again.', 'tracking');
     });
   });
 
@@ -569,8 +606,10 @@ document.addEventListener('DOMContentLoaded', () => {
     deletionInProgress = true;
 
     const finishDelete = () => {
+        const generation = activeDeletionGeneration;
         deletionInProgress = false;
-        endStorageDeletion();
+        activeDeletionGeneration = null;
+        endStorageDeletion(generation);
         hasSavedApiKey = false;
         applyStoredConfig(getDefaultProviderConfig());
         const freshPolicy = buildDefaultPolicy('deep_work', 'balanced');
@@ -596,6 +635,8 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.sendMessage({ type: 'DELETE_ALL_DATA' }, (response) => {
       if (chrome.runtime.lastError || response?.status !== 'ok') {
         deletionInProgress = false;
+        activeDeletionGeneration = null;
+        endStorageDeletion();
         deleteDataBtn.disabled = false;
         deleteDataBtn.textContent = 'Delete all data';
         showStatus(dataStatus, response?.message || 'Could not delete all data.');
@@ -652,14 +693,31 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.theme-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (deletionInProgress) return;
+      const previousTheme = document.querySelector('.theme-btn.active')?.dataset.theme || 'auto';
       const theme = btn.dataset.theme;
       document.querySelectorAll('.theme-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      const restoreThemeSelection = () => {
+        document.querySelectorAll('.theme-btn').forEach((b) => {
+          b.classList.toggle('active', b.dataset.theme === previousTheme);
+        });
+      };
       void guardedStorageSet({ theme }).then((saved) => {
-        if (!saved || deletionInProgress) return;
+        if (deletionInProgress) {
+          restoreThemeSelection();
+          return;
+        }
+        if (saved !== true) {
+          restoreThemeSelection();
+          showStorageError(themeStatus, 'Could not save the theme. Try again.', 'theme');
+          return;
+        }
         applyTheme(theme, true);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+      }).catch(() => {
+        restoreThemeSelection();
+        if (!deletionInProgress) showStorageError(themeStatus, 'Could not save the theme. Try again.', 'theme');
       });
     });
   });

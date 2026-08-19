@@ -476,6 +476,31 @@ test('legacy local API aliases are removed when session storage is unavailable',
   }
 });
 
+test('migrateLlmStorage never overwrites a key saved after its initial read', async () => {
+  const previousSessionGet = chrome.storage.session.get;
+  let sessionReads = 0;
+  storageData = { llmApiKey: 'legacy-local-key' };
+  sessionStorageData = {};
+  chrome.storage.session.get = (keys, callback) => {
+    sessionReads += 1;
+    if (sessionReads === 2) sessionStorageData.llmApiKey = 'newer-session-key';
+    const result = {};
+    for (const key of (Array.isArray(keys) ? keys : [keys])) {
+      if (sessionStorageData[key] !== undefined) result[key] = sessionStorageData[key];
+    }
+    callback(result);
+  };
+
+  try {
+    await migrateLlmStorage();
+    assert.equal(sessionStorageData.llmApiKey, 'newer-session-key');
+    assert.equal(storageData.llmApiKey, undefined);
+    assert.ok(sessionReads >= 2, 'migration should recheck the session key before writing');
+  } finally {
+    chrome.storage.session.get = previousSessionGet;
+  }
+});
+
 test('expired active sessions are abandoned instead of retained indefinitely', async () => {
   storageData = {
     trackingEnabled: true,

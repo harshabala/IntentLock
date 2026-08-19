@@ -173,7 +173,7 @@ test('initialization preserves deletion started before the tombstone read comple
   try {
     const freshQueue = await import(`../storage-queue.js?init-race=${Date.now()}-${Math.random()}`);
     await tombstoneReadStarted;
-    assert.equal(freshQueue.beginStorageDeletion(42), 42);
+    assert.equal(freshQueue.beginStorageDeletion(42, { local: true }), 42);
     released = true;
     releaseTombstoneRead();
     await freshQueue.initializeStorageGeneration();
@@ -196,4 +196,39 @@ test('stale deletion-start generations cannot reactivate a completed barrier', a
   assert.equal(freshQueue.isStorageDeletionActive(), false);
   assert.equal(freshQueue.beginStorageDeletion(1), 2);
   assert.equal(freshQueue.isStorageDeletionActive(), false);
+});
+
+test('stale external deletion starts are reconciled after delayed tombstone initialization', async () => {
+  const previousGet = chrome.storage.local.get;
+  let releaseTombstoneRead;
+  let tombstoneReadStartedResolve;
+  let released = false;
+  const tombstoneReadStarted = new Promise((resolve) => {
+    tombstoneReadStartedResolve = resolve;
+  });
+  storageData = { deletionTombstone: { generation: 2, active: false } };
+  chrome.storage.local.get = (keys, callback) => {
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    if (!released && keyList.length === 1 && keyList[0] === 'deletionTombstone') {
+      tombstoneReadStartedResolve();
+      releaseTombstoneRead = () => callback({ deletionTombstone: storageData.deletionTombstone });
+      return;
+    }
+    previousGet(keys, callback);
+  };
+
+  try {
+    const freshQueue = await import(`../storage-queue.js?stale-start-init=${Date.now()}-${Math.random()}`);
+    await tombstoneReadStarted;
+    assert.equal(freshQueue.beginStorageDeletion(1), 1);
+    released = true;
+    releaseTombstoneRead();
+    await freshQueue.initializeStorageGeneration();
+    assert.equal(freshQueue.getStorageGeneration(), 2);
+    assert.equal(freshQueue.isStorageDeletionActive(), false);
+  } finally {
+    released = true;
+    releaseTombstoneRead?.();
+    chrome.storage.local.get = previousGet;
+  }
 });
