@@ -910,7 +910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const securityNotice = document.createElement('p');
       securityNotice.className = 'security-notice';
-      securityNotice.textContent = 'For security, your verbatim intent may be sent to the selected provider. Keys use secure session memory when available; if session storage is unavailable, the key remains memory-only and must be re-entered.';
+      securityNotice.textContent = 'For security, your verbatim intent may be sent to the selected provider. If query authentication is selected (for example, Gemini), the API key is placed in the provider URL and may appear in provider or intermediary logs. Keys use secure session memory when available; if session storage is unavailable, the key remains memory-only and must be re-entered.';
       aiSettingsContainer.appendChild(securityNotice);
 
       container.appendChild(aiSettingsContainer);

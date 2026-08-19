@@ -64,6 +64,52 @@ test('authoritative storage writer rechecks the tombstone immediately before wri
     assert.ok(tombstoneReads >= 2);
   } finally {
     chrome.storage.local.get = originalGet;
+    queue.endStorageDeletion(42);
     storageData.deletionTombstone = { generation: 42, active: false };
   }
+});
+
+test('deletion beginning after validation prevents the pending storage mutation', async () => {
+  const generation = queue.getStorageGeneration();
+  storageData.deletionTombstone = { generation, active: false };
+  let setCalled = false;
+  let setAccesses = 0;
+  const originalSet = chrome.storage.local.set;
+  Object.defineProperty(chrome.storage.local, 'set', {
+    configurable: true,
+    get() {
+      setAccesses += 1;
+      if (setAccesses === 2) queue.beginStorageDeletion(generation + 1);
+      return (values, callback) => {
+        setCalled = true;
+        originalSet(values, callback);
+      };
+    },
+  });
+
+  try {
+    const saved = await queue.guardedStorageSet({ shouldNotPersist: true });
+    assert.equal(saved, false);
+    assert.equal(setCalled, false);
+    assert.equal(storageData.shouldNotPersist, undefined);
+  } finally {
+    Object.defineProperty(chrome.storage.local, 'set', {
+      configurable: true,
+      writable: true,
+      value: originalSet,
+    });
+    queue.endStorageDeletion(generation + 1);
+    storageData.deletionTombstone = { generation: generation + 1, active: false };
+  }
+});
+
+test('fresh contexts use an inactive persisted generation for guarded writes', async () => {
+  storageData = { deletionTombstone: { generation: 41, active: false } };
+  const freshQueue = await import(`../storage-queue.js?fresh-inactive=${Date.now()}-${Math.random()}`);
+
+  const saved = await freshQueue.guardedStorageSet({ freshGenerationWrite: true });
+
+  assert.equal(saved, true);
+  assert.equal(freshQueue.getStorageGeneration(), 41);
+  assert.equal(storageData.freshGenerationWrite, true);
 });

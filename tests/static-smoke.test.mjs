@@ -328,9 +328,10 @@ test('live numeric displays use tabular-nums for stable alignment', async () => 
 });
 
 test('custom query-auth disclosure and authoritative storage routing are explicit', async () => {
-  const [optionsSource, backgroundSource, privacyPolicy] = await Promise.all([
+  const [optionsSource, backgroundSource, newtabSource, privacyPolicy] = await Promise.all([
     text('options.js'),
     text('background.js'),
+    text('newtab.js'),
     text('docs/privacy-policy.md'),
   ]);
 
@@ -339,4 +340,5 @@ test('custom query-auth disclosure and authoritative storage routing are explici
   assert.doesNotMatch(backgroundSource, /chrome\.storage\.session\.(set|remove|clear)\s*\(/);
   assert.doesNotMatch(privacyPolicy, /local-storage fallback/i);
   assert.match(privacyPolicy, /memory-only|must be re-entered/i);
+  assert.match(newtabSource, /query authentication|API key.*URL|request URL/i);
 });

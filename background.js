@@ -1159,6 +1159,7 @@ function loadConfig() {
         return;
       }
       const data = result || {};
+      let abandonedActiveSession = false;
       if (generation !== getStorageGeneration() || isStorageDeletionActive()) {
         resolve();
         return;
@@ -1178,6 +1179,7 @@ function loadConfig() {
       if (data.activeSession && data.activeSession.isActive) {
         currentSession = sanitizeSessionEvents(data.activeSession);
         if (!currentSession) {
+          abandonedActiveSession = true;
           activeSessionPersistence = enqueueStorageMutation(() => {
             if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
             return storageRemove(SESSION_SCOPED_STORAGE_KEYS, generation);
@@ -1249,7 +1251,7 @@ function loadConfig() {
       } else {
         overrideCooldowns.clear();
       }
-      if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
+      if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now() && !abandonedActiveSession) {
         setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
       }
       if (currentSession?.id && data.relatedDomainMarks?.sessionId === currentSession.id) {
