@@ -148,6 +148,7 @@ function sanitizeDiagnosticEntry(entry) {
 
 export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }) {
   if (!message) return Promise.resolve(null);
+  if (isStorageDeletionActive()) return Promise.resolve(null);
 
   const generation = getStorageGeneration();
 

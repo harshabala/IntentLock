@@ -21,8 +21,10 @@ import {
 import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'DATA_DELETION_STARTED') beginStorageDeletion();
-  if (message?.type === 'DATA_DELETED') endStorageDeletion();
+  if (message?.type === 'DATA_DELETION_STARTED') beginStorageDeletion(message.generation);
+  if (message?.type === 'DATA_DELETED' || message?.type === 'DATA_DELETION_FAILED') {
+    endStorageDeletion(message.generation);
+  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {

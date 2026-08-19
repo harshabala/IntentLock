@@ -192,7 +192,7 @@ See [`docs/heuristic-policy.md`](docs/heuristic-policy.md) for the full referenc
 
 ## LLM providers
 
-Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` when available (cleared on browser close), with a local fallback only when session storage is unavailable. Remote providers receive minimized intent and origin-only context.
+Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` when available (cleared on browser close). If session storage is unavailable, it remains memory-only and must be re-entered. Remote providers receive minimized intent and origin-only context.
 
 | Provider | ID | API style | Local? |
 |----------|----|-----------|--------|

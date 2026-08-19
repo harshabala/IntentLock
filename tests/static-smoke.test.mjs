@@ -124,6 +124,14 @@ test('diagnostics page exposes copyable error log UI', async () => {
   assert.match(html, /diagnostics\.js/);
 });
 
+test('diagnostics deletion lifecycle preserves the generation and handles failures', async () => {
+  const diagnostics = await text('diagnostics.js');
+
+  assert.match(diagnostics, /DATA_DELETION_STARTED[\s\S]*beginStorageDeletion\(message\.generation\)/);
+  assert.match(diagnostics, /DATA_DELETED[\s\S]*endStorageDeletion\(message\.generation\)/);
+  assert.match(diagnostics, /DATA_DELETION_FAILED[\s\S]*endStorageDeletion\(message\.generation\)/);
+});
+
 test('options.html includes privacy note and diagnostics access', async () => {
   const html = await text('options.html');
   assert.match(html, /privacy-note/);

@@ -5,6 +5,7 @@ let storageGeneration = 0;
 let deletionActive = false;
 let generationInitializationPromise = null;
 let generationInitialized = false;
+let generationInitializing = false;
 let ambientStorageGeneration = null;
 let storageMutationLock = Promise.resolve();
 
@@ -66,7 +67,11 @@ function readPersistedTombstone(onRead = null) {
       }
       if (tombstone?.active === true) {
         deletionActive = true;
-      } else if (tombstone?.active === false && tombstone.generation === storageGeneration) {
+      } else if (
+        tombstone?.active === false
+        && tombstone.generation === storageGeneration
+        && !generationInitializing
+      ) {
         deletionActive = false;
       }
       if (resolve) resolve(tombstone);
@@ -83,9 +88,12 @@ function readPersistedTombstone(onRead = null) {
 export function initializeStorageGeneration() {
   if (generationInitialized) return Promise.resolve(storageGeneration);
   if (!generationInitializationPromise) {
+    generationInitializing = true;
     generationInitializationPromise = readPersistedTombstone().then(() => {
       generationInitialized = true;
       return storageGeneration;
+    }).finally(() => {
+      generationInitializing = false;
     });
   }
   return generationInitializationPromise;

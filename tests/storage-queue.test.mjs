@@ -149,3 +149,40 @@ test('fresh contexts use an inactive persisted generation for guarded writes', a
   assert.equal(freshQueue.getStorageGeneration(), 41);
   assert.equal(storageData.freshGenerationWrite, true);
 });
+
+test('initialization preserves deletion started before the tombstone read completes', async () => {
+  const previousGet = chrome.storage.local.get;
+  const previousData = storageData;
+  let tombstoneReadStartedResolve;
+  let releaseTombstoneRead;
+  let released = false;
+  const tombstoneReadStarted = new Promise((resolve) => {
+    tombstoneReadStartedResolve = resolve;
+  });
+  storageData = { deletionTombstone: { generation: 42, active: false } };
+  chrome.storage.local.get = (keys, callback) => {
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    if (!released && keyList.length === 1 && keyList[0] === 'deletionTombstone') {
+      tombstoneReadStartedResolve();
+      releaseTombstoneRead = () => callback({ deletionTombstone: storageData.deletionTombstone });
+      return;
+    }
+    previousGet(keys, callback);
+  };
+
+  try {
+    const freshQueue = await import(`../storage-queue.js?init-race=${Date.now()}-${Math.random()}`);
+    await tombstoneReadStarted;
+    assert.equal(freshQueue.beginStorageDeletion(42), 42);
+    released = true;
+    releaseTombstoneRead();
+    await freshQueue.initializeStorageGeneration();
+    assert.equal(freshQueue.getStorageGeneration(), 42);
+    assert.equal(freshQueue.isStorageDeletionActive(), true);
+  } finally {
+    released = true;
+    releaseTombstoneRead?.();
+    chrome.storage.local.get = previousGet;
+    storageData = previousData;
+  }
+});

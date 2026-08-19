@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { beginStorageDeletion, endStorageDeletion } from '../storage-queue.js';
+import {
+  beginStorageDeletion,
+  endStorageDeletion,
+  enqueueStorageMutation,
+  waitForStorageDeletionWork,
+} from '../storage-queue.js';
 
 let storageData = {
   errorLog: [],
@@ -44,6 +49,7 @@ import {
   getEffectiveAuthType,
   chatCompletion,
 } from '../providers.js';
+import { clearLlmBackoff } from '../llm-backoff.js';
 
 test('getProvider falls back to OpenAI for unknown ids', () => {
   assert.equal(getProvider('unknown').id, 'openai');
@@ -416,5 +422,60 @@ test('chatCompletion is blocked while delete-all data is in progress', async () 
     assert.equal(called, false);
   } finally {
     endStorageDeletion();
+  }
+});
+
+test('delayed non-OK provider responses do not deadlock deletion on diagnostics', async () => {
+  clearLlmBackoff();
+  const previousConfig = storageData.llmProviderConfig;
+  const previousFetch = globalThis.fetch;
+  const previousLocalGet = globalThis.chrome.storage.local.get;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  let releaseBody;
+  storageData.llmProviderConfig = {
+    providerId: 'ollama',
+    model: 'llama3.2',
+    baseUrl: 'http://localhost:11434/api/chat',
+  };
+  globalThis.chrome.storage.local.get = (_keys, callback) => callback({
+    trackingEnabled: true,
+    llmProviderConfig: storageData.llmProviderConfig,
+  });
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 500,
+    text: () => new Promise((resolve) => {
+      releaseBody = () => resolve('private provider response');
+    }),
+  });
+
+  const request = chatCompletion('delayed provider failure');
+  for (let attempt = 0; !releaseBody && attempt < 50; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.ok(releaseBody, 'provider response body should be pending before deletion starts');
+  const generation = beginStorageDeletion();
+  const deletionWork = enqueueStorageMutation(() => waitForStorageDeletionWork());
+  releaseBody();
+
+  try {
+    const result = await Promise.race([
+      request,
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 75)),
+    ]);
+    assert.notEqual(result, 'timeout', 'provider failure logging must not block deletion');
+    assert.equal(result.error.code, 'api_error');
+  } finally {
+    endStorageDeletion(generation);
+    await Promise.race([
+      deletionWork,
+      new Promise((resolve) => setTimeout(resolve, 200)),
+    ]);
+    await request.catch(() => {});
+    storageData.llmProviderConfig = previousConfig;
+    globalThis.fetch = previousFetch;
+    globalThis.chrome.storage.local.get = previousLocalGet;
+    globalThis.chrome.storage.session.get = previousSessionGet;
   }
 });
