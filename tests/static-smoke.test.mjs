@@ -56,6 +56,7 @@ test('all extension javascript files parse', async () => {
     'error-log.js',
     'diagnostics.js',
     'newtab.js',
+    'onboarding.js',
     'options.js',
     'popup.js',
     'storage-queue.js',
@@ -90,9 +91,12 @@ test('V1 UI avoids non-goal habit tracking and analytics surfaces', async () => 
   }
 });
 
-test('newtab.js contains showOnboardingWizard function', async () => {
-  const code = await text('newtab.js');
-  assert.match(code, /function\s+showOnboardingWizard/);
+test('onboarding wizard lives in onboarding.js', async () => {
+  const code = await text('onboarding.js');
+  assert.match(code, /export function showOnboardingWizard/);
+  const newtab = await text('newtab.js');
+  assert.match(newtab, /from '\.\/onboarding\.js'/);
+  assert.equal(newtab.includes('function showOnboardingWizard'), false);
 });
 
 test('newtab.html contains intent-input textarea with maxlength attribute', async () => {
@@ -240,12 +244,7 @@ test('repository includes an MIT LICENSE with the project copyright holder', asy
 });
 
 test('onboarding wizard does not collect an API key', async () => {
-  const code = await text('newtab.js');
-  const wizard = code.slice(
-    code.indexOf('function showOnboardingWizard'),
-    code.indexOf('function showNewSessionForm'),
-  );
-  assert.ok(wizard.length > 50, 'showOnboardingWizard must exist before showNewSessionForm');
+  const wizard = await text('onboarding.js');
   assert.equal(wizard.includes('api-key-input'), false);
   assert.equal(wizard.includes('CHOOSE YOUR DETECTION MODE'), false);
   assert.equal(wizard.includes('provider-select'), false);

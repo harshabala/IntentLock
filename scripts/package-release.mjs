@@ -47,6 +47,7 @@ export const RUNTIME_FILES = Object.freeze([
   'newtab.css',
   'newtab.html',
   'newtab.js',
+  'onboarding.js',
   'options.html',
   'options.js',
   'page-tracker.js',

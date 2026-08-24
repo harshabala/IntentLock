@@ -35,6 +35,7 @@ const expectedRuntimeFiles = [
   'newtab.css',
   'newtab.html',
   'newtab.js',
+  'onboarding.js',
   'options.html',
   'options.js',
   'page-tracker.js',

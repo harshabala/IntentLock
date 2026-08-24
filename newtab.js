@@ -29,6 +29,7 @@ import {
   PRIVACY_COPY,
 } from './session-metrics.js';
 import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
 
@@ -194,7 +195,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (!result.hasSeenOnboarding) {
-      showOnboardingWizard(container);
+      showOnboardingWizard(container, {
+        showNewSessionForm,
+        isDeletionInProgress: () => dataDeletionInProgress,
+      });
     } else {
       showNewSessionForm(container);
     }
@@ -694,138 +698,6 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
     });
     container.appendChild(histLink);
-  }
-
-  // ── Onboarding wizard ────────────────────────────────────────────────
-
-  function showOnboardingWizard(container) {
-    function showStep1() {
-      container.textContent = '';
-
-      const header = document.createElement('div');
-      header.className = 'header onboarding-header';
-
-      const h1 = document.createElement('h1');
-      h1.textContent = 'Welcome to IntentLock';
-
-      const desc = document.createElement('p');
-      desc.textContent = 'Declare an intent before you browse. If you drift, IntentLock locks the page until you reflect or leave.';
-
-      header.append(h1, desc);
-      container.appendChild(header);
-
-      const nextBtn = document.createElement('button');
-      nextBtn.type = 'button';
-      nextBtn.className = 'primary-btn onboarding-btn';
-      nextBtn.textContent = 'Continue';
-      nextBtn.addEventListener('click', showStep3);
-      container.appendChild(nextBtn);
-    }
-
-    function showStep3() {
-      container.textContent = '';
-
-      const header = document.createElement('div');
-      header.className = 'header onboarding-header';
-      const h1 = document.createElement('h1');
-      h1.textContent = 'Set your default policy';
-      const desc = document.createElement('p');
-      desc.textContent = 'Heuristics work with no API key. Add an AI provider later in Settings.';
-      header.append(h1, desc);
-      container.appendChild(header);
-
-      // Intent category selector
-      const categoryGroup = document.createElement('div');
-      categoryGroup.className = 'input-group onboarding-input-group';
-      const categoryLabel = document.createElement('label');
-      categoryLabel.setAttribute('for', 'onboarding-category');
-      categoryLabel.textContent = 'Default intent type';
-      const categorySelect = document.createElement('select');
-      categorySelect.id='onboarding-category';
-      INTENT_CATEGORIES.forEach(cat => {
-        const option = document.createElement('option');
-        option.value = cat.id;
-        option.textContent = cat.label;
-        if (cat.id === 'deep_work') option.selected = true;
-        categorySelect.appendChild(option);
-      });
-      categoryGroup.append(categoryLabel, categorySelect);
-      container.appendChild(categoryGroup);
-
-      // Strictness selector
-      const strictnessGroup = document.createElement('div');
-      strictnessGroup.className = 'input-group onboarding-input-group';
-      const strictnessLabel = document.createElement('label');
-      strictnessLabel.setAttribute('for', 'onboarding-strictness');
-      strictnessLabel.textContent = 'Strictness';
-      const strictnessSelect = document.createElement('select');
-      strictnessSelect.id='onboarding-strictness';
-      [
-        { value: 'relaxed', text: 'Relaxed — only block short video' },
-        { value: 'balanced', text: 'Balanced — block social, short video, streaming' },
-        { value: 'strict', text: 'Strict — block social, video, gaming, forums' },
-      ].forEach(({ value, text }) => {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = text;
-        if (value === 'balanced') option.selected = true;
-        strictnessSelect.appendChild(option);
-      });
-      strictnessGroup.append(strictnessLabel, strictnessSelect);
-      container.appendChild(strictnessGroup);
-
-      const statusEl = document.createElement('p');
-      statusEl.className = 'onboarding-status hidden';
-      statusEl.setAttribute('role', 'alert');
-      statusEl.setAttribute('aria-live', 'polite');
-      container.appendChild(statusEl);
-
-      const actionsRow = document.createElement('div');
-      actionsRow.className = 'onboarding-actions';
-
-      const saveBtn = document.createElement('button');
-      saveBtn.type = 'button';
-      saveBtn.className = 'primary-btn onboarding-lock-btn';
-      saveBtn.textContent = 'Save policy';
-      saveBtn.addEventListener('click', () => {
-        const policy = buildDefaultPolicy(categorySelect.value, strictnessSelect.value);
-        policy.setupCompleted = true;
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving...';
-        if (dataDeletionInProgress) {
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Save policy';
-          return;
-        }
-        chrome.storage.local.get(['llmProviderConfig'], (result) => {
-          if (dataDeletionInProgress) return;
-          const patch = { heuristicPolicy: policy, hasSeenOnboarding: true };
-          if (!result.llmProviderConfig) {
-            patch.llmProviderConfig = { providerId: 'none' };
-          }
-          chrome.storage.local.set(patch, () => {
-            if (dataDeletionInProgress) return;
-            if (chrome.runtime.lastError) {
-              statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
-              statusEl.classList.remove('hidden');
-              saveBtn.disabled = false;
-              saveBtn.textContent = 'Save policy';
-              return;
-            }
-            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-              void chrome.runtime.lastError;
-            });
-            showNewSessionForm(container);
-          });
-        });
-      });
-
-      actionsRow.append(saveBtn);
-      container.appendChild(actionsRow);
-      categorySelect.focus();
-    }
-
-    showStep1();
   }
 
   // ── New session form (post-session) ─────────────────────────────────
