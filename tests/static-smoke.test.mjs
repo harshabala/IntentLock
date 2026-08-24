@@ -231,3 +231,10 @@ test('live numeric displays use tabular-nums for stable alignment', async () => 
     assert.match(block[1], /font-variant-numeric:\s*tabular-nums/);
   }
 });
+
+test('repository includes an MIT LICENSE with the project copyright holder', async () => {
+  const license = await text('LICENSE');
+  assert.match(license, /MIT License/);
+  assert.match(license, /Copyright \(c\) 2026 Harsha Balakrishnan/);
+  assert.match(license, /Permission is hereby granted, free of charge/);
+});
