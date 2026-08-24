@@ -262,3 +262,13 @@ test('LLM provider fields remain on the options page', async () => {
   assert.match(html, /id=["']provider-select["']/);
   assert.match(html, /id=["']api-key-group["']/);
 });
+
+test('README tells a novice how to install from a release zip', async () => {
+  const readme = await text('README.md');
+  assert.match(readme, /Releases/);
+  assert.match(readme, /Load unpacked/);
+  assert.match(readme, /MIT/);
+  assert.match(readme, /docs\/privacy-policy\.md/);
+  assert.match(readme, /Settings/);
+  assert.equal(readme.includes('**2 — LLM setup**'), false);
+});
