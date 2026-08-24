@@ -1,6 +1,6 @@
 # Chrome Web Store Assets Plan for IntentLock
 
-This document details the metadata copy and visual promotional plan for the IntentLock listing on the Chrome Web Store.
+Canonical listing copy lives in `store/LISTING.md`. This document retains the broader visual promotional plan for the IntentLock Chrome Web Store listing; prefer `store/LISTING.md` for paste-ready CWS fields.
 
 ## 1. Listing Metadata & Copy
 

@@ -283,3 +283,15 @@ test('privacy site page exists for Chrome Web Store hosting', async () => {
   assert.match(workflow, /peaceiris\/actions-gh-pages@v4/);
   assert.match(workflow, /docs\/site/);
 });
+
+test('store listing pack has CWS fields and a five-shot plan', async () => {
+  const listing = await text('store/LISTING.md');
+  assert.ok(listing.split('## Short description')[1].trim().split('\n')[0].length <= 132);
+  assert.match(listing, /https:\/\/harshabala\.github\.io\/IntentLock\/privacy\.html/);
+  assert.match(listing, /Load unpacked/);
+  const shots = await text('store/screenshots/README.md');
+  assert.match(shots, /1280x800/);
+  assert.match(shots, /new tab intent form/);
+  assert.match(shots, /intervention/);
+  assert.match(shots, /settings/);
+});
