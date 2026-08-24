@@ -10,6 +10,11 @@ async function text(path) {
   return readFile(new URL(path, root), 'utf8');
 }
 
+test('manifest version is 1.6.0', async () => {
+  const manifest = JSON.parse(await text('manifest.json'));
+  assert.equal(manifest.version, '1.6.0');
+});
+
 test('manifest references only present extension assets and minimum V1 permissions', async () => {
   const manifest = JSON.parse(await text('manifest.json'));
 

@@ -8,9 +8,9 @@ Source: `~/Desktop/product-flow-metrics-task-list.md` · Branch: `feat/flow-metr
 | IL-2 | Session form: preset + strictness + expectation copy | Pending | |
 | IL-3 | Teach overlay + mark related | Partial | `isUrlAligned` + relatedHostnames in policy; overlay UI pending |
 | IL-4 | Weekly glance in popup + export | Pending | Helpers in `session-metrics.js` |
-| IL-5 | Onboarding heuristics-only default | Pending | |
-| README | Novice + technical sections | Pending | |
-| Ship | PR + merge | Pending | |
+| IL-5 | Onboarding heuristics-only default | Done | Welcome + default policy only; LLM in Settings |
+| README | Novice + technical sections | Done | Two-minute GitHub Release install path |
+| Ship | PR + merge | Done | 1.6.0 ship docs (LICENSE, privacy site, store pack); CWS approval not claimed |
 
 ## Activation metric
 

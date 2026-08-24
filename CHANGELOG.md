@@ -1,5 +1,17 @@
 # IntentLock Changelog
 
+## [1.6.0] — 2026-08-24
+
+### Added
+- MIT license
+- GitHub Pages privacy policy
+- Chrome Web Store listing pack under `store/`
+
+### Changed
+- First-run onboarding is welcome + default policy only; LLM stays in Settings
+- README leads with a two-minute GitHub Release install
+- Onboarding lives in `onboarding.js`
+
 ## [1.5.1] — 2026-08-18
 
 ### Fixed
