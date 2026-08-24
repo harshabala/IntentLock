@@ -238,3 +238,27 @@ test('repository includes an MIT LICENSE with the project copyright holder', asy
   assert.match(license, /Copyright \(c\) 2026 Harsha Balakrishnan/);
   assert.match(license, /Permission is hereby granted, free of charge/);
 });
+
+test('onboarding wizard does not collect an API key', async () => {
+  const code = await text('newtab.js');
+  const wizard = code.slice(
+    code.indexOf('function showOnboardingWizard'),
+    code.indexOf('function showNewSessionForm'),
+  );
+  assert.ok(wizard.length > 50, 'showOnboardingWizard must exist before showNewSessionForm');
+  assert.equal(wizard.includes('api-key-input'), false);
+  assert.equal(wizard.includes('CHOOSE YOUR DETECTION MODE'), false);
+  assert.equal(wizard.includes('provider-select'), false);
+  assert.match(wizard, /Welcome to IntentLock/);
+  assert.match(wizard, /Set your default policy/);
+  assert.match(wizard, /Add an AI provider later in Settings/);
+  assert.match(wizard, /id=['"]onboarding-category['"]/);
+  assert.match(wizard, /id=['"]onboarding-strictness['"]/);
+  assert.equal(/\bSKIP\b/.test(wizard), false);
+});
+
+test('LLM provider fields remain on the options page', async () => {
+  const html = await text('options.html');
+  assert.match(html, /id=["']provider-select["']/);
+  assert.match(html, /id=["']api-key-group["']/);
+});

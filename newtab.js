@@ -15,13 +15,8 @@ chrome.storage.local.get(['theme'], (result) => {
 
 import { generateIntentPlan } from './llm.js';
 import {
-  PROVIDER_LIST,
-  DEFAULT_PROVIDER_ID,
-  getProvider,
-  getDefaultProviderConfig,
   getLlmConfig,
   isLlmConfigured,
-  validateApiKey,
 } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
@@ -711,10 +706,10 @@ document.addEventListener('DOMContentLoaded', () => {
       header.className = 'header onboarding-header';
 
       const h1 = document.createElement('h1');
-      h1.textContent = 'WELCOME TO INTENTLOCK';
+      h1.textContent = 'Welcome to IntentLock';
 
       const desc = document.createElement('p');
-      desc.textContent = 'IntentLock is a minimalist tool designed to keep you focused. Before you start browsing, you declare your intent. If you drift off-task, the extension intervenes to help you stay aligned.';
+      desc.textContent = 'Declare an intent before you browse. If you drift, IntentLock locks the page until you reflect or leave.';
 
       header.append(h1, desc);
       container.appendChild(header);
@@ -722,373 +717,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const nextBtn = document.createElement('button');
       nextBtn.type = 'button';
       nextBtn.className = 'primary-btn onboarding-btn';
-      nextBtn.textContent = 'NEXT';
-      nextBtn.addEventListener('click', showStep2);
+      nextBtn.textContent = 'Continue';
+      nextBtn.addEventListener('click', showStep3);
       container.appendChild(nextBtn);
-    }
-
-    function showStep2() {
-      container.textContent = '';
-
-      const header = document.createElement('div');
-      header.className = 'header onboarding-header';
-
-      const h1 = document.createElement('h1');
-      h1.textContent = 'CHOOSE YOUR DETECTION MODE';
-
-      const desc = document.createElement('p');
-      desc.textContent = 'IntentLock scores drift with built-in heuristics. An AI provider is an optional second opinion — your on-intent % and all metrics work either way.';
-
-      header.append(h1, desc);
-      container.appendChild(header);
-
-      const modeOptions = document.createElement('div');
-      modeOptions.className = 'detection-mode-options';
-
-      const heuristicsOption = document.createElement('div');
-      heuristicsOption.className = 'mode-option';
-      const heuristicsInput = document.createElement('input');
-      heuristicsInput.type = 'radio';
-      heuristicsInput.name = 'detection-mode';
-      heuristicsInput.value = 'heuristics';
-      heuristicsInput.id = 'mode-heuristics';
-      heuristicsInput.checked = true;
-      const heuristicsLabel = document.createElement('label');
-      heuristicsLabel.setAttribute('for', 'mode-heuristics');
-      heuristicsLabel.textContent = 'Heuristics only — recommended, no API key';
-      heuristicsOption.append(heuristicsInput, heuristicsLabel);
-      heuristicsOption.addEventListener('click', (e) => {
-        if (e.target !== heuristicsInput) {
-          heuristicsInput.checked = true;
-          heuristicsInput.dispatchEvent(new Event('change'));
-        }
-      });
-
-      const aiOption = document.createElement('div');
-      aiOption.className = 'mode-option';
-      const aiInput = document.createElement('input');
-      aiInput.type = 'radio';
-      aiInput.name = 'detection-mode';
-      aiInput.value = 'ai';
-      aiInput.id = 'mode-ai';
-      const aiLabel = document.createElement('label');
-      aiLabel.setAttribute('for', 'mode-ai');
-      aiLabel.textContent = 'Add an AI provider — optional upgrade';
-      aiOption.append(aiInput, aiLabel);
-      aiOption.addEventListener('click', (e) => {
-        if (e.target !== aiInput) {
-          aiInput.checked = true;
-          aiInput.dispatchEvent(new Event('change'));
-        }
-      });
-
-      modeOptions.append(heuristicsOption, aiOption);
-      container.appendChild(modeOptions);
-
-      const aiSettingsContainer = document.createElement('div');
-      aiSettingsContainer.id = 'ai-provider-settings';
-      aiSettingsContainer.className = 'ai-provider-settings hidden';
-      aiSettingsContainer.style.display = 'none';
-
-      const providerGroup = document.createElement('div');
-      providerGroup.className = 'input-group onboarding-input-group';
-
-      const providerLabel = document.createElement('label');
-      providerLabel.setAttribute('for', 'provider-select');
-      providerLabel.textContent = 'Provider';
-
-      const providerSelect = document.createElement('select');
-      providerSelect.id = 'provider-select';
-      PROVIDER_LIST.forEach((provider) => {
-        const option = document.createElement('option');
-        option.value = provider.id;
-        option.textContent = provider.label;
-        providerSelect.appendChild(option);
-      });
-      providerGroup.append(providerLabel, providerSelect);
-      aiSettingsContainer.appendChild(providerGroup);
-
-      const inputGroup = document.createElement('div');
-      inputGroup.className = 'input-group onboarding-input-group';
-      inputGroup.id = 'onboarding-key-group';
-
-      const label = document.createElement('label');
-      label.setAttribute('for', 'api-key-input');
-      label.textContent = 'API Key';
-
-      const input = document.createElement('input');
-      input.type = 'password';
-      input.id = 'api-key-input';
-      input.placeholder = 'sk-...';
-      input.autocomplete = 'new-password';
-
-      const testKeyBtn = document.createElement('button');
-      testKeyBtn.type = 'button';
-      testKeyBtn.id = 'test-key-btn';
-      testKeyBtn.className = 'secondary-btn onboarding-test-btn';
-      testKeyBtn.textContent = 'Test Key';
-      testKeyBtn.addEventListener('click', () => {
-        const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
-        const apiKey = input.value.trim();
-        const keyError = validateApiKey(providerId, apiKey);
-        if (keyError) {
-          setFieldError(input, keyError);
-          setOnboardingStatus(keyError, true);
-          return;
-        }
-        testKeyBtn.disabled = true;
-        testKeyBtn.textContent = 'Testing...';
-        setOnboardingStatus('Testing connection...');
-        setTimeout(() => {
-          testKeyBtn.disabled = false;
-          testKeyBtn.textContent = 'Test Key';
-          setOnboardingStatus('API key format is valid for this provider.');
-        }, 500);
-      });
-
-      inputGroup.append(label, input, testKeyBtn);
-      aiSettingsContainer.appendChild(inputGroup);
-
-      function updateOnboardingProviderUI() {
-        const provider = getProvider(providerSelect.value);
-        input.placeholder = provider.keyPlaceholder;
-        const needsKey = provider.requiresApiKey;
-        inputGroup.classList.toggle('hidden', !needsKey);
-      }
-
-      providerSelect.addEventListener('change', updateOnboardingProviderUI);
-      updateOnboardingProviderUI();
-
-      const securityNotice = document.createElement('p');
-      securityNotice.className = 'security-notice';
-      securityNotice.textContent = 'For security, your key is kept in secure session memory and cleared when the browser is closed.';
-      aiSettingsContainer.appendChild(securityNotice);
-
-      container.appendChild(aiSettingsContainer);
-
-      const statusEl = document.createElement('p');
-      statusEl.className = 'onboarding-status hidden';
-      statusEl.setAttribute('role', 'alert');
-      statusEl.setAttribute('aria-live', 'polite');
-      container.appendChild(statusEl);
-
-      function setOnboardingStatus(message, isError = false) {
-        if (!message) {
-          statusEl.textContent = '';
-          statusEl.classList.add('hidden');
-          statusEl.classList.remove('onboarding-status-error');
-          return;
-        }
-        statusEl.textContent = message;
-        statusEl.classList.remove('hidden');
-        statusEl.classList.toggle('onboarding-status-error', isError);
-      }
-
-      function updateDetectionModeUI() {
-        if (aiInput.checked) {
-          aiSettingsContainer.classList.remove('hidden');
-          aiSettingsContainer.style.display = '';
-          input.focus();
-        } else {
-          aiSettingsContainer.classList.add('hidden');
-          aiSettingsContainer.style.display = 'none';
-        }
-      }
-
-      heuristicsInput.addEventListener('change', updateDetectionModeUI);
-      aiInput.addEventListener('change', updateDetectionModeUI);
-      updateDetectionModeUI();
-
-      function resetContinueButton() {
-        continueBtn.disabled = false;
-        continueBtn.textContent = 'CONTINUE';
-      }
-
-      const actionsRow = document.createElement('div');
-      actionsRow.className = 'onboarding-actions';
-
-      const continueBtn = document.createElement('button');
-      continueBtn.type = 'button';
-      continueBtn.id = 'continue-step-2-btn';
-      continueBtn.className = 'primary-btn onboarding-btn';
-      continueBtn.textContent = 'CONTINUE';
-      continueBtn.addEventListener('click', () => {
-        try {
-          setOnboardingStatus('');
-          clearFieldError(input);
-
-          if (heuristicsInput.checked) {
-            if (dataDeletionInProgress) {
-              resetContinueButton();
-              return;
-            }
-            continueBtn.disabled = true;
-            continueBtn.textContent = 'Saving...';
-
-            const clearStoredKey = (done) => {
-              if (dataDeletionInProgress) return;
-              if (chrome.storage.session) {
-                chrome.storage.session.remove(['llmApiKey', 'openaiApiKey'], () => {
-                  if (dataDeletionInProgress) return;
-                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
-                });
-              } else {
-                if (!dataDeletionInProgress) {
-                  chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], done);
-                }
-              }
-            };
-
-            clearStoredKey(() => {
-              if (dataDeletionInProgress) return;
-              chrome.storage.local.set({ llmProviderConfig: { providerId: 'none' } }, () => {
-                if (dataDeletionInProgress || chrome.runtime.lastError) {
-                  if (dataDeletionInProgress) return;
-                  logError({
-                    type: ERROR_TYPES.STORAGE,
-                    message: `Could not save provider settings. ${chrome.runtime.lastError.message}`,
-                    details: { action: 'onboarding_heuristics_save' },
-                    source: 'onboarding',
-                  });
-                }
-                chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-                  if (chrome.runtime.lastError) {
-                    // Ignore runtime errors on background sync
-                  }
-                });
-                showStep3();
-              });
-            });
-            return;
-          }
-
-          const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
-          const provider = getProvider(providerId);
-          const apiKey = input.value.trim();
-          const providerConfig = getDefaultProviderConfig(providerId);
-
-          if (provider.requiresApiKey) {
-            const keyError = validateApiKey(providerId, apiKey);
-            if (keyError) {
-              setFieldError(input, keyError);
-              setOnboardingStatus(keyError, true);
-              logError({
-                type: ERROR_TYPES.VALIDATION,
-                message: keyError,
-                details: { providerId, action: 'onboarding_lock_in' },
-                source: 'onboarding',
-              });
-              return;
-            }
-          }
-
-          continueBtn.disabled = true;
-          continueBtn.textContent = 'Saving...';
-
-          const completeSetup = () => {
-            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-              if (chrome.runtime.lastError) {
-                logError({
-                  type: ERROR_TYPES.RUNTIME,
-                  message: 'Provider saved but background sync failed.',
-                  details: { error: chrome.runtime.lastError.message },
-                  source: 'onboarding',
-                });
-              }
-            });
-            showStep3();
-          };
-
-          const failSetup = (msg, errorType = ERROR_TYPES.STORAGE) => {
-            setFieldError(input, msg);
-            setOnboardingStatus(msg, true);
-            logError({
-              type: errorType,
-              message: msg,
-              details: { providerId },
-              source: 'onboarding',
-            });
-            resetContinueButton();
-          };
-
-          const saveProvider = () => {
-            if (dataDeletionInProgress) {
-              failSetup('Data deletion is in progress. Please try again afterward.');
-              return;
-            }
-            chrome.storage.local.set({ llmProviderConfig: providerConfig }, () => {
-              if (dataDeletionInProgress) return;
-              if (chrome.runtime.lastError) {
-                failSetup(`Could not save provider settings. ${chrome.runtime.lastError.message}`);
-                return;
-              }
-              completeSetup();
-            });
-          };
-
-          if (apiKey) {
-            if (dataDeletionInProgress) {
-              failSetup('Data deletion is in progress. Please try again afterward.');
-              return;
-            }
-            const storageArea = chrome.storage.session || chrome.storage.local;
-            storageArea.set({ llmApiKey: apiKey }, () => {
-              if (dataDeletionInProgress) return;
-              if (chrome.runtime.lastError) {
-                failSetup(`Could not save API key. ${chrome.runtime.lastError.message}`);
-                return;
-              }
-              saveProvider();
-            });
-          } else {
-            const clearStoredKey = (done) => {
-              if (chrome.storage.session) {
-                chrome.storage.session.remove(['llmApiKey'], () => {
-                  if (dataDeletionInProgress) return;
-                  chrome.storage.local.remove(['llmApiKey'], done);
-                });
-              } else {
-                if (!dataDeletionInProgress) {
-                  chrome.storage.local.remove(['llmApiKey'], done);
-                }
-              }
-            };
-            clearStoredKey(saveProvider);
-          }
-        } catch (err) {
-          const msg = 'Something went wrong while saving. Try again.';
-          setOnboardingStatus(msg, true);
-          logError({
-            type: ERROR_TYPES.RUNTIME,
-            message: msg,
-            details: { error: err?.message || String(err) },
-            source: 'onboarding',
-          });
-          resetContinueButton();
-        }
-      });
-
-      actionsRow.append(continueBtn);
-      container.appendChild(actionsRow);
-
-      input.addEventListener('input', () => {
-        clearFieldError(input);
-        setOnboardingStatus('');
-      });
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          continueBtn.click();
-        }
-      });
-    }
-
-    function finishOnboarding() {
-      if (dataDeletionInProgress) return;
-      chrome.storage.local.set({ hasSeenOnboarding: true }, () => {
-        if (dataDeletionInProgress) return;
-        if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
-        showNewSessionForm(container);
-      });
     }
 
     function showStep3() {
@@ -1097,9 +728,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const header = document.createElement('div');
       header.className = 'header onboarding-header';
       const h1 = document.createElement('h1');
-      h1.textContent = 'SET YOUR DEFAULT POLICY';
+      h1.textContent = 'Set your default policy';
       const desc = document.createElement('p');
-      desc.textContent = 'Choose your most common intent type and how strictly IntentLock should enforce it. You can change this anytime in Settings.';
+      desc.textContent = 'Heuristics work with no API key. Add an AI provider later in Settings.';
       header.append(h1, desc);
       container.appendChild(header);
 
@@ -1110,7 +741,7 @@ document.addEventListener('DOMContentLoaded', () => {
       categoryLabel.setAttribute('for', 'onboarding-category');
       categoryLabel.textContent = 'Default intent type';
       const categorySelect = document.createElement('select');
-      categorySelect.id = 'onboarding-category';
+      categorySelect.id='onboarding-category';
       INTENT_CATEGORIES.forEach(cat => {
         const option = document.createElement('option');
         option.value = cat.id;
@@ -1128,7 +759,7 @@ document.addEventListener('DOMContentLoaded', () => {
       strictnessLabel.setAttribute('for', 'onboarding-strictness');
       strictnessLabel.textContent = 'Strictness';
       const strictnessSelect = document.createElement('select');
-      strictnessSelect.id = 'onboarding-strictness';
+      strictnessSelect.id='onboarding-strictness';
       [
         { value: 'relaxed', text: 'Relaxed — only block short video' },
         { value: 'balanced', text: 'Balanced — block social, short video, streaming' },
@@ -1152,16 +783,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const actionsRow = document.createElement('div');
       actionsRow.className = 'onboarding-actions';
 
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'complete-btn onboarding-skip-btn';
-      skipBtn.textContent = 'SKIP';
-      skipBtn.addEventListener('click', finishOnboarding);
-
       const saveBtn = document.createElement('button');
       saveBtn.type = 'button';
       saveBtn.className = 'primary-btn onboarding-lock-btn';
-      saveBtn.textContent = 'SAVE POLICY';
+      saveBtn.textContent = 'Save policy';
       saveBtn.addEventListener('click', () => {
         const policy = buildDefaultPolicy(categorySelect.value, strictnessSelect.value);
         policy.setupCompleted = true;
@@ -1169,26 +794,33 @@ document.addEventListener('DOMContentLoaded', () => {
         saveBtn.textContent = 'Saving...';
         if (dataDeletionInProgress) {
           saveBtn.disabled = false;
-          saveBtn.textContent = 'SAVE POLICY';
+          saveBtn.textContent = 'Save policy';
           return;
         }
-        chrome.storage.local.set({ heuristicPolicy: policy }, () => {
+        chrome.storage.local.get(['llmProviderConfig'], (result) => {
           if (dataDeletionInProgress) return;
-          if (chrome.runtime.lastError) {
-            statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
-            statusEl.classList.remove('hidden');
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'SAVE POLICY';
-            return;
+          const patch = { heuristicPolicy: policy, hasSeenOnboarding: true };
+          if (!result.llmProviderConfig) {
+            patch.llmProviderConfig = { providerId: 'none' };
           }
-          chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-            void chrome.runtime.lastError;
+          chrome.storage.local.set(patch, () => {
+            if (dataDeletionInProgress) return;
+            if (chrome.runtime.lastError) {
+              statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
+              statusEl.classList.remove('hidden');
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Save policy';
+              return;
+            }
+            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+              void chrome.runtime.lastError;
+            });
+            showNewSessionForm(container);
           });
-          finishOnboarding();
         });
       });
 
-      actionsRow.append(skipBtn, saveBtn);
+      actionsRow.append(saveBtn);
       container.appendChild(actionsRow);
       categorySelect.focus();
     }
