@@ -272,3 +272,14 @@ test('README tells a novice how to install from a release zip', async () => {
   assert.match(readme, /Settings/);
   assert.equal(readme.includes('**2 — LLM setup**'), false);
 });
+
+test('privacy site page exists for Chrome Web Store hosting', async () => {
+  const html = await text('docs/site/privacy.html');
+  assert.match(html, /<h1[^>]*>Privacy Policy<\/h1>/);
+  assert.match(html, /chrome.storage/);
+  assert.match(html, /Ollama/);
+  assert.match(html, /does not operate an intermediary/);
+  const workflow = await text('.github/workflows/pages.yml');
+  assert.match(workflow, /peaceiris\/actions-gh-pages@v4/);
+  assert.match(workflow, /docs\/site/);
+});
