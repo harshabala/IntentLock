@@ -358,6 +358,65 @@ test('triggerIntervention state includes intent matching the session', async () 
   assert.equal(stored[0].intent, 'write the report');
 });
 
+test('failed fallback navigation stays pending so triggerIntervention can retry', async () => {
+  const harness = await loadBackground(
+    {
+      activeSession: {
+        id: 'session-1',
+        intent: 'write',
+        isActive: true,
+        startTime: 1,
+        events: [],
+        metrics: { interventionCount: 1, overrideCount: 0 },
+      },
+    },
+    { 7: { url: 'https://example.test/work' } },
+  );
+
+  harness.chrome.tabs.sendMessage = (tabId, message, callback) => {
+    harness.calls.tabMessages.push({ tabId, message });
+    harness.chrome.runtime.lastError = { message: 'Could not establish connection' };
+    callback?.();
+    harness.chrome.runtime.lastError = undefined;
+    return Promise.resolve();
+  };
+  let updateAttempts = 0;
+  harness.chrome.tabs.update = (tabId, updateProperties, callback) => {
+    harness.calls.tabUpdates.push({ tabId, updateProperties });
+    updateAttempts += 1;
+    if (updateAttempts === 1) {
+      harness.chrome.runtime.lastError = { message: 'tab update failed' };
+      callback?.();
+      harness.chrome.runtime.lastError = undefined;
+      return Promise.resolve();
+    }
+    const tab = harness.tabs.get(tabId) || { id: tabId };
+    Object.assign(tab, updateProperties);
+    harness.tabs.set(tabId, tab);
+    callback?.(tab);
+    return Promise.resolve(tab);
+  };
+
+  const first = await harness.module.triggerIntervention('lock the tab', 7);
+  assert.equal(first?.mode, 'pending');
+  assert.equal(first?.displayed, false);
+  const stored = harness.storageData.interventionStates['session-1:7'];
+  assert.equal(stored.mode, 'pending');
+  assert.equal(stored.displayed, false);
+
+  harness.chrome.tabs.sendMessage = (tabId, message, callback) => {
+    harness.calls.tabMessages.push({ tabId, message });
+    callback?.({ shown: true });
+    return Promise.resolve({ shown: true });
+  };
+
+  const retry = await harness.module.triggerIntervention('lock the tab', 7);
+  assert.equal(retry.mode, 'overlay');
+  assert.equal(retry.displayed, true);
+  assert.equal(harness.storageData.activeSession.metrics.interventionCount, 2);
+  assert.equal(harness.calls.tabMessages.length, 2);
+});
+
 test('second triggerIntervention for a pending tab retries display', async () => {
   const harness = await loadBackground(
     {

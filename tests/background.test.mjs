@@ -26,6 +26,11 @@ function flushPausedStorageGets() {
   }
 }
 
+function flushOnePausedStorageGet() {
+  const item = pausedStorageGets.shift();
+  if (item) item.callback(item.snapshot);
+}
+
 globalThis.chrome = {
   idle: {
     setDetectionInterval: () => {},
@@ -257,6 +262,31 @@ test('aborted loadConfig allows a later loadConfig to apply storage', async () =
   storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: 2, events: [] };
   await loadConfig();
   assert.equal(getInMemoryState().currentSession?.id, 'fresh-session');
+});
+
+test('aborted loadConfig does not null a newer in-flight configPromise', async () => {
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  pauseStorageGets = true;
+  let aborted;
+  let later;
+  let third;
+  try {
+    aborted = reloadConfig();
+    beginStorageDeletion();
+    endStorageDeletion();
+    storageData.activeSession = { id: 'from-B', intent: 'keep', isActive: true, startTime: 2, events: [] };
+    later = reloadConfig();
+    flushOnePausedStorageGet();
+    storageData.activeSession = { id: 'from-C', intent: 'should-not-apply', isActive: true, startTime: 3, events: [] };
+    third = loadConfig();
+    flushPausedStorageGets();
+    await Promise.all([aborted, later, third]);
+  } finally {
+    pauseStorageGets = false;
+    pausedStorageGets.length = 0;
+  }
+
+  assert.equal(getInMemoryState().currentSession?.id, 'from-B');
 });
 
 test('javascript: and data: URLs are not trackable; https:// is', () => {

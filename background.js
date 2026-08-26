@@ -766,7 +766,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function loadConfig() {
   if (configPromise) return configPromise;
   const generation = getStorageGeneration();
-  configPromise = new Promise((resolve) => {
+  const pending = new Promise((resolve) => {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
@@ -775,7 +775,7 @@ function loadConfig() {
     ], (result) => {
       const data = result || {};
       if (generation !== getStorageGeneration() || isStorageDeletionActive()) {
-        configPromise = null;
+        if (configPromise === pending) configPromise = null;
         resolve();
         return;
       }
@@ -864,6 +864,7 @@ function loadConfig() {
       resolve();
     });
   });
+  configPromise = pending;
   return configPromise;
 }
 
@@ -1366,21 +1367,29 @@ async function presentIntervention(state, session, states, key) {
       await persistInterventionStates(states);
       return null;
     }
+    try {
+      await updateTab(targetTabId, { url: chrome.runtime.getURL('intervention.html') });
+    } catch {
+      return state;
+    }
     state.mode = 'fallback';
     state.displayed = true;
     state.fallbackTabId = targetTabId;
     states[key] = state;
     await persistInterventionStates(states);
-    await updateTab(targetTabId, { url: chrome.runtime.getURL('intervention.html') });
     return state;
   }
 
-  state.mode = 'fallback';
-  state.displayed = true;
-  states[key] = state;
-  await persistInterventionStates(states);
   if (Number.isInteger(state.fallbackTabId)) {
-    await updateTab(state.fallbackTabId, { url: chrome.runtime.getURL('intervention.html') });
+    try {
+      await updateTab(state.fallbackTabId, { url: chrome.runtime.getURL('intervention.html') });
+    } catch {
+      return state;
+    }
+    state.mode = 'fallback';
+    state.displayed = true;
+    states[key] = state;
+    await persistInterventionStates(states);
   }
   return state;
 }
