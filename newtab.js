@@ -14,16 +14,8 @@ chrome.storage.local.get(['theme'], (result) => {
 });
 
 import { generateIntentPlan } from './llm.js';
-import {
-  getLlmConfig,
-  isLlmConfigured,
-} from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
-import {
-  INTENT_CATEGORIES,
-  buildDefaultPolicy,
-} from './heuristic-policy.js';
 import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
@@ -313,109 +305,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.querySelector('.lock-container');
     container.textContent = '';
 
-    // Header
     const header = document.createElement('div');
     header.className = 'header';
-    const h1 = document.createElement('h1');
-    h1.textContent = 'Session locked';
-    const label = document.createElement('p');
-    label.className = 'intent-active-label';
-    label.textContent = 'Intent active';
-    header.append(h1, label);
+    const intentQuote = document.createElement('p');
+    intentQuote.className = 'intent-quote intent-statement';
+    intentQuote.textContent = session.intent;
+    header.appendChild(intentQuote);
     container.appendChild(header);
 
-    // Timer
     createTimer(session, container);
 
-    // Real-time stats
-    const statsDiv = document.createElement('div');
-    statsDiv.className = 'session-stats';
-
-    const events = Array.isArray(session.events) ? session.events : [];
-    const pageLoads = events.filter(e => e.actionType === 'PAGE_LOAD').length;
-    const tabSwitches = events.filter(e => e.actionType === 'TAB_SWITCH').length;
-    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
-
-    const stats = [
-      { value: String(pageLoads), label: 'Pages' },
-      { value: String(tabSwitches), label: 'Switches' },
-      { value: String(drifts), label: 'Drifts' }
-    ];
-
-    stats.forEach(stat => {
-      const box = document.createElement('div');
-      box.className = 'stat-box';
-      const value = document.createElement('div');
-      value.className = 'stat-value';
-      value.textContent = stat.value;
-      const label = document.createElement('div');
-      label.className = 'stat-label';
-      label.textContent = stat.label;
-      box.append(value, label);
-      statsDiv.appendChild(box);
-    });
-
-    container.appendChild(statsDiv);
-
-    const monitoringHint = document.createElement('p');
-    monitoringHint.className = 'monitoring-hint';
-    monitoringHint.textContent = 'Monitoring tab switches, page loads, dwell time, and SPA navigation. Drift triggers an in-page overlay or full-page intervention.';
-    container.appendChild(monitoringHint);
-
-    // Intent display
-    const intentBox = document.createElement('div');
-    intentBox.className = 'intent-display';
-    const intentHeader = document.createElement('div');
-    intentHeader.className = 'intent-header';
-    const intentText = document.createElement('p');
-    intentText.className = 'intent-text';
-    intentText.textContent = session.intent;
-    const editBtn = document.createElement('button');
-    editBtn.className = 'edit-intent-btn';
-    editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', (e) => {
-      showEditIntentDialog(session, intentText, e.currentTarget);
-    });
-    intentHeader.append(intentText, editBtn);
-    intentBox.appendChild(intentHeader);
-    container.appendChild(intentBox);
-
-    // Plan
-    const plan = session.plan || [];
-    if (plan.length > 0) {
-      const planSection = document.createElement('div');
-      planSection.className = 'plan-section';
-      const planHeading = document.createElement('h3');
-      planHeading.className = 'plan-heading';
-      planHeading.textContent = 'Plan';
-      planSection.appendChild(planHeading);
-
-      const planList = document.createElement('ul');
-      planList.className = 'plan-list';
-      plan.forEach((step) => {
-        const li = document.createElement('li');
-        li.className = 'plan-step';
-        li.textContent = step;
-        planList.appendChild(li);
-      });
-      planSection.appendChild(planList);
-      container.appendChild(planSection);
-    }
-
-    // Hint
-    const hint = document.createElement('p');
-    hint.className = 'navigate-hint';
-    hint.textContent = 'Use the address bar to navigate.';
-    container.appendChild(hint);
-
-    // Action buttons
     const actions = document.createElement('div');
     actions.className = 'session-actions';
 
-    // Complete button
     const btn = document.createElement('button');
     btn.className = 'complete-btn';
-    btn.textContent = 'Complete session';
+    btn.textContent = 'End session';
     btn.addEventListener('click', (e) => showConfirmEndDialog(container, session, e.currentTarget));
     actions.appendChild(btn);
 
@@ -437,8 +342,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const p = document.createElement('p');
     const elapsed = Math.round((Date.now() - session.startTime) / 60000);
     const events = Array.isArray(session.events) ? session.events : [];
-    const drifts = events.filter(e => e.actionType === 'OVERRIDE').length;
-    p.textContent = `You've been working for ${elapsed} minutes with ${drifts} drift${drifts !== 1 ? 's' : ''}. Are you sure you want to end this session?`;
+    const overrides = typeof session.overrideCount === 'number'
+      ? session.overrideCount
+      : events.filter(e => e.actionType === 'OVERRIDE').length;
+    p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
 
     const actions = document.createElement('div');
     actions.className = 'confirm-actions';
@@ -459,56 +366,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     cancelBtn.addEventListener('click', () => closeModal());
     confirmBtn.addEventListener('click', () => closeModal(() => endSession(container, session)));
-  }
-
-  function showEditIntentDialog(session, intentTextElement, trigger) {
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-
-    const dialog = document.createElement('div');
-    dialog.className = 'confirm-dialog';
-
-    const h3 = document.createElement('h3');
-    h3.textContent = 'Edit intent';
-
-    const textarea = document.createElement('textarea');
-    textarea.className = 'edit-intent-textarea';
-    textarea.value = session.intent;
-    textarea.rows = 3;
-    textarea.maxLength = 250;
-
-    const actions = document.createElement('div');
-    actions.className = 'confirm-actions';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'complete-btn';
-    cancelBtn.textContent = 'Cancel';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Save';
-
-    actions.append(cancelBtn, saveBtn);
-    dialog.append(h3, textarea, actions);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    const { closeModal } = setupModalDialog({ overlay, dialog, heading: h3, trigger });
-
-    cancelBtn.addEventListener('click', () => closeModal());
-    saveBtn.addEventListener('click', () => {
-      const newIntent = textarea.value.trim();
-      if (newIntent && newIntent !== session.intent) {
-        chrome.storage.local.get(['activeSession'], (result) => {
-          const currentSession = result.activeSession;
-          if (currentSession) {
-            currentSession.intent = newIntent;
-            if (!dataDeletionInProgress) chrome.storage.local.set({ activeSession: currentSession });
-          }
-        });
-        intentTextElement.textContent = newIntent;
-      }
-      closeModal();
-    });
   }
 
   // ── Session summary ─────────────────────────────────────────────────
@@ -702,17 +559,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── New session form (post-session) ─────────────────────────────────
 
-  function showNewSessionForm(container, session, policies) {
+  function showNewSessionForm(container) {
     if (timerInterval) clearInterval(timerInterval);
     container.textContent = '';
 
     const header = document.createElement('div');
     header.className = 'header';
     const h1 = document.createElement('h1');
-    h1.textContent = 'IntentLock';
-    const p = document.createElement('p');
-    p.textContent = 'Declare what you intend to do.';
-    header.append(h1, p);
+    h1.textContent = 'What are you trying to achieve?';
+    header.appendChild(h1);
     container.appendChild(header);
 
     const form = document.createElement('form');
@@ -726,65 +581,17 @@ document.addEventListener('DOMContentLoaded', () => {
     intentLabel.textContent = 'Intent';
     const intentInput = document.createElement('textarea');
     intentInput.id = 'intent-input';
-    intentInput.placeholder = 'Research Python decorators for the new module...';
+    intentInput.placeholder = "Enter your task (e.g., 'Write Q3 report')";
     intentInput.required = true;
     intentInput.autofocus = true;
     intentInput.maxLength = 250;
     intentGroup.append(intentLabel, intentInput);
 
-    const presetGroup = document.createElement('div');
-    presetGroup.className = 'input-group';
-    const presetLabel = document.createElement('label');
-    presetLabel.setAttribute('for', 'intent-preset');
-    presetLabel.textContent = 'Preset';
-    const presetSelect = document.createElement('select');
-    presetSelect.id = 'intent-preset';
-    INTENT_CATEGORIES.forEach((cat) => {
-      const opt = document.createElement('option');
-      opt.value = cat.id;
-      opt.textContent = cat.label;
-      presetSelect.appendChild(opt);
-    });
-    presetGroup.append(presetLabel, presetSelect);
-
-    const strictnessGroup = document.createElement('div');
-    strictnessGroup.className = 'input-group';
-    const strictnessLabel = document.createElement('label');
-    strictnessLabel.setAttribute('for', 'session-strictness');
-    strictnessLabel.textContent = 'Strictness';
-    const strictnessSelect = document.createElement('select');
-    strictnessSelect.id = 'session-strictness';
-    ['relaxed', 'balanced', 'strict'].forEach((level) => {
-      const opt = document.createElement('option');
-      opt.value = level;
-      opt.textContent = level.charAt(0).toUpperCase() + level.slice(1);
-      strictnessSelect.appendChild(opt);
-    });
-    strictnessGroup.append(strictnessLabel, strictnessSelect);
-
-    const initialPreset = policies?.heuristic?.intentCategoryId || policies?.intentCategoryId || 'job_search';
-    const initialStrictness = policies?.heuristic?.strictness || policies?.strictness || 'balanced';
-    presetSelect.value = initialPreset;
-    strictnessSelect.value = initialStrictness;
-
-    if (!policies) {
-      chrome.storage.local.get(['heuristicPolicy'], (res) => {
-        if (res.heuristicPolicy) {
-          if (presetSelect) presetSelect.value = res.heuristicPolicy.intentCategoryId || 'job_search';
-          if (strictnessSelect) strictnessSelect.value = res.heuristicPolicy.strictness || 'balanced';
-        }
-      });
-    }
-
-    const expectationHint = document.createElement('p');
-    expectationHint.className = 'field-hint';
-    expectationHint.textContent = 'We’ll show your on-intent % when you finish.';
-
     const timeGroup = document.createElement('div');
     timeGroup.className = 'input-group';
     const timeLabel = document.createElement('label');
     timeLabel.setAttribute('for', 'time-budget');
-    timeLabel.textContent = 'Time budget (minutes)';
+    timeLabel.textContent = 'Minutes (optional)';
     const timeInput = document.createElement('input');
     timeInput.type = 'text';
     timeInput.inputMode = 'numeric';
@@ -800,34 +607,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    form.append(intentGroup, presetGroup, strictnessGroup, expectationHint, timeGroup, btn);
+    form.append(intentGroup, timeGroup, btn);
     container.appendChild(form);
-
-    getLlmConfig().then((config) => {
-      if (!isLlmConfigured(config)) {
-        const apiNotice = document.createElement('div');
-        apiNotice.className = 'api-notice';
-        const noticeText = document.createElement('p');
-        noticeText.textContent = 'Heuristics are active. Add an AI provider in Settings for a second opinion on ambiguous pages (optional).';
-        const noticeBtn = document.createElement('button');
-        noticeBtn.className = 'complete-btn';
-        noticeBtn.textContent = 'Open settings';
-        noticeBtn.addEventListener('click', () => {
-          chrome.runtime.openOptionsPage();
-        });
-        apiNotice.append(noticeText, noticeBtn);
-        if (form && form.parentNode === container) {
-          container.insertBefore(apiNotice, form);
-        }
-      }
-    });
 
     const statusMsg = document.createElement('div');
     statusMsg.id = 'status-message';
     statusMsg.className = 'hidden';
     container.appendChild(statusMsg);
 
-    // Keyboard shortcuts button
     const shortcutsBtn = document.createElement('button');
     shortcutsBtn.className = 'shortcuts-btn';
     shortcutsBtn.type = 'button';
@@ -935,31 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       startBtn.disabled = true;
-      startBtn.textContent = 'Generating plan...';
-
-      const presetInput = document.getElementById('intent-preset');
-      const strictnessInput = document.getElementById('session-strictness');
-      if (presetInput && strictnessInput) {
-        const selectedPreset = presetInput.value;
-        const selectedStrictness = strictnessInput.value;
-        chrome.storage.local.get(['heuristicPolicy'], (res) => {
-          if (dataDeletionInProgress) return;
-          const existingPolicy = res.heuristicPolicy || null;
-          if (!existingPolicy || existingPolicy.intentCategoryId !== selectedPreset || existingPolicy.strictness !== selectedStrictness) {
-            const updatedPolicy = buildDefaultPolicy(selectedPreset, selectedStrictness);
-            if (existingPolicy && existingPolicy.customBlockDomains) {
-              updatedPolicy.customBlockDomains = existingPolicy.customBlockDomains;
-            }
-            if (existingPolicy && existingPolicy.customAllowDomains) {
-              updatedPolicy.customAllowDomains = existingPolicy.customAllowDomains;
-            }
-            if (!dataDeletionInProgress) {
-              chrome.storage.local.set({ heuristicPolicy: updatedPolicy });
-            }
-            chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED', payload: { policy: updatedPolicy } });
-          }
-        });
-      }
+      startBtn.textContent = 'Starting session…';
 
       const sessionData = {
         id: crypto.randomUUID(),
@@ -971,28 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
         plan: []
       };
 
-      generateIntentPlan(intent).then(({ steps, error }) => {
-        sessionData.plan = steps;
-
-        if (error) {
-          const notice = document.createElement('div');
-          notice.className = 'api-notice';
-          const noticeText = document.createElement('p');
-          noticeText.textContent = `${error.message} Session will start without an AI plan. Check Diagnostics in Settings for details.`;
-          const diagBtn = document.createElement('button');
-          diagBtn.className = 'complete-btn';
-          diagBtn.textContent = 'Open diagnostics';
-          diagBtn.addEventListener('click', () => {
-            chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
-          });
-          notice.append(noticeText, diagBtn);
-          const form = document.getElementById('intent-form');
-          const container = document.querySelector('.lock-container');
-          if (form && container && form.parentNode === container) {
-            container.insertBefore(notice, form.nextSibling);
-          }
-        }
-
+      const startSession = () => {
         if (dataDeletionInProgress) {
           setFieldError(intentInput, 'Data deletion is in progress. Please try again afterward.');
           startBtn.disabled = false;
@@ -1014,17 +756,25 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           showActiveState(sessionData);
         });
+      };
+
+      generateIntentPlan(intent).then(({ steps, error }) => {
+        if (error) {
+          logError({
+            type: ERROR_TYPES.RUNTIME,
+            message: error.message,
+            source: 'session_start',
+          });
+        }
+        sessionData.plan = steps;
       }).catch((err) => {
         logError({
           type: ERROR_TYPES.RUNTIME,
-          message: 'Unexpected error while generating plan.',
+          message: 'Unexpected error while starting session.',
           details: { error: err.message },
           source: 'session_start',
         });
-        setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
-        startBtn.disabled = false;
-        startBtn.textContent = 'Lock in';
-      });
+      }).finally(startSession);
     });
   }
 });

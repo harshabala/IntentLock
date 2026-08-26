@@ -9,18 +9,17 @@
 <body>
   <div class="lock-container">
     <div class="header">
-      <h1>IntentLock</h1>
-      <p>Declare what you intend to do.</p>
+      <h1>What are you trying to achieve?</h1>
     </div>
 
     <form id="intent-form" novalidate>
       <div class="input-group">
         <label for="intent-input">Intent</label>
-        <textarea id="intent-input" placeholder="Research Python decorators for the new module..." required autofocus maxlength="250"></textarea>
+        <textarea id="intent-input" placeholder="Enter your task (e.g., 'Write Q3 report')" required autofocus maxlength="250"></textarea>
       </div>
 
       <div class="input-group">
-        <label for="time-budget">Time budget (minutes)</label>
+        <label for="time-budget">Minutes (optional)</label>
         <input type="text" id="time-budget" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="30">
       </div>
 

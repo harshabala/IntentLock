@@ -13,10 +13,13 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     const h1 = document.createElement('h1');
     h1.textContent = 'Welcome to IntentLock';
 
+    const declare = document.createElement('p');
+    declare.textContent = 'Declare your intent.';
+
     const desc = document.createElement('p');
     desc.textContent = 'Declare an intent before you browse. If you drift, IntentLock locks the page until you reflect or leave.';
 
-    header.append(h1, desc);
+    header.append(h1, declare, desc);
     container.appendChild(header);
 
     const nextBtn = document.createElement('button');

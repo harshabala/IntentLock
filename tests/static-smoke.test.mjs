@@ -203,6 +203,18 @@ test('newtab.js enforces maxLength on dynamically created textareas', async () =
   assert.match(code, /intentInput\.maxLength\s*=\s*\d+/);
 });
 
+test('declare form is intent plus optional minutes', async () => {
+  const code = await text('newtab.js');
+  assert.match(code, /Lock in/);
+  assert.match(code, /Enter your task/);
+  assert.equal(code.includes('Generating plan...'), false);
+  assert.equal(code.includes('Complete session'), false);
+  assert.match(code, /End session/);
+  const formFn = code.slice(code.indexOf('function showNewSessionForm'), code.indexOf('function showActiveState') > 0 ? code.indexOf('function showActiveState') : code.length);
+  assert.equal(formFn.includes('intent-preset'), false);
+  assert.equal(formFn.includes('session-strictness'), false);
+});
+
 test('newtab.js modal dialogs use shared a11y helper with focus trap', async () => {
   const code = await text('newtab.js');
 
