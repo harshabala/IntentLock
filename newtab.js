@@ -439,7 +439,7 @@ document.addEventListener('DOMContentLoaded', () => {
       heroLine.textContent =
         'Not enough activity data to score this session.';
     } else {
-      heroLine.textContent = `You stayed on track ${alignedMin} of ${activeMin} minutes.`;
+      heroLine.textContent = `${alignedMin} of ${activeMin} minutes matched your intent.`;
     }
     const method = document.createElement('p');
     method.className = 'field-hint';

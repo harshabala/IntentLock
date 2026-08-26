@@ -803,7 +803,7 @@ function loadConfig() {
               when: currentSession.startTime + (currentSession.timeBudget * 60000) 
             });
           } else {
-            triggerIntervention("Time budget exceeded. Are you still working on your intent?");
+            triggerIntervention("Time budget exceeded.");
           }
         }
       } else {
@@ -1055,7 +1055,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
-          triggerIntervention("Time budget exceeded. Are you still working on your intent?");
+          triggerIntervention("Time budget exceeded.");
         }
       });
     });

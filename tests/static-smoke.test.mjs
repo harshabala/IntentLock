@@ -308,12 +308,24 @@ test('onboarding wizard does not collect an API key', async () => {
   assert.equal(wizard.includes('api-key-input'), false);
   assert.equal(wizard.includes('CHOOSE YOUR DETECTION MODE'), false);
   assert.equal(wizard.includes('provider-select'), false);
-  assert.match(wizard, /Welcome to IntentLock/);
+  assert.match(wizard, /Declare your intent/);
   assert.match(wizard, /Set your default policy/);
   assert.match(wizard, /Add an AI provider later in Settings/);
   assert.match(wizard, /id=['"]onboarding-category['"]/);
   assert.match(wizard, /id=['"]onboarding-strictness['"]/);
   assert.equal(/\bSKIP\b/.test(wizard), false);
+});
+
+test('lock copy avoids welcome and on-track coaching', async () => {
+  const sources = [
+    await text('onboarding.js'),
+    await text('newtab.js'),
+    await text('intervention-overlay.js'),
+    await text('popup.js'),
+    await text('options.html'),
+  ].join('\n');
+  assert.equal(sources.includes('Welcome to IntentLock'), false);
+  assert.equal(sources.includes('You stayed on track'), false);
 });
 
 test('LLM provider fields remain on the options page', async () => {
