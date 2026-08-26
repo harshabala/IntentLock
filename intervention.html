@@ -9,19 +9,16 @@
 <body class="intervention">
   <main class="lock-container" role="dialog" aria-modal="true" aria-labelledby="intervention-title" aria-describedby="reason-text" tabindex="-1">
     <div class="header">
-      <h1 id="intervention-title">Drift detected</h1>
-      <p id="reason-text">You are deviating from your intent.</p>
+      <h1 id="intervention-title">You are drifting from your intent.</h1>
+      <p id="reason-text"></p>
     </div>
 
-    <div class="intervention-intent">
-      <p class="intervention-intent-label">Session intent</p>
-      <p class="intervention-intent-text" id="current-intent">Loading...</p>
-    </div>
+    <p class="intent-quote" id="current-intent">Loading...</p>
 
     <form id="reflection-form">
       <div class="input-group stagger-1">
-        <label for="reflection-input">Why are you deviating?</label>
-        <textarea id="reflection-input" placeholder="I need a break, or this is actually relevant..." required autofocus></textarea>
+        <label for="reflection-input">Why?</label>
+        <textarea id="reflection-input" placeholder="Enter why this page, given your intent." required autofocus></textarea>
       </div>
 
       <label class="related-toggle" for="intentlock-mark-related">
@@ -32,8 +29,8 @@
       <p id="transition-error" class="transition-error" role="alert" aria-live="polite"></p>
 
       <div class="intervention-actions">
-        <button type="button" id="return-btn" class="primary-btn stagger-2">Close tab</button>
-        <button type="submit" id="override-btn" class="override-btn stagger-3">Override &amp; continue</button>
+        <button type="button" id="return-btn" class="primary-btn btn--primary stagger-2">Close this tab</button>
+        <button type="submit" id="override-btn" class="override-btn btn--ghost stagger-3" disabled>Continue anyway</button>
         <button type="button" id="end-session-btn" class="end-session-btn">End session</button>
       </div>
     </form>

@@ -11,6 +11,14 @@ test('buildOverlayStyles includes core intervention layout rules', () => {
   assert.match(css, /z-index:\s*2147483647/);
 });
 
+test('overlay styles include overlayEnter 160ms and no infinite animation', () => {
+  const css = buildOverlayStyles();
+  assert.match(css, /overlayEnter/);
+  assert.match(css, /160ms/);
+  assert.match(css, /scale\(0\.98\)/);
+  assert.equal(/\binfinite\b/.test(css), false);
+});
+
 test('classic overlay script exposes its factory through the narrow global API', () => {
   assert.equal(typeof createInterventionOverlay, 'function');
 });
@@ -21,6 +29,14 @@ test('createInterventionOverlay accepts onEndSession callback', () => {
   assert.doesNotThrow(() => {
     createInterventionOverlay({ onEndSession: () => { called = true; } });
   });
+});
+
+test('creating overlay does not throw', () => {
+  assert.doesNotThrow(() => createInterventionOverlay({
+    onOverride() {},
+    onCloseTab() {},
+    onEndSession() {},
+  }));
 });
 
 test('classic overlay refuses a pre-existing global API property', async () => {

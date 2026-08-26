@@ -300,6 +300,19 @@ test('store listing pack has CWS fields and a five-shot plan', async () => {
   assert.match(shots, /settings/);
 });
 
+test('overlay copy uses sentence-case lock language', async () => {
+  const js = await text('intervention-overlay.js');
+  const html = await text('intervention.html');
+  for (const src of [js, html]) {
+    assert.match(src, /Close this tab/);
+    assert.match(src, /Continue anyway/);
+    assert.match(src, /End session/);
+    assert.equal(src.includes('Override & continue'), false);
+    assert.equal(/text-transform:\s*uppercase/.test(src), false);
+  }
+  assert.match(js, /overlayEnter|scale\(0\.98\)/);
+});
+
 test('visualized value tokens and no glass kit', async () => {
   const css = await text('newtab.css') + '\n' + await text('intervention.css');
   assert.match(css, /--bg-white:\s*#ffffff/);

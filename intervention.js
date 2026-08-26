@@ -105,11 +105,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const currentIntent = document.getElementById('current-intent');
   const reflectionInput = document.getElementById('reflection-input');
   const returnBtn = document.getElementById('return-btn');
+  const overrideBtn = document.getElementById('override-btn');
   const endSessionBtn = document.getElementById('end-session-btn');
   const reflectionForm = document.getElementById('reflection-form');
   const markRelated = document.getElementById('intentlock-mark-related');
   const dialog = document.querySelector('.lock-container');
   let transitionInFlight = false;
+
+  function syncContinueEnabled() {
+    const hasWhy = Boolean(reflectionInput?.value.trim());
+    if (overrideBtn) overrideBtn.disabled = transitionInFlight || !hasWhy;
+  }
 
   function setTransitionBusy(busy) {
     transitionInFlight = busy;
@@ -119,6 +125,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (reflectionForm) reflectionForm.setAttribute('aria-busy', String(busy));
     if (reflectionInput) reflectionInput.disabled = busy;
     if (markRelated) markRelated.disabled = busy;
+    syncContinueEnabled();
   }
 
   function getFocusableElements() {
@@ -160,6 +167,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!interventionState) {
     setError(stateResult.response?.error || 'This intervention is no longer active.');
   }
+  reflectionInput.addEventListener('input', () => {
+    const error = document.getElementById('transition-error');
+    if (error && error.textContent === 'Write why, or close this tab.') error.textContent = '';
+    syncContinueEnabled();
+  });
+  syncContinueEnabled();
   reflectionInput.focus();
 
   returnBtn.addEventListener('click', async () => {
@@ -208,6 +221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (transitionInFlight) return;
     const reflection = reflectionInput.value.trim();
     if (!reflection) {
+      setError('Write why, or close this tab.');
       reflectionInput.focus();
       return;
     }

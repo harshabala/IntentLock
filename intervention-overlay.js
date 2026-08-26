@@ -2,6 +2,8 @@
 // The host contract is INTERVENTION_TRANSITION; content.js supplies the nonce-bound sender.
 
 (function exposeInterventionOverlay(root) {
+  const DRIFT_COPY = 'You are drifting from your intent.';
+
   function buildOverlayStyles() {
     return `
     :host {
@@ -9,12 +11,12 @@
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, monospace;
+      font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
     }
     .backdrop {
       position: absolute;
       inset: 0;
-      background: rgba(0, 0, 0, 0.92);
+      background: #000000;
     }
     .panel {
       position: relative;
@@ -24,56 +26,59 @@
       overflow-y: auto;
       margin: 10vh auto 0;
       padding: 48px 32px;
+      background: #000000;
       color: #ffffff;
-      text-align: center;
+      text-align: left;
+      border: 1px solid #ffffff;
+      border-radius: 2px;
+      opacity: 0;
+      transform: scale(0.98);
+      transition: opacity 160ms ease-out, transform 160ms ease-out;
+    }
+    .panel.is-in {
+      opacity: 1;
+      transform: scale(1);
+      animation: overlayEnter 160ms ease-out forwards;
+    }
+    @keyframes overlayEnter {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
     }
     h1 {
-      font-size: 1rem;
-      font-weight: 600;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      margin: 0 0 16px;
+      font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+      font-size: 18px;
+      font-weight: 400;
+      line-height: 1.35;
+      margin: 0 0 12px;
+      color: #ffffff;
     }
     .reason, .hint {
-      color: #888888;
-      font-size: 0.8rem;
+      color: #e6e6e6;
+      font-size: 12px;
       line-height: 1.6;
       margin: 0 0 16px;
     }
-    .intent-box {
-      border: 1px solid #222222;
-      padding: 16px;
-      margin: 24px 0;
-      text-align: left;
-    }
-    .intent-label {
-      font-size: 0.65rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #9a9a9a;
-      margin: 0 0 8px;
-    }
-    .intent-text {
-      font-size: 0.85rem;
-      line-height: 1.5;
-      margin: 0;
+    .intent-quote {
+      font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+      font-size: 16px;
+      font-weight: 400;
+      line-height: 1.35;
+      margin: 0 0 16px;
       color: #ffffff;
     }
     label {
       display: block;
       text-align: left;
-      font-size: 0.7rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
       margin-bottom: 8px;
-      color: #888888;
+      color: #e6e6e6;
     }
     textarea {
       width: 100%;
       min-height: 96px;
-      background: #111111;
+      background: #000000;
       color: #ffffff;
-      border: 1px solid #222222;
+      border: 1px solid #ffffff;
       border-radius: 2px;
       padding: 12px;
       font: inherit;
@@ -82,8 +87,8 @@
       margin-bottom: 16px;
     }
     textarea:focus {
-      outline: none;
-      border-color: #ffffff;
+      outline: 2px solid #ffffff;
+      outline-offset: 2px;
     }
     button:focus-visible, textarea:focus-visible, input:focus-visible {
       outline: 2px solid #ffffff;
@@ -91,49 +96,52 @@
     }
     .actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 12px;
     }
     button {
-      flex: 1;
+      flex: 1 1 calc(50% - 6px);
       min-height: 44px;
       border-radius: 2px;
       font: inherit;
-      font-size: 0.75rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
       cursor: pointer;
     }
+    .btn--primary,
     .close-tab-btn {
-      background: transparent;
-      color: #888888;
-      border: 1px solid #222222;
-    }
-    .override-btn {
       background: #ffffff;
       color: #000000;
       border: 1px solid #ffffff;
     }
-    .end-session-btn {
+    .btn--ghost,
+    .override-btn {
       background: transparent;
-      border: 1px solid #444;
-      color: #888;
+      color: #ffffff;
+      border: 1px solid #ffffff;
+    }
+    .end-session-btn {
+      flex: 1 1 100%;
+      background: transparent;
+      border: none;
+      color: #ffffff;
+      text-decoration: underline;
       padding: 8px 16px;
       cursor: pointer;
-      font-size: 0.75rem;
-      letter-spacing: 0.05em;
-      margin-top: 4px;
+      font-size: 12px;
+      min-height: 44px;
     }
-    .close-tab-btn:hover, .end-session-btn:hover {
-      border-color: #666;
-      color: #aaa;
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
     }
     .related-row {
       display: flex;
       align-items: center;
       gap: 8px;
       text-align: left;
-      color: #888888;
-      font-size: 0.7rem;
+      color: #e6e6e6;
+      font-size: 12px;
+      min-height: 44px;
       margin-bottom: 16px;
     }
     .related-row input {
@@ -143,9 +151,22 @@
     }
     .error {
       min-height: 1.4em;
-      color: #ff8f8f;
-      font-size: 0.75rem;
+      color: #ffffff;
+      font-size: 12px;
       margin: 8px 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+      .panel,
+      .panel.is-in {
+        opacity: 1;
+        transform: none;
+      }
     }
     `;
   }
@@ -153,21 +174,26 @@
   function createInterventionOverlay({ onOverride, onEndSession, onCloseTab } = {}) {
     let host = null;
     let shadow = null;
+    let panelEl = null;
     let reflectionInput = null;
     let markRelatedInput = null;
     let errorText = null;
+    let overrideBtn = null;
+    let dismissBtn = null;
+    let endBtn = null;
     let currentState = null;
     let hostObserver = null;
     let lockedVisible = false;
-    let currentReason = 'You are deviating from your intent.';
+    let currentReason = DRIFT_COPY;
     let currentIntent = '';
     let repairing = false;
     let previousFocus = null;
     let inertNodes = [];
     let previousOverflow = '';
     let transitionInFlight = false;
-    let transitionButtons = [];
     let rootVisibilitySnapshot = null;
+    let hideFinishTimer = null;
+    let hideEndHandler = null;
 
     function enforceDocumentRootVisibility() {
       const rootElement = document.documentElement;
@@ -204,14 +230,40 @@
       rootVisibilitySnapshot = null;
     }
 
+    function prefersReducedMotion() {
+      try {
+        return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+      } catch {
+        return false;
+      }
+    }
+
+    function syncContinueEnabled() {
+      const hasWhy = Boolean(reflectionInput?.value.trim());
+      if (overrideBtn) {
+        overrideBtn.disabled = transitionInFlight || !hasWhy;
+        overrideBtn.setAttribute('aria-busy', String(transitionInFlight));
+      }
+    }
+
+    function setReasonDisplay(reason) {
+      const reasonEl = shadow?.querySelector('[data-role="reason"]');
+      if (!reasonEl) return;
+      const text = reason && reason !== DRIFT_COPY ? reason : '';
+      reasonEl.textContent = text;
+      reasonEl.hidden = !text;
+    }
+
     function setTransitionBusy(busy) {
       transitionInFlight = busy;
-      transitionButtons.forEach((button) => {
+      [dismissBtn, endBtn].forEach((button) => {
+        if (!button) return;
         button.disabled = busy;
         button.setAttribute('aria-busy', String(busy));
       });
       if (reflectionInput) reflectionInput.disabled = busy;
       if (markRelatedInput) markRelatedInput.disabled = busy;
+      syncContinueEnabled();
     }
 
     function focusableElements() {
@@ -278,9 +330,8 @@
         }
         enforceDocumentRootVisibility();
         enforceHostVisibility();
-        const reasonEl = shadow?.querySelector('[data-role="reason"]');
+        setReasonDisplay(currentReason);
         const intentEl = shadow?.querySelector('[data-role="intent"]');
-        if (reasonEl) reasonEl.textContent = currentReason;
         if (intentEl) intentEl.textContent = currentIntent || 'No active session intent.';
       } finally {
         repairing = false;
@@ -301,27 +352,28 @@
       const backdrop = document.createElement('div');
       backdrop.className = 'backdrop';
 
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.setAttribute('role', 'dialog');
-      panel.setAttribute('aria-modal', 'true');
-      panel.setAttribute('aria-labelledby', 'intentlock-intervention-title');
-      panel.setAttribute('aria-describedby', 'intentlock-intervention-reason');
-      panel.innerHTML = `
-      <h1>Drift detected</h1>
+      panelEl = document.createElement('div');
+      panelEl.className = 'panel';
+      panelEl.setAttribute('role', 'dialog');
+      panelEl.setAttribute('aria-modal', 'true');
+      panelEl.setAttribute('aria-labelledby', 'intentlock-intervention-title');
+      panelEl.setAttribute('aria-describedby', 'intentlock-intervention-reason');
+      panelEl.innerHTML = `
+      <h1>You are drifting from your intent.</h1>
       <p class="reason" id="intentlock-intervention-reason" data-role="reason"></p>
-      <div class="intent-box">
-        <p class="intent-label">Session intent</p>
-        <p class="intent-text" data-role="intent"></p>
-      </div>
-      <label for="intentlock-reflection">Why are you deviating?</label>
+      <p class="intent-quote" data-role="intent"></p>
+      <label for="intentlock-reflection">Why?</label>
       `;
-      panel.querySelector('h1')?.setAttribute('id', 'intentlock-intervention-title');
+      panelEl.querySelector('h1')?.setAttribute('id', 'intentlock-intervention-title');
 
       reflectionInput = document.createElement('textarea');
       reflectionInput.id = 'intentlock-reflection';
-      reflectionInput.placeholder = 'I need a break, or this is actually relevant...';
+      reflectionInput.placeholder = 'Enter why this page, given your intent.';
       reflectionInput.setAttribute('autofocus', '');
+      reflectionInput.addEventListener('input', () => {
+        if (errorText?.textContent) errorText.textContent = '';
+        syncContinueEnabled();
+      });
 
       const relatedRow = document.createElement('label');
       relatedRow.className = 'related-row';
@@ -334,24 +386,28 @@
       relatedRow.append(markRelatedInput, relatedText);
 
       errorText = document.createElement('p');
+      errorText.id = 'transition-error';
       errorText.className = 'error';
       errorText.setAttribute('role', 'alert');
+      errorText.setAttribute('aria-live', 'polite');
 
       const actions = document.createElement('div');
       actions.className = 'actions';
 
-      const dismissBtn = document.createElement('button');
+      dismissBtn = document.createElement('button');
       dismissBtn.type = 'button';
-      dismissBtn.className = 'close-tab-btn';
-      dismissBtn.textContent = 'Close tab';
-      const overrideBtn = document.createElement('button');
+      dismissBtn.className = 'close-tab-btn btn--primary';
+      dismissBtn.textContent = 'Close this tab';
+      overrideBtn = document.createElement('button');
       overrideBtn.type = 'button';
-      overrideBtn.className = 'override-btn';
-      overrideBtn.textContent = 'Override & continue';
+      overrideBtn.className = 'override-btn btn--ghost';
+      overrideBtn.textContent = 'Continue anyway';
+      overrideBtn.disabled = true;
       overrideBtn.addEventListener('click', () => {
         if (transitionInFlight) return;
         const reflection = reflectionInput.value.trim();
         if (!reflection) {
+          setError('Write why, or close this tab.');
           reflectionInput.focus();
           return;
         }
@@ -370,7 +426,7 @@
       actions.append(dismissBtn, overrideBtn);
 
       if (typeof onEndSession === 'function') {
-        const endBtn = document.createElement('button');
+        endBtn = document.createElement('button');
         endBtn.type = 'button';
         endBtn.className = 'end-session-btn';
         endBtn.textContent = 'End session';
@@ -382,9 +438,6 @@
             .finally(() => setTransitionBusy(false));
         });
         actions.appendChild(endBtn);
-        transitionButtons = [dismissBtn, overrideBtn, endBtn];
-      } else {
-        transitionButtons = [dismissBtn, overrideBtn];
       }
 
       dismissBtn.addEventListener('click', () => {
@@ -395,8 +448,8 @@
           .finally(() => setTransitionBusy(false));
       });
 
-      panel.append(reflectionInput, relatedRow, errorText, actions);
-      shadow.append(backdrop, panel);
+      panelEl.append(reflectionInput, relatedRow, errorText, actions);
+      shadow.append(backdrop, panelEl);
       shadow.addEventListener('keydown', onKeyDown);
       document.documentElement.appendChild(host);
       if (typeof MutationObserver === 'function') {
@@ -415,15 +468,35 @@
       }
     }
 
-    function show({ reason = 'You are deviating from your intent.', intent = '', state = null } = {}) {
+    function cancelHideAnimation() {
+      if (hideFinishTimer) {
+        clearTimeout(hideFinishTimer);
+        hideFinishTimer = null;
+      }
+      if (hideEndHandler && panelEl) {
+        panelEl.removeEventListener('transitionend', hideEndHandler);
+        panelEl.removeEventListener('animationend', hideEndHandler);
+        hideEndHandler = null;
+      }
+    }
+
+    function finishHide() {
+      cancelHideAnimation();
+      if (host && !lockedVisible) host.style.setProperty('display', 'none', 'important');
+      restoreDocumentRootVisibility();
+      if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
+      previousFocus = null;
+    }
+
+    function show({ reason = DRIFT_COPY, intent = '', state = null } = {}) {
       ensureHost();
+      cancelHideAnimation();
       currentState = state;
       currentReason = reason;
       currentIntent = intent;
       previousFocus = document.activeElement;
-      const reasonEl = shadow.querySelector('[data-role="reason"]');
+      setReasonDisplay(reason);
       const intentEl = shadow.querySelector('[data-role="intent"]');
-      if (reasonEl) reasonEl.textContent = reason;
       if (intentEl) intentEl.textContent = intent || 'No active session intent.';
       reflectionInput.value = '';
       if (markRelatedInput) markRelatedInput.checked = false;
@@ -433,6 +506,18 @@
       lockedVisible = true;
       enforceDocumentRootVisibility();
       enforceHostVisibility();
+      panelEl?.classList.remove('is-in');
+      const enter = () => {
+        if (!lockedVisible) return;
+        panelEl?.classList.add('is-in');
+      };
+      if (prefersReducedMotion()) {
+        enter();
+      } else if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(enter);
+      } else {
+        enter();
+      }
       reflectionInput.focus();
     }
 
@@ -440,10 +525,23 @@
       lockedVisible = false;
       setTransitionBusy(false);
       setPageInteractionBlocked(false);
-      if (host) host.style.setProperty('display', 'none', 'important');
-      restoreDocumentRootVisibility();
-      if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
-      previousFocus = null;
+      panelEl?.classList.remove('is-in');
+      if (!host) {
+        restoreDocumentRootVisibility();
+        previousFocus = null;
+        return;
+      }
+      if (prefersReducedMotion() || !panelEl) {
+        finishHide();
+        return;
+      }
+      hideEndHandler = (event) => {
+        if (event.target !== panelEl) return;
+        finishHide();
+      };
+      panelEl.addEventListener('transitionend', hideEndHandler);
+      panelEl.addEventListener('animationend', hideEndHandler);
+      hideFinishTimer = setTimeout(finishHide, 200);
     }
 
     function isVisible() {
