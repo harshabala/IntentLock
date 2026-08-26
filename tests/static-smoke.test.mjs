@@ -299,3 +299,19 @@ test('store listing pack has CWS fields and a five-shot plan', async () => {
   assert.match(shots, /intervention/);
   assert.match(shots, /settings/);
 });
+
+test('visualized value tokens and no glass kit', async () => {
+  const css = await text('newtab.css') + '\n' + await text('intervention.css');
+  assert.match(css, /--bg-white:\s*#ffffff/);
+  assert.match(css, /--fg-black:\s*#000000/);
+  assert.match(css, /--corner-radius:\s*2px/);
+  assert.match(css, /IBM Plex Mono/);
+  assert.match(css, /Source Serif 4/);
+  assert.equal(/backdrop-filter/.test(css), false);
+  assert.equal(/linear-gradient/.test(css), false);
+  assert.equal(/pulseRing|subtlePulse|intentSpin/.test(css), false);
+  assert.equal(/text-transform:\s*uppercase/.test(css), false);
+  assert.equal(/transition:\s*all/.test(css), false);
+  assert.match(css, /prefers-reduced-motion:\s*reduce/);
+  assert.match(css, /\.tracking-toggle-hit\s*\{[^}]*min-width:\s*44px/s);
+});
