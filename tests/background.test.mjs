@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import {
+  buildDefaultPolicy,
+  evaluatePolicyDrift,
+  mergePolicyWithIntent,
+} from '../heuristic-policy.js';
 
 // Setup global mock for Chrome APIs
 let sessionStorageData = {};
@@ -18,6 +23,9 @@ let storageData = {
 let messageListener = null;
 let pauseStorageGets = false;
 const pausedStorageGets = [];
+const mockTabs = new Map([
+  [7, { id: 7, url: 'https://www.linkedin.com/jobs', active: true }],
+]);
 
 function flushPausedStorageGets() {
   const pending = pausedStorageGets.splice(0);
@@ -40,6 +48,7 @@ globalThis.chrome = {
     onCommand: { addListener: () => {} }
   },
   runtime: {
+    lastError: undefined,
     onMessage: { addListener: (fn) => { messageListener = fn; } },
     getURL: (path) => `chrome-extension://mock/${path}`
   },
@@ -48,9 +57,47 @@ globalThis.chrome = {
     clear: () => {},
     onAlarm: { addListener: () => {} }
   },
+  tabGroups: {
+    update: () => Promise.resolve(),
+    get: () => Promise.resolve(),
+  },
   tabs: {
     onUpdated: { addListener: () => {} },
-    onActivated: { addListener: () => {} }
+    onActivated: { addListener: () => {} },
+    query: (_query, callback) => {
+      const result = [...mockTabs.values()];
+      callback?.(result);
+      return Promise.resolve(result);
+    },
+    get: (tabId, callback) => {
+      const tab = mockTabs.get(tabId);
+      if (tab) {
+        callback?.(tab);
+        return Promise.resolve(tab);
+      }
+      chrome.runtime.lastError = { message: 'No tab with id' };
+      callback?.();
+      chrome.runtime.lastError = undefined;
+      return Promise.resolve();
+    },
+    sendMessage: (_tabId, _message, callback) => {
+      callback?.({ shown: true });
+      return Promise.resolve({ shown: true });
+    },
+    update: (tabId, updateProperties, callback) => {
+      const tab = mockTabs.get(tabId) || { id: tabId };
+      Object.assign(tab, updateProperties);
+      mockTabs.set(tabId, tab);
+      callback?.(tab);
+      return Promise.resolve(tab);
+    },
+    create: (createProperties, callback) => {
+      const tab = { id: 99, ...createProperties };
+      mockTabs.set(tab.id, tab);
+      callback?.(tab);
+      return Promise.resolve(tab);
+    },
+    group: () => Promise.resolve(456),
   },
   storage: {
     session: {
@@ -238,7 +285,7 @@ test('loadConfig queued sanitize does not overwrite a newer history written whil
     await enqueueStorageMutation(() => {});
   } finally {
     pauseStorageGets = false;
-    pausedStorageGets.length = 0;
+    flushPausedStorageGets();
   }
 
   assert.equal(storageData.sessionHistory[0].id, 'fresh-entry');
@@ -256,7 +303,7 @@ test('aborted loadConfig allows a later loadConfig to apply storage', async () =
   } finally {
     endStorageDeletion();
     pauseStorageGets = false;
-    pausedStorageGets.length = 0;
+    flushPausedStorageGets();
   }
 
   storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: 2, events: [] };
@@ -283,7 +330,7 @@ test('aborted loadConfig does not null a newer in-flight configPromise', async (
     await Promise.all([aborted, later, third]);
   } finally {
     pauseStorageGets = false;
-    pausedStorageGets.length = 0;
+    flushPausedStorageGets();
   }
 
   assert.equal(getInMemoryState().currentSession?.id, 'from-B');
@@ -300,4 +347,108 @@ test('idle context-switch copy does not ask if the user is still aligned', async
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
   assert.equal(source.includes('Are you still aligned?'), false);
   assert.match(source, /You switched context after being idle\./);
+});
+
+const JOB_SEARCH_INTENT = 'update my resume and prepare for interviews';
+const LINKEDIN_FEED_URL = 'https://www.linkedin.com/feed';
+
+function linkedinBurstEvents(now = Date.now()) {
+  return [
+    { actionType: 'TAB_SWITCH', url: 'https://www.linkedin.com/feed', timestamp: now - 10000 },
+    { actionType: 'TAB_SWITCH', url: 'https://www.linkedin.com/in/someone', timestamp: now - 8000 },
+    { actionType: 'TAB_SWITCH', url: 'https://www.linkedin.com/messaging', timestamp: now - 6000 },
+    { actionType: 'TAB_SWITCH', url: LINKEDIN_FEED_URL, timestamp: now - 4000 },
+    { actionType: 'PAGE_LOAD', url: LINKEDIN_FEED_URL, timestamp: now - 2000 },
+  ];
+}
+
+async function sendContentEvent(payload, tabId = 7) {
+  pauseStorageGets = false;
+  flushPausedStorageGets();
+  await new Promise((resolve) => {
+    messageListener(
+      { type: 'CONTENT_EVENT', payload },
+      { tab: { id: tabId } },
+      resolve
+    );
+  });
+  await enqueueStorageMutation(() => {});
+}
+
+test('evaluateDrift uses session-merged heuristicPolicy so job_search does not lock LinkedIn', async () => {
+  const deepWorkPolicy = buildDefaultPolicy('deep_work', 'balanced');
+  const sessionPolicy = mergePolicyWithIntent(JOB_SEARCH_INTENT, deepWorkPolicy);
+  assert.equal(sessionPolicy.intentCategoryId, 'job_search');
+
+  const events = linkedinBurstEvents();
+  const deepWorkDrift = evaluatePolicyDrift({
+    intent: JOB_SEARCH_INTENT,
+    url: LINKEDIN_FEED_URL,
+    events,
+    policy: deepWorkPolicy,
+    now: Date.now(),
+  });
+  const jobSearchDrift = evaluatePolicyDrift({
+    intent: JOB_SEARCH_INTENT,
+    url: LINKEDIN_FEED_URL,
+    events,
+    policy: sessionPolicy,
+    now: Date.now(),
+  });
+  assert.equal(deepWorkDrift.shouldIntervene, true, 'deep_work default treats LinkedIn as a distraction');
+  assert.equal(jobSearchDrift.shouldIntervene, false, 'job_search merged policy does not');
+
+  delete sessionStorageData.llmApiKey;
+  storageData.trackingEnabled = true;
+  storageData.heuristicPolicy = deepWorkPolicy;
+  storageData.interventionStates = {};
+  storageData.activeSession = {
+    id: 'job-search-session',
+    intent: JOB_SEARCH_INTENT,
+    isActive: true,
+    startTime: Date.now(),
+    events,
+    heuristicPolicy: sessionPolicy,
+  };
+  mockTabs.set(7, { id: 7, url: LINKEDIN_FEED_URL, active: true });
+  await reloadConfig();
+  assert.equal(getInMemoryState().heuristicPolicy.intentCategoryId, 'deep_work');
+
+  await sendContentEvent({
+    actionType: 'SPA_NAVIGATION',
+    url: LINKEDIN_FEED_URL,
+    navigationUrl: LINKEDIN_FEED_URL,
+  });
+
+  const states = storageData.interventionStates || {};
+  assert.equal(Object.keys(states).length, 0, 'live lock must use session.heuristicPolicy, not module deep_work');
+  assert.equal(storageData.activeSession?.metrics?.interventionCount || 0, 0);
+});
+
+test('PAGE_DWELL alignment uses session-merged heuristicPolicy for LinkedIn during job_search', async () => {
+  const deepWorkPolicy = buildDefaultPolicy('deep_work', 'balanced');
+  const sessionPolicy = mergePolicyWithIntent(JOB_SEARCH_INTENT, deepWorkPolicy);
+  delete sessionStorageData.llmApiKey;
+  storageData.trackingEnabled = true;
+  storageData.heuristicPolicy = deepWorkPolicy;
+  storageData.activeSession = {
+    id: 'job-search-dwell',
+    intent: JOB_SEARCH_INTENT,
+    isActive: true,
+    startTime: Date.now(),
+    events: [],
+    heuristicPolicy: sessionPolicy,
+  };
+  await reloadConfig();
+
+  await sendContentEvent({
+    actionType: 'PAGE_DWELL',
+    url: LINKEDIN_FEED_URL,
+    dwellDeltaMs: 4000,
+  });
+
+  const metrics = storageData.activeSession.metrics;
+  assert.equal(metrics.activeMs, 4000);
+  assert.equal(metrics.alignedActiveMs, 4000, 'LinkedIn dwell is on-intent under session job_search policy');
+  assert.equal(metrics.domains['linkedin.com'].alignedMs, 4000);
 });

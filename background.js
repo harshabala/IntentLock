@@ -1204,7 +1204,7 @@ function handleContentEvent(payload, tabId) {
       const aligned = isUrlAligned(
         session.intent,
         metricUrl,
-        heuristicPolicy,
+        session.heuristicPolicy || heuristicPolicy,
         relatedHostnamesList()
       );
       session.metrics = applyDwellDelta(session.metrics, {
@@ -1279,7 +1279,7 @@ function evaluateDrift(url, tabId) {
       return;
     }
 
-    const activePolicy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+    const activePolicy = session.heuristicPolicy || heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
     const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
