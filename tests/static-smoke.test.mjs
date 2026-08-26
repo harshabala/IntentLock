@@ -210,7 +210,13 @@ test('declare form is intent plus optional minutes', async () => {
   assert.equal(code.includes('Generating plan...'), false);
   assert.equal(code.includes('Complete session'), false);
   assert.match(code, /End session/);
-  const formFn = code.slice(code.indexOf('function showNewSessionForm'), code.indexOf('function showActiveState') > 0 ? code.indexOf('function showActiveState') : code.length);
+  const start = code.indexOf('function showNewSessionForm');
+  assert.ok(start >= 0, 'showNewSessionForm must exist');
+  const rest = code.slice(start + 'function showNewSessionForm'.length);
+  const nextFn = rest.search(/\n  function /);
+  const formFn = nextFn === -1 ? code.slice(start) : code.slice(start, start + 'function showNewSessionForm'.length + nextFn);
+  assert.ok(formFn.length > 50, 'showNewSessionForm body must be extracted');
+  assert.match(formFn, /Lock in/);
   assert.equal(formFn.includes('intent-preset'), false);
   assert.equal(formFn.includes('session-strictness'), false);
 });
