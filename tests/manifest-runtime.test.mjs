@@ -11,6 +11,8 @@ const root = new URL('../', import.meta.url);
 const rootPath = fileURLToPath(root);
 
 const expectedRuntimeFiles = [
+  'analytics.html',
+  'analytics.js',
   'background.js',
   'content.js',
   'diagnostics.html',
@@ -106,6 +108,7 @@ test('manifest and HTML runtime references resolve to files in the repository', 
   ].filter(Boolean);
 
   for (const htmlPath of [
+    'analytics.html',
     'diagnostics.html',
     'history.html',
     'intervention.html',

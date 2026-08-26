@@ -47,6 +47,42 @@ test('manifest references only present extension assets and minimum V1 permissio
   assert.equal('type' in manifest.content_scripts[0], false);
 });
 
+test('popup is a compact summary and analytics.html is a week dashboard', async () => {
+  await assert.doesNotReject(
+    access(new URL('analytics.html', root), constants.R_OK),
+    'analytics.html must exist',
+  );
+  await assert.doesNotReject(
+    access(new URL('analytics.js', root), constants.R_OK),
+    'analytics.js must exist',
+  );
+
+  const popupHtml = await text('popup.html');
+  const popupJs = await text('popup.js');
+  const analyticsHtml = await text('analytics.html');
+  const analyticsJs = await text('analytics.js');
+  const packager = await text('scripts/package-release.mjs');
+  const css = await text('newtab.css');
+
+  assert.match(popupHtml, /class=["']popup["']/);
+  assert.match(popupJs, /End session/);
+  assert.match(popupJs, /View stats/);
+  assert.match(popupJs, /chrome\.runtime\.getURL\(['"]analytics\.html['"]\)/);
+  assert.doesNotMatch(popupJs, /week-glance|summarizeWeek|formatWeekExport|Diagnostics/);
+  const popupBlock = css.match(/body\.popup\s*\{([^}]+)\}/);
+  assert.ok(popupBlock, 'body.popup width styles required');
+  assert.match(popupBlock[1], /width:\s*300px/);
+
+  assert.match(analyticsHtml, /newtab\.css/);
+  assert.match(analyticsHtml, /analytics\.js/);
+  assert.match(analyticsHtml, /history\.html/);
+  assert.match(analyticsJs, /summarizeWeek/);
+  assert.doesNotMatch(analyticsJs, /Best day/);
+
+  assert.match(packager, /'analytics\.html'/);
+  assert.match(packager, /'analytics\.js'/);
+});
+
 test('all extension javascript files parse', async () => {
   for (const file of [
     'background.js',
@@ -64,6 +100,7 @@ test('all extension javascript files parse', async () => {
     'onboarding.js',
     'options.js',
     'popup.js',
+    'analytics.js',
     'storage-queue.js',
   ]) {
     const result = spawnSync(process.execPath, ['--check', file], {

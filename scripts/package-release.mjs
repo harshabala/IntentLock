@@ -23,6 +23,8 @@ const FIXED_TIMESTAMP = new Date('1980-01-01T00:00:00Z');
 // Keep this list explicit: source, test, documentation, and local development files
 // must never enter a release artifact by directory traversal.
 export const RUNTIME_FILES = Object.freeze([
+  'analytics.html',
+  'analytics.js',
   'background.js',
   'content.js',
   'diagnostics.html',
