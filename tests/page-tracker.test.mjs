@@ -117,6 +117,34 @@ test('visibility and idle transitions do not count inactive time as dwell', () =
   tracker.stop();
 });
 
+test('idle then hide does not add idle milliseconds to dwell', () => {
+  const listeners = installBrowserMocks();
+  const reports = [];
+  let now = 0;
+  let hidden = false;
+  const tracker = createPageTracker({
+    onReport: (payload) => reports.push(payload),
+    getLocation: () => 'https://example.com',
+    isVisible: () => !hidden,
+    now: () => now,
+    reportIntervalMs: 60_000,
+  });
+
+  tracker.start();
+  try {
+    now = 1000;
+    tracker.setIdle(true);
+    now = 9000;
+    hidden = true;
+    listeners.get('document:visibilitychange')();
+    now = 10_000;
+    tracker.report('PAGE_DWELL');
+    assert.equal(reports.at(-1).dwellMs, 1000);
+  } finally {
+    tracker.stop();
+  }
+});
+
 test('createPageTracker reports dwell snapshots', () => {
   installBrowserMocks();
   const reports = [];

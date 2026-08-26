@@ -115,14 +115,12 @@
       const state = accumulateDwell({
         activeMs,
         lastTick,
-        isVisible: true,
+        isVisible: !idle,
         now: now(),
       });
       activeMs = state.activeMs;
       lastTick = now();
-      if (!visible) {
-        report('PAGE_DWELL');
-      }
+      report('PAGE_DWELL');
     }
 
     function onBeforeUnload() {

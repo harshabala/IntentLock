@@ -238,7 +238,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       if (!result) return;
 
-      if (interventionState.originalUrl) {
+      const { sanitizeUrl } = await import('./privacy-utils.js');
+      if (sanitizeUrl(interventionState.originalUrl)) {
         window.location.href = interventionState.originalUrl;
       } else {
         replaceWithMessage('Override accepted', 'You may continue your session.');

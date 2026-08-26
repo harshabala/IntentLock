@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 // Setup global mock for Chrome APIs
@@ -15,6 +16,15 @@ let storageData = {
 };
 
 let messageListener = null;
+let pauseStorageGets = false;
+const pausedStorageGets = [];
+
+function flushPausedStorageGets() {
+  const pending = pausedStorageGets.splice(0);
+  for (const { snapshot, callback } of pending) {
+    callback(snapshot);
+  }
+}
 
 globalThis.chrome = {
   idle: {
@@ -68,10 +78,15 @@ globalThis.chrome = {
     local: {
       get: (keys, callback) => {
         const res = {};
-        for (const key of keys) {
+        const keysArr = Array.isArray(keys) ? keys : [keys];
+        for (const key of keysArr) {
           if (storageData[key] !== undefined) {
-            res[key] = storageData[key];
+            res[key] = structuredClone(storageData[key]);
           }
+        }
+        if (pauseStorageGets) {
+          pausedStorageGets.push({ snapshot: res, callback });
+          return;
         }
         callback(res);
       },
@@ -95,7 +110,14 @@ globalThis.chrome = {
 };
 
 // Import background.js to execute its loadConfig
-const { getInMemoryState, reloadConfig, createHistoryEntry } = await import('../background.js');
+const {
+  getInMemoryState,
+  reloadConfig,
+  loadConfig,
+  createHistoryEntry,
+  isTrackableUrl,
+} = await import('../background.js');
+const { beginStorageDeletion, endStorageDeletion, enqueueStorageMutation } = await import('../storage-queue.js');
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
   // Verify initially loaded values (non-defaults)
@@ -196,4 +218,56 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
   assert.equal(stateAfter.currentSession, null);
   assert.equal(stateAfter.overrideCooldowns.size, 0);
   assert.equal(isLlmBackedOff(), false, 'LLM backoff should be cleared');
+});
+
+test('loadConfig queued sanitize does not overwrite a newer history written while the get is in flight', async () => {
+  const now = Date.now();
+  storageData.sessionHistory = [{ id: 'stale-entry', endTime: now, overrides: [] }];
+  pauseStorageGets = true;
+  try {
+    const pendingLoad = reloadConfig();
+    storageData.sessionHistory = [{ id: 'fresh-entry', endTime: now, overrides: [] }];
+    flushPausedStorageGets();
+    pauseStorageGets = false;
+    await pendingLoad;
+    await enqueueStorageMutation(() => {});
+  } finally {
+    pauseStorageGets = false;
+    pausedStorageGets.length = 0;
+  }
+
+  assert.equal(storageData.sessionHistory[0].id, 'fresh-entry');
+  assert.equal(storageData.sessionHistory.some((entry) => entry.id === 'stale-entry'), false);
+});
+
+test('aborted loadConfig allows a later loadConfig to apply storage', async () => {
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  pauseStorageGets = true;
+  try {
+    const aborted = reloadConfig();
+    beginStorageDeletion();
+    flushPausedStorageGets();
+    await aborted;
+  } finally {
+    endStorageDeletion();
+    pauseStorageGets = false;
+    pausedStorageGets.length = 0;
+  }
+
+  storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: 2, events: [] };
+  await loadConfig();
+  assert.equal(getInMemoryState().currentSession?.id, 'fresh-session');
+});
+
+test('javascript: and data: URLs are not trackable; https:// is', () => {
+  assert.equal(isTrackableUrl('javascript:alert(1)'), false);
+  assert.equal(isTrackableUrl('data:text/html,hi'), false);
+  assert.equal(isTrackableUrl('https://example.com/work'), true);
+  assert.equal(isTrackableUrl('http://example.com/work'), true);
+});
+
+test('idle context-switch copy does not ask if the user is still aligned', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+  assert.equal(source.includes('Are you still aligned?'), false);
+  assert.match(source, /You switched context after being idle\./);
 });
