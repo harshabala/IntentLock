@@ -244,6 +244,9 @@
         overrideBtn.disabled = transitionInFlight || !hasWhy;
         overrideBtn.setAttribute('aria-busy', String(transitionInFlight));
       }
+      if (reflectionInput) {
+        reflectionInput.setAttribute('aria-invalid', hasWhy ? 'false' : 'true');
+      }
     }
 
     function setReasonDisplay(reason) {
@@ -407,6 +410,7 @@
         if (transitionInFlight) return;
         const reflection = reflectionInput.value.trim();
         if (!reflection) {
+          reflectionInput.setAttribute('aria-invalid', 'true');
           setError('Write why, or close this tab.');
           reflectionInput.focus();
           return;

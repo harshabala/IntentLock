@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { loadClassicScript } from './helpers/load-classic-script.mjs';
 
@@ -9,6 +10,8 @@ test('buildOverlayStyles includes core intervention layout rules', () => {
   const css = buildOverlayStyles();
   assert.match(css, /\.panel|\.override-btn/);
   assert.match(css, /z-index:\s*2147483647/);
+  assert.match(css, /flex:\s*1 1 calc\(50% - 6px\)/);
+  assert.match(css, /\.end-session-btn[\s\S]*flex:\s*1 1 100%/);
 });
 
 test('overlay styles include overlayEnter 160ms and no infinite animation', () => {
@@ -37,6 +40,12 @@ test('creating overlay does not throw', () => {
     onCloseTab() {},
     onEndSession() {},
   }));
+});
+
+test('overlay continue empty path marks reflection aria-invalid', async () => {
+  const src = await readFile(new URL('../intervention-overlay.js', import.meta.url), 'utf8');
+  assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*hasWhy \? ['"]false['"] : ['"]true['"]\)/);
+  assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
 });
 
 test('classic overlay refuses a pre-existing global API property', async () => {

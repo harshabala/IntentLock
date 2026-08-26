@@ -36,7 +36,16 @@
 }
 
 .intervention-actions button {
+  flex: 1 1 calc(50% - 6px);
   min-height: 44px;
+}
+
+.intervention-actions .override-btn {
+  margin-top: 0;
+}
+
+.intervention-actions .end-session-btn {
+  flex: 1 1 100%;
 }
 
 .related-toggle {

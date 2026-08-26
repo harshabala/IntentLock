@@ -570,10 +570,6 @@ body.intervention .header::after {
   line-height: 1.5;
 }
 
-.override-btn {
-  margin-top: 10px;
-}
-
 .end-session-btn {
   width: 100%;
   background: transparent;

@@ -367,6 +367,24 @@ test('store listing pack has CWS fields and a five-shot plan', async () => {
   assert.match(shots, /settings/);
 });
 
+test('fallback lock actions match overlay pair layout', async () => {
+  const css = await text('intervention.css');
+  const newtab = await text('newtab.css');
+  assert.match(css, /\.intervention-actions\s*\{[^}]*display:\s*flex/s);
+  assert.match(css, /\.intervention-actions button\s*\{[^}]*flex:\s*1 1 calc\(50% - 6px\)/s);
+  assert.match(css, /\.intervention-actions \.end-session-btn\s*\{[^}]*flex:\s*1 1 100%/s);
+  assert.doesNotMatch(newtab, /\.override-btn\s*\{\s*margin-top:\s*10px/);
+});
+
+test('lock reflection textarea sets aria-invalid from empty Continue', async () => {
+  const overlay = await text('intervention-overlay.js');
+  const fallback = await text('intervention.js');
+  for (const src of [overlay, fallback]) {
+    assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*hasWhy \? ['"]false['"] : ['"]true['"]\)/);
+    assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
+  }
+});
+
 test('overlay copy uses sentence-case lock language', async () => {
   const js = await text('intervention-overlay.js');
   const html = await text('intervention.html');
