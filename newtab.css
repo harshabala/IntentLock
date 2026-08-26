@@ -576,6 +576,7 @@ body.intervention .header::after {
   color: inherit;
   border: none;
   text-decoration: underline;
+  text-underline-offset: 0.2em;
   min-height: 44px;
   padding: 8px;
 }

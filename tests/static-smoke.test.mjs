@@ -372,17 +372,61 @@ test('fallback lock actions match overlay pair layout', async () => {
   const newtab = await text('newtab.css');
   assert.match(css, /\.intervention-actions\s*\{[^}]*display:\s*flex/s);
   assert.match(css, /\.intervention-actions button\s*\{[^}]*flex:\s*1 1 calc\(50% - 6px\)/s);
+  assert.match(css, /\.intervention-actions button\s*\{[^}]*width:\s*auto/s);
+  assert.match(css, /\.intervention-actions button\s*\{[^}]*max-width:\s*100%/s);
   assert.match(css, /\.intervention-actions \.end-session-btn\s*\{[^}]*flex:\s*1 1 100%/s);
   assert.doesNotMatch(newtab, /\.override-btn\s*\{\s*margin-top:\s*10px/);
 });
 
-test('lock reflection textarea sets aria-invalid from empty Continue', async () => {
+function extractNamedFunction(src, name) {
+  const start = src.indexOf(`function ${name}`);
+  assert.ok(start >= 0, `${name} must exist`);
+  const brace = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = brace; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`could not extract ${name}`);
+}
+
+test('lock reflection textarea sets aria-invalid only after empty Continue', async () => {
   const overlay = await text('intervention-overlay.js');
   const fallback = await text('intervention.js');
   for (const src of [overlay, fallback]) {
-    assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*hasWhy \? ['"]false['"] : ['"]true['"]\)/);
-    assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
+    const sync = extractNamedFunction(src, 'syncContinueEnabled');
+    assert.doesNotMatch(sync, /aria-invalid/);
+    assert.match(src, /if\s*\(!reflection\)\s*\{[\s\S]*?setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
+    const inputHandler = src.match(/addEventListener\(['"]input['"],\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*\)/);
+    assert.ok(inputHandler, 'reflection input handler required');
+    assert.match(
+      inputHandler[0],
+      /setAttribute\(['"]aria-invalid['"],\s*['"]false['"]\)|removeAttribute\(['"]aria-invalid['"]\)/,
+    );
   }
+});
+
+test('fallback stagger-1 has animation none', async () => {
+  const css = await text('intervention.css');
+  const stagger = css.match(/\.stagger-1[\s\S]*?\{([^}]+)\}/);
+  assert.ok(stagger, '.stagger-1 styles required');
+  assert.match(stagger[1], /animation:\s*none/);
+});
+
+test('fallback lock textarea maxlength is 2000 and continue hint is present', async () => {
+  const html = await text('intervention.html');
+  const js = await text('intervention.js');
+  const css = await text('newtab.css');
+  const match = html.match(/<textarea[^>]*id=["']reflection-input["'][^>]*>/i)
+    || html.match(/<textarea[^>]*id=["']reflection-input["'][^>]*maxlength=["'](\d+)["']/i);
+  assert.ok(match, 'fallback reflection textarea required');
+  assert.match(html, /maxlength=["']2000["']/);
+  assert.match(html, /Write why to continue\./);
+  assert.match(js, /Time budget exceeded\./);
+  assert.match(css, /text-underline-offset:\s*0\.2em/);
 });
 
 test('overlay copy uses sentence-case lock language', async () => {

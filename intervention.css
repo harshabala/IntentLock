@@ -17,8 +17,7 @@
 .stagger-1,
 .stagger-2,
 .stagger-3 {
-  animation: slideUpFade 160ms ease-out both;
-  animation-delay: 0s;
+  animation: none;
 }
 
 .intent-quote {
@@ -37,6 +36,8 @@
 
 .intervention-actions button {
   flex: 1 1 calc(50% - 6px);
+  width: auto;
+  max-width: 100%;
   min-height: 44px;
 }
 

@@ -3,6 +3,12 @@
 
 (function exposeInterventionOverlay(root) {
   const DRIFT_COPY = 'You are drifting from your intent.';
+  const TIME_BUDGET_COPY = 'Time budget exceeded.';
+  const CONTINUE_HINT_ID = 'intentlock-continue-hint';
+
+  function lockHeading(reason) {
+    return reason === TIME_BUDGET_COPY ? TIME_BUDGET_COPY : DRIFT_COPY;
+  }
 
   function buildOverlayStyles() {
     return `
@@ -12,11 +18,24 @@
       inset: 0;
       z-index: 2147483647;
       font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+      --bg-white: #ffffff;
+      --fg-black: #000000;
+      --muted-black: #1a1a1a;
+      --line-width: 1px;
+      --corner-radius: 2px;
+      --bg: #000000;
+      --fg: #ffffff;
+      --muted: #e6e6e6;
+      --line: #ffffff;
+      --surface: #000000;
+      --error: #ffffff;
+      --success: #ffffff;
+      -webkit-font-smoothing: antialiased;
     }
     .backdrop {
       position: absolute;
       inset: 0;
-      background: #000000;
+      background: var(--bg);
     }
     .panel {
       position: relative;
@@ -26,11 +45,11 @@
       overflow-y: auto;
       margin: 10vh auto 0;
       padding: 48px 32px;
-      background: #000000;
-      color: #ffffff;
+      background-color: var(--bg);
+      color: var(--fg);
       text-align: left;
-      border: 1px solid #ffffff;
-      border-radius: 2px;
+      border: var(--line-width) solid var(--line);
+      border-radius: var(--corner-radius);
       opacity: 0;
       transform: scale(0.98);
       transition: opacity 160ms ease-out, transform 160ms ease-out;
@@ -38,7 +57,10 @@
     .panel.is-in {
       opacity: 1;
       transform: scale(1);
-      animation: overlayEnter 160ms ease-out forwards;
+    }
+    .vv-hatch {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='12'%3E%3Cpath d='M0 12L20 0' stroke='rgba(255,255,255,0.06)' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      background-size: 20px 12px;
     }
     @keyframes overlayEnter {
       from { opacity: 0; transform: scale(0.98); }
@@ -50,10 +72,10 @@
       font-weight: 400;
       line-height: 1.35;
       margin: 0 0 12px;
-      color: #ffffff;
+      color: var(--fg);
     }
     .reason, .hint {
-      color: #e6e6e6;
+      color: var(--muted);
       font-size: 12px;
       line-height: 1.6;
       margin: 0 0 16px;
@@ -64,22 +86,22 @@
       font-weight: 400;
       line-height: 1.35;
       margin: 0 0 16px;
-      color: #ffffff;
+      color: var(--fg);
     }
     label {
       display: block;
       text-align: left;
       font-size: 12px;
       margin-bottom: 8px;
-      color: #e6e6e6;
+      color: var(--muted);
     }
     textarea {
       width: 100%;
       min-height: 96px;
-      background: #000000;
-      color: #ffffff;
-      border: 1px solid #ffffff;
-      border-radius: 2px;
+      background: var(--bg);
+      color: var(--fg);
+      border: var(--line-width) solid var(--line);
+      border-radius: var(--corner-radius);
       padding: 12px;
       font: inherit;
       resize: vertical;
@@ -87,11 +109,11 @@
       margin-bottom: 16px;
     }
     textarea:focus {
-      outline: 2px solid #ffffff;
+      outline: 2px solid var(--fg);
       outline-offset: 2px;
     }
     button:focus-visible, textarea:focus-visible, input:focus-visible {
-      outline: 2px solid #ffffff;
+      outline: 2px solid var(--fg);
       outline-offset: 3px;
     }
     .actions {
@@ -101,57 +123,85 @@
     }
     button {
       flex: 1 1 calc(50% - 6px);
+      width: auto;
+      max-width: 100%;
       min-height: 44px;
-      border-radius: 2px;
+      border-radius: var(--corner-radius);
       font: inherit;
       font-size: 12px;
       cursor: pointer;
+      transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out, transform 160ms ease-out;
+    }
+    button:hover {
+      background-color: var(--bg);
+      color: var(--fg);
+      border-color: var(--fg);
+    }
+    button:active {
+      transform: translateY(1px);
     }
     .btn--primary,
     .close-tab-btn {
-      background: #ffffff;
-      color: #000000;
-      border: 1px solid #ffffff;
+      background: var(--fg);
+      color: var(--bg);
+      border: var(--line-width) solid var(--fg);
+    }
+    .btn--primary:hover,
+    .close-tab-btn:hover {
+      background: var(--bg);
+      color: var(--fg);
     }
     .btn--ghost,
     .override-btn {
       background: transparent;
-      color: #ffffff;
-      border: 1px solid #ffffff;
+      color: var(--fg);
+      border: var(--line-width) solid var(--line);
+    }
+    .btn--ghost:hover,
+    .override-btn:hover {
+      background: var(--fg);
+      color: var(--bg);
+      border-color: var(--fg);
     }
     .end-session-btn {
       flex: 1 1 100%;
       background: transparent;
       border: none;
-      color: #ffffff;
+      color: var(--fg);
       text-decoration: underline;
+      text-underline-offset: 0.2em;
       padding: 8px 16px;
       cursor: pointer;
       font-size: 12px;
       min-height: 44px;
     }
+    .end-session-btn:hover {
+      background: transparent;
+      color: var(--fg);
+    }
     button:disabled {
       opacity: 0.4;
       cursor: not-allowed;
+      transform: none;
     }
     .related-row {
       display: flex;
       align-items: center;
       gap: 8px;
       text-align: left;
-      color: #e6e6e6;
+      color: var(--muted);
       font-size: 12px;
       min-height: 44px;
       margin-bottom: 16px;
     }
     .related-row input {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       margin: 0;
     }
     .error {
       min-height: 1.4em;
-      color: #ffffff;
+      color: var(--fg);
       font-size: 12px;
       margin: 8px 0;
     }
@@ -243,16 +293,21 @@
       if (overrideBtn) {
         overrideBtn.disabled = transitionInFlight || !hasWhy;
         overrideBtn.setAttribute('aria-busy', String(transitionInFlight));
+        if (!hasWhy) overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
+        else overrideBtn.removeAttribute('aria-describedby');
       }
-      if (reflectionInput) {
-        reflectionInput.setAttribute('aria-invalid', hasWhy ? 'false' : 'true');
-      }
+    }
+
+    function setHeading(reason) {
+      const title = shadow?.querySelector('#intentlock-intervention-title');
+      if (title) title.textContent = lockHeading(reason);
     }
 
     function setReasonDisplay(reason) {
       const reasonEl = shadow?.querySelector('[data-role="reason"]');
       if (!reasonEl) return;
-      const text = reason && reason !== DRIFT_COPY ? reason : '';
+      const heading = lockHeading(reason);
+      const text = reason && reason !== heading ? reason : '';
       reasonEl.textContent = text;
       reasonEl.hidden = !text;
     }
@@ -333,6 +388,7 @@
         }
         enforceDocumentRootVisibility();
         enforceHostVisibility();
+        setHeading(currentReason);
         setReasonDisplay(currentReason);
         const intentEl = shadow?.querySelector('[data-role="intent"]');
         if (intentEl) intentEl.textContent = currentIntent || 'No active session intent.';
@@ -356,7 +412,7 @@
       backdrop.className = 'backdrop';
 
       panelEl = document.createElement('div');
-      panelEl.className = 'panel';
+      panelEl.className = 'panel vv-hatch';
       panelEl.setAttribute('role', 'dialog');
       panelEl.setAttribute('aria-modal', 'true');
       panelEl.setAttribute('aria-labelledby', 'intentlock-intervention-title');
@@ -372,9 +428,13 @@
       reflectionInput = document.createElement('textarea');
       reflectionInput.id = 'intentlock-reflection';
       reflectionInput.placeholder = 'Enter why this page, given your intent.';
+      reflectionInput.maxLength = 2000;
       reflectionInput.setAttribute('autofocus', '');
       reflectionInput.addEventListener('input', () => {
         if (errorText?.textContent) errorText.textContent = '';
+        if (reflectionInput.value.trim()) {
+          reflectionInput.setAttribute('aria-invalid', 'false');
+        }
         syncContinueEnabled();
       });
 
@@ -394,6 +454,11 @@
       errorText.setAttribute('role', 'alert');
       errorText.setAttribute('aria-live', 'polite');
 
+      const continueHint = document.createElement('p');
+      continueHint.id = CONTINUE_HINT_ID;
+      continueHint.className = 'hint';
+      continueHint.textContent = 'Write why to continue.';
+
       const actions = document.createElement('div');
       actions.className = 'actions';
 
@@ -406,6 +471,7 @@
       overrideBtn.className = 'override-btn btn--ghost';
       overrideBtn.textContent = 'Continue anyway';
       overrideBtn.disabled = true;
+      overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
       overrideBtn.addEventListener('click', () => {
         if (transitionInFlight) return;
         const reflection = reflectionInput.value.trim();
@@ -452,7 +518,7 @@
           .finally(() => setTransitionBusy(false));
       });
 
-      panelEl.append(reflectionInput, relatedRow, errorText, actions);
+      panelEl.append(reflectionInput, relatedRow, errorText, continueHint, actions);
       shadow.append(backdrop, panelEl);
       shadow.addEventListener('keydown', onKeyDown);
       document.documentElement.appendChild(host);
@@ -499,10 +565,12 @@
       currentReason = reason;
       currentIntent = intent;
       previousFocus = document.activeElement;
+      setHeading(reason);
       setReasonDisplay(reason);
       const intentEl = shadow.querySelector('[data-role="intent"]');
       if (intentEl) intentEl.textContent = intent || 'No active session intent.';
       reflectionInput.value = '';
+      reflectionInput.removeAttribute('aria-invalid');
       if (markRelatedInput) markRelatedInput.checked = false;
       if (errorText) errorText.textContent = '';
       setTransitionBusy(false);
@@ -545,7 +613,7 @@
       };
       panelEl.addEventListener('transitionend', hideEndHandler);
       panelEl.addEventListener('animationend', hideEndHandler);
-      hideFinishTimer = setTimeout(finishHide, 200);
+      hideFinishTimer = setTimeout(finishHide, 180);
     }
 
     function isVisible() {

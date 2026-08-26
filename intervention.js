@@ -114,9 +114,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function syncContinueEnabled() {
     const hasWhy = Boolean(reflectionInput?.value.trim());
-    if (overrideBtn) overrideBtn.disabled = transitionInFlight || !hasWhy;
-    if (reflectionInput) {
-      reflectionInput.setAttribute('aria-invalid', hasWhy ? 'false' : 'true');
+    if (overrideBtn) {
+      overrideBtn.disabled = transitionInFlight || !hasWhy;
+      if (!hasWhy) overrideBtn.setAttribute('aria-describedby', 'continue-hint');
+      else overrideBtn.removeAttribute('aria-describedby');
     }
   }
 
@@ -166,13 +167,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   interventionState = stateResult.response?.state || null;
-  if (interventionState?.reason) reasonText.textContent = interventionState.reason;
+  const title = document.getElementById('intervention-title');
+  if (interventionState?.reason === 'Time budget exceeded.') {
+    if (title) title.textContent = 'Time budget exceeded.';
+    if (reasonText) {
+      reasonText.textContent = '';
+      reasonText.hidden = true;
+    }
+  } else if (interventionState?.reason) {
+    reasonText.textContent = interventionState.reason;
+  }
   if (!interventionState) {
     setError(stateResult.response?.error || 'This intervention is no longer active.');
   }
   reflectionInput.addEventListener('input', () => {
     const error = document.getElementById('transition-error');
     if (error && error.textContent === 'Write why, or close this tab.') error.textContent = '';
+    if (reflectionInput.value.trim()) {
+      reflectionInput.setAttribute('aria-invalid', 'false');
+    }
     syncContinueEnabled();
   });
   syncContinueEnabled();

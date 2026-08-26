@@ -20,6 +20,9 @@ test('overlay styles include overlayEnter 160ms and no infinite animation', () =
   assert.match(css, /160ms/);
   assert.match(css, /scale\(0\.98\)/);
   assert.equal(/\binfinite\b/.test(css), false);
+  const isIn = css.match(/\.panel\.is-in\s*\{([^}]+)\}/);
+  assert.ok(isIn, '.panel.is-in block required');
+  assert.doesNotMatch(isIn[1], /animation:\s*overlayEnter/);
 });
 
 test('classic overlay script exposes its factory through the narrow global API', () => {
@@ -42,10 +45,51 @@ test('creating overlay does not throw', () => {
   }));
 });
 
-test('overlay continue empty path marks reflection aria-invalid', async () => {
+function extractNamedFunction(src, name) {
+  const start = src.indexOf(`function ${name}`);
+  assert.ok(start >= 0, `${name} must exist`);
+  const brace = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = brace; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`could not extract ${name}`);
+}
+
+test('overlay continue empty path does not set aria-invalid until empty Continue click', async () => {
   const src = await readFile(new URL('../intervention-overlay.js', import.meta.url), 'utf8');
-  assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*hasWhy \? ['"]false['"] : ['"]true['"]\)/);
-  assert.match(src, /setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
+  const sync = extractNamedFunction(src, 'syncContinueEnabled');
+  assert.doesNotMatch(sync, /aria-invalid/);
+  assert.match(src, /if\s*\(!reflection\)\s*\{[\s\S]*?setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
+  const inputHandler = src.match(/addEventListener\(['"]input['"],\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*\)/);
+  assert.ok(inputHandler, 'reflection input handler required');
+  assert.match(
+    inputHandler[0],
+    /setAttribute\(['"]aria-invalid['"],\s*['"]false['"]\)|removeAttribute\(['"]aria-invalid['"]\)/,
+  );
+});
+
+test('overlay hide timeout is 180ms and host uses page tokens', async () => {
+  const css = buildOverlayStyles();
+  const src = await readFile(new URL('../intervention-overlay.js', import.meta.url), 'utf8');
+  assert.match(css, /--bg-white:\s*#ffffff/);
+  assert.match(css, /--fg-black:\s*#000000/);
+  assert.match(css, /-webkit-font-smoothing:\s*antialiased/);
+  assert.match(css, /vv-hatch/);
+  assert.match(css, /text-underline-offset:\s*0\.2em/);
+  assert.match(css, /\.related-row input[\s\S]*width:\s*18px/);
+  const buttonBlock = css.match(/\n\s*button\s*\{([^}]+)\}/);
+  assert.ok(buttonBlock, 'overlay button styles required');
+  assert.match(buttonBlock[1], /transform/);
+  assert.match(css, /button:hover|button:active/);
+  assert.match(src, /setTimeout\(finishHide,\s*180\)/);
+  assert.match(src, /Time budget exceeded\./);
+  assert.match(src, /Write why to continue\./);
+  assert.match(src, /maxLength\s*=\s*2000|setAttribute\(['"]maxlength['"],\s*['"]2000['"]\)/i);
 });
 
 test('classic overlay refuses a pre-existing global API property', async () => {
