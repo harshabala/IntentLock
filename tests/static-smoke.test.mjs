@@ -310,6 +310,7 @@ test('visualized value tokens and no glass kit', async () => {
   assert.equal(/backdrop-filter/.test(css), false);
   assert.equal(/linear-gradient/.test(css), false);
   assert.equal(/pulseRing|subtlePulse|intentSpin/.test(css), false);
+  assert.equal(/animation:[^;}]*\binfinite\b/.test(css), false);
   assert.equal(/text-transform:\s*uppercase/.test(css), false);
   assert.equal(/transition:\s*all/.test(css), false);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
