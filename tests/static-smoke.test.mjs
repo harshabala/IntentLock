@@ -442,6 +442,37 @@ test('overlay copy uses sentence-case lock language', async () => {
   assert.match(js, /overlayEnter|scale\(0\.98\)/);
 });
 
+test('Lock in sends SESSION_STARTED without awaiting generateIntentPlan', async () => {
+  const code = await text('newtab.js');
+  const bind = extractNamedFunction(code, 'bindForm');
+  assert.match(bind, /SESSION_STARTED/);
+  assert.match(bind, /startSession\s*\(\s*\)/);
+  assert.doesNotMatch(bind, /await\s+generateIntentPlan/);
+  assert.doesNotMatch(bind, /generateIntentPlan\([\s\S]*?\.finally\s*\(\s*startSession/);
+  const planIdx = bind.indexOf('generateIntentPlan');
+  const startedIdx = bind.indexOf('SESSION_STARTED');
+  const startCallIdx = bind.indexOf('startSession()');
+  assert.ok(startedIdx >= 0 && startCallIdx >= 0);
+  if (planIdx >= 0) {
+    assert.ok(startCallIdx < planIdx, 'SESSION_STARTED path must run before generateIntentPlan');
+    assert.match(bind, /isLlmConfigured/);
+  }
+  assert.match(code, /mergePolicyWithIntent\(/);
+});
+
+test('onboarding does not persist providerId none', async () => {
+  const code = await text('onboarding.js');
+  assert.doesNotMatch(code, /providerId:\s*['"]none['"]/);
+  assert.doesNotMatch(code, /llmProviderConfig:\s*\{\s*providerId:/);
+});
+
+test('settings do not assign providerSelect to none', async () => {
+  const js = await text('options.js');
+  assert.doesNotMatch(js, /providerSelect\.value\s*=\s*['"]none['"]/);
+  assert.match(js, /function applyStoredConfig[\s\S]*getProvider\(/);
+  assert.doesNotMatch(js, /llmProviderConfig:\s*getDefaultProviderConfig\(DEFAULT_PROVIDER_ID\)/);
+});
+
 test('visualized value tokens and no glass kit', async () => {
   const css = await text('newtab.css') + '\n' + await text('intervention.css');
   assert.match(css, /--bg-white:\s*#ffffff/);

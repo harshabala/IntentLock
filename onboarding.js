@@ -102,26 +102,19 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
         saveBtn.textContent = 'Save policy';
         return;
       }
-      chrome.storage.local.get(['llmProviderConfig'], (result) => {
+      chrome.storage.local.set({ heuristicPolicy: policy, hasSeenOnboarding: true }, () => {
         if (isDeletionInProgress()) return;
-        const patch = { heuristicPolicy: policy, hasSeenOnboarding: true };
-        if (!result.llmProviderConfig) {
-          patch.llmProviderConfig = { providerId: 'none' };
+        if (chrome.runtime.lastError) {
+          statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
+          statusEl.classList.remove('hidden');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save policy';
+          return;
         }
-        chrome.storage.local.set(patch, () => {
-          if (isDeletionInProgress()) return;
-          if (chrome.runtime.lastError) {
-            statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
-            statusEl.classList.remove('hidden');
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'Save policy';
-            return;
-          }
-          chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-            void chrome.runtime.lastError;
-          });
-          showNewSessionForm(container);
+        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
+          void chrome.runtime.lastError;
         });
+        showNewSessionForm(container);
       });
     });
 

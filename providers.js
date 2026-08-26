@@ -208,11 +208,11 @@ export function cleanJsonString(str) {
 }
 
 export function getProvider(providerId) {
-  return PROVIDERS[providerId] || PROVIDERS[DEFAULT_PROVIDER_ID];
+  return PROVIDERS[providerId] || null;
 }
 
 export function getDefaultProviderConfig(providerId = DEFAULT_PROVIDER_ID) {
-  const provider = getProvider(providerId);
+  const provider = PROVIDERS[providerId] || PROVIDERS[DEFAULT_PROVIDER_ID];
   return {
     providerId: provider.id,
     model: provider.defaultModel,
@@ -227,7 +227,7 @@ export function providerRequiresApiKey(providerId, config = {}) {
   if (providerId === 'custom') {
     return (config.authType || 'bearer') !== 'none';
   }
-  return getProvider(providerId).requiresApiKey;
+  return Boolean(getProvider(providerId)?.requiresApiKey);
 }
 
 export function validateApiKey(providerId, key, config = {}) {
@@ -264,9 +264,9 @@ async function throwApiFailure(response, providerId) {
 }
 
 export function validateProviderConfig(config) {
-  const providerId = config?.providerId || DEFAULT_PROVIDER_ID;
-  if (!PROVIDERS[providerId]) return 'Select a supported provider.';
-  const provider = getProvider(providerId);
+  const providerId = config?.providerId;
+  if (!providerId || !PROVIDERS[providerId]) return 'Select a supported provider.';
+  const provider = PROVIDERS[providerId];
   const baseUrl = config?.baseUrl?.trim() || provider.defaultBaseUrl;
 
   if (providerId === 'custom') {
@@ -282,8 +282,11 @@ export function validateProviderConfig(config) {
 }
 
 export function isLlmConfigured(config) {
-  const providerId = config?.providerId || DEFAULT_PROVIDER_ID;
-  const provider = getProvider(providerId);
+  const providerId = config?.providerId;
+  const provider = (config?.provider && config.provider.id === providerId)
+    ? config.provider
+    : getProvider(providerId);
+  if (!providerId || !provider) return false;
   if (validateProviderConfig({ ...config, providerId, baseUrl: config?.baseUrl || provider.defaultBaseUrl }) !== null) {
     return false;
   }
@@ -299,21 +302,30 @@ export function isLlmConfigured(config) {
 }
 
 export async function getLlmConfig() {
-  const fallback = {
-    ...getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
-    provider: getProvider(DEFAULT_PROVIDER_ID),
+  const unconfigured = {
+    providerId: null,
+    provider: null,
     apiKey: null,
+    model: '',
+    baseUrl: '',
+    customLabel: '',
+    authType: 'none',
+    apiStyle: '',
   };
 
   if (typeof chrome === 'undefined' || !chrome.storage) {
-    return fallback;
+    return unconfigured;
   }
 
   return new Promise((resolve) => {
     chrome.storage.local.get(['llmProviderConfig', 'llmApiKey', 'openaiApiKey'], (localRes) => {
-      const stored = { ...getDefaultProviderConfig(), ...(localRes?.llmProviderConfig || {}) };
-      const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
+      const stored = localRes?.llmProviderConfig || {};
+      const providerId = stored.providerId;
       const provider = getProvider(providerId);
+      if (!provider) {
+        resolve({ ...unconfigured, providerId: providerId || null });
+        return;
+      }
 
       const finish = (apiKey) => {
         resolve({
@@ -353,7 +365,7 @@ async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, 
   let url = baseUrl;
   const effectiveAuthType = providerId === 'custom'
     ? authType
-    : getProvider(providerId).authType;
+    : (getProvider(providerId)?.authType || 'bearer');
 
   if (effectiveAuthType === 'bearer' && apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;

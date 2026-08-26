@@ -14,6 +14,8 @@ chrome.storage.local.get(['theme'], (result) => {
 });
 
 import { generateIntentPlan } from './llm.js';
+import { getLlmConfig, isLlmConfigured } from './providers.js';
+import { mergePolicyWithIntent } from './heuristic-policy.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 import {
@@ -24,6 +26,7 @@ import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
 import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
+let cachedHeuristicPolicy = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED') {
@@ -172,7 +175,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const wantReport = new URLSearchParams(location.search).get('report') === 'last';
 
-  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory'], (result) => {
+  chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory', 'heuristicPolicy'], (result) => {
+    cachedHeuristicPolicy = result.heuristicPolicy || null;
     const container = document.querySelector('.lock-container');
     if (result.activeSession && result.activeSession.isActive) {
       showActiveState(result.activeSession);
@@ -197,6 +201,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && Object.prototype.hasOwnProperty.call(changes, 'heuristicPolicy')) {
+      cachedHeuristicPolicy = changes.heuristicPolicy.newValue || null;
+    }
     if (areaName === 'local' && changes.activeSession) {
       const session = changes.activeSession.newValue;
       if (session && session.isActive) {
@@ -734,6 +741,10 @@ document.addEventListener('DOMContentLoaded', () => {
         plan: []
       };
 
+      if (typeof mergePolicyWithIntent === 'function') {
+        sessionData.heuristicPolicy = mergePolicyWithIntent(intent, cachedHeuristicPolicy);
+      }
+
       const startSession = () => {
         if (dataDeletionInProgress) {
           setFieldError(intentInput, 'Data deletion is in progress. Please try again afterward.');
@@ -758,23 +769,28 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       };
 
-      generateIntentPlan(intent).then(({ steps, error }) => {
-        if (error) {
+      startSession();
+
+      getLlmConfig().then((config) => {
+        if (!isLlmConfigured(config)) return null;
+        return generateIntentPlan(intent);
+      }).then((result) => {
+        if (!result) return;
+        if (result.error) {
           logError({
             type: ERROR_TYPES.RUNTIME,
-            message: error.message,
+            message: result.error.message,
             source: 'session_start',
           });
         }
-        sessionData.plan = steps;
       }).catch((err) => {
         logError({
           type: ERROR_TYPES.RUNTIME,
-          message: 'Unexpected error while starting session.',
+          message: 'Unexpected error while generating a session plan.',
           details: { error: err.message },
           source: 'session_start',
         });
-      }).finally(startSession);
+      });
     });
   }
 });

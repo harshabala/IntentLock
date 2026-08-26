@@ -62,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function isCloudProvider(providerId) {
     const provider = getProvider(providerId);
+    if (!provider) return false;
     return !provider.isLocal && providerId !== 'custom';
   }
 
@@ -73,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function getFormConfig() {
-    const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+    const providerId = getProvider(providerSelect.value)?.id || DEFAULT_PROVIDER_ID;
     const provider = getProvider(providerId);
     return {
       providerId,
@@ -86,8 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateProviderUI(providerId = providerSelect.value) {
-    const provider = getProvider(providerId);
-    const cloudProvider = isCloudProvider(providerId);
+    const provider = getProvider(providerId) || getProvider(DEFAULT_PROVIDER_ID);
+    const cloudProvider = isCloudProvider(provider?.id || providerId);
     providerDescription.textContent = provider.description;
     customProviderFields.classList.toggle('hidden', providerId !== 'custom');
 
@@ -126,8 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function applyStoredConfig(stored = {}) {
-    const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
-    const provider = getProvider(providerId);
+    const provider = getProvider(stored.providerId) || getProvider(DEFAULT_PROVIDER_ID);
+    const providerId = provider.id;
     providerSelect.value = providerId;
     modelInput.value = stored.model || provider.defaultModel;
     baseUrlInput.value = stored.baseUrl || provider.defaultBaseUrl;
@@ -139,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   providerSelect.addEventListener('change', () => {
     if (deletionInProgress) return;
-    const provider = getProvider(providerSelect.value);
+    const provider = getProvider(providerSelect.value) || getProvider(DEFAULT_PROVIDER_ID);
     modelInput.value = provider.defaultModel;
     baseUrlInput.value = provider.defaultBaseUrl;
     providerAdvancedOpen = false;
@@ -264,12 +265,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       hasSavedApiKey = Boolean(migratedKey);
       applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
-
-      if (!localResult.llmProviderConfig && !deletionInProgress) {
-        chrome.storage.local.set({
-          llmProviderConfig: getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
-        });
-      }
 
       if (localResult.trackingEnabled !== undefined) {
         trackingToggle.checked = localResult.trackingEnabled;
@@ -424,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hasSavedApiKey = hasSavedApiKey || Boolean(key);
         apiKeyInput.value = '';
         updateProviderUI(config.providerId);
-        showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
+        showStatus(providerStatus, `${(getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label} settings saved.`);
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
       };
 
