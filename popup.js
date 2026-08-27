@@ -77,11 +77,68 @@ document.addEventListener('DOMContentLoaded', () => {
     parent.appendChild(statsLink);
   }
 
+  function showConfirmEndDialog(session, trigger, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+
+    const h3 = document.createElement('h3');
+    h3.id = 'popup-end-title';
+    h3.textContent = 'End session?';
+    dialog.setAttribute('aria-labelledby', h3.id);
+
+    const p = document.createElement('p');
+    const elapsed = Math.round((Date.now() - (session.startTime || Date.now())) / 60000);
+    const events = Array.isArray(session.events) ? session.events : [];
+    const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
+    const overrides = typeof session.overrideCount === 'number'
+      ? session.overrideCount
+      : storedOverrides.length > 0
+        ? storedOverrides.length
+        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+    p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'complete-btn';
+    cancelBtn.textContent = 'Cancel';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = 'End session';
+
+    function closeDialog() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (trigger && typeof trigger.focus === 'function') trigger.focus();
+    }
+
+    cancelBtn.addEventListener('click', () => closeDialog());
+    confirmBtn.addEventListener('click', () => {
+      closeDialog();
+      onConfirm();
+    });
+
+    actions.append(cancelBtn, confirmBtn);
+    dialog.append(h3, p, actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    cancelBtn.focus();
+  }
+
   function renderIdle(sessionHistory) {
     content.textContent = '';
     const last = sessionHistory.length > 0 ? sessionHistory[sessionHistory.length - 1] : null;
 
     if (last) {
+      const kicker = document.createElement('p');
+      kicker.className = 'session-kicker';
+      kicker.textContent = 'Last session';
+      content.appendChild(kicker);
       content.appendChild(quotedIntent(last.intent));
       const timeEl = document.createElement('p');
       timeEl.className = 'time-remaining';
@@ -146,12 +203,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = document.createElement('button');
       btn.className = 'complete-btn';
       btn.textContent = 'End session';
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
         if (dataDeletionInProgress) return;
-        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-            chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
-            window.close();
+        showConfirmEndDialog(session, e.currentTarget, () => {
+          chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
+            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+              chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+              window.close();
+            });
           });
         });
       });
@@ -161,8 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const isBackedOff = backoffUntil > Date.now();
       if (isBackedOff) {
         const notice = document.createElement('p');
-        notice.className = 'no-session';
-        notice.style.cssText = 'font-size:0.7rem;color:#888;margin:4px 0 0;';
+        notice.className = 'muted-note';
         const minutesLeft = Math.ceil((backoffUntil - Date.now()) / 60000);
         notice.textContent = `AI check paused (~${minutesLeft} min). Heuristics still active.`;
         content.appendChild(notice);

@@ -408,6 +408,9 @@ document.addEventListener('DOMContentLoaded', () => {
     container.appendChild(intentBox);
 
     const events = Array.isArray(session.events) ? session.events : [];
+    const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
+    const eventOverrides = events.filter(e => e.actionType === 'OVERRIDE');
+    const overrideRecords = storedOverrides.length > 0 ? storedOverrides : eventOverrides;
     const durationMin = Math.max(
       0,
       Math.round(((session.endTime || Date.now()) - (session.startTime || Date.now())) / 60000)
@@ -425,7 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const overridesCount =
       typeof session.overrideCount === 'number'
         ? session.overrideCount
-        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+        : overrideRecords.length;
 
     // Hero on-intent %
     const hero = document.createElement('div');
@@ -529,9 +532,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Override reflections (if any)
-    const overrides = events.filter(e => e.actionType === 'OVERRIDE' && e.reflection);
-    if (overrides.length > 0) {
+    // Override reflections (if any) — prefer session.overrides after sanitization
+    const reflections = overrideRecords.filter((o) => o.reflection);
+    if (reflections.length > 0) {
       const reflSection = document.createElement('div');
       reflSection.className = 'plan-section';
       const reflTitle = document.createElement('h3');
@@ -539,7 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
       reflTitle.textContent = 'Reflections';
       reflSection.appendChild(reflTitle);
 
-      overrides.forEach(o => {
+      reflections.forEach((o) => {
         const p = document.createElement('p');
         p.className = 'reflection-text';
         p.textContent = o.reflection;
@@ -556,7 +559,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const histLink = document.createElement('button');
     histLink.className = 'popup-link';
-    histLink.style.cssText = 'background:none;border:none;cursor:pointer;font-size:0.75rem;color:#888;margin-top:8px;';
     histLink.textContent = 'View in history';
     histLink.addEventListener('click', () => {
       chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });

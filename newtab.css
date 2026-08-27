@@ -1040,12 +1040,34 @@ body.popup .header::after {
   border-top: var(--line-width) solid var(--line);
 }
 
+.session-kicker,
+.muted-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.muted-note {
+  margin: 4px 0 0;
+}
+
 .popup-link {
   color: var(--muted);
   font-size: 12px;
   text-decoration: none;
   font-weight: 500;
   transition: color 160ms ease-out;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+button.popup-link {
+  margin-top: 8px;
 }
 
 .popup-link:hover {

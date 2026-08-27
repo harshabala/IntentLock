@@ -33,17 +33,33 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!weekGlance) return;
 
   chrome.storage.local.get(['sessionHistory'], (result) => {
+    weekGlance.textContent = '';
+
+    if (chrome.runtime.lastError) {
+      const errP = document.createElement('p');
+      errP.className = 'no-session';
+      errP.setAttribute('role', 'alert');
+      errP.textContent = chrome.runtime.lastError.message
+        ? `Could not load stats. ${chrome.runtime.lastError.message}`
+        : 'Could not load stats.';
+      weekGlance.appendChild(errP);
+      return;
+    }
+
     const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
     const sanitizedHistory = sanitizeSessionHistory(rawHistory);
     const summary = summarizeWeek(sanitizedHistory, Date.now());
-
-    weekGlance.textContent = '';
 
     if (summary.sessionCount === 0) {
       const emptyP = document.createElement('p');
       emptyP.className = 'no-session';
       emptyP.textContent = 'No sessions this week yet.';
       weekGlance.appendChild(emptyP);
+      const cta = document.createElement('a');
+      cta.href = 'newtab.html';
+      cta.className = 'popup-link';
+      cta.textContent = 'Open a new tab to declare intent.';
+      weekGlance.appendChild(cta);
     } else {
       weekGlance.appendChild(createGlanceRow('Sessions', `${summary.sessionCount}`));
       weekGlance.appendChild(

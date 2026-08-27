@@ -489,3 +489,50 @@ test('visualized value tokens and no glass kit', async () => {
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /\.tracking-toggle-hit\s*\{[^}]*min-width:\s*44px/s);
 });
+
+test('popup idle HTML includes Last session when rendering history without active session', async () => {
+  const popupJs = await text('popup.js');
+  const idle = extractNamedFunction(popupJs, 'renderIdle');
+  assert.match(idle, /if \(last\)[\s\S]*Last session/);
+  assert.match(idle, /else[\s\S]*No active session\./);
+  assert.doesNotMatch(idle, /else[\s\S]*Last session/);
+  assert.match(popupJs, /function showConfirmEndDialog/);
+  assert.match(popupJs, /End session\?/);
+});
+
+test('showSummary uses session.overrides when events is missing', async () => {
+  const code = await text('newtab.js');
+  const summary = extractNamedFunction(code, 'showSummary');
+  const overrideIdx = summary.indexOf('session.overrides');
+  assert.ok(overrideIdx >= 0, 'showSummary must read session.overrides');
+  const eventsFilterIdx = summary.search(/events\.filter\(\s*(?:e|\()\s*=>\s*e\.actionType\s*===\s*['"]OVERRIDE['"]/);
+  if (eventsFilterIdx >= 0) {
+    assert.ok(
+      overrideIdx < eventsFilterIdx,
+      'session.overrides must be preferred before events OVERRIDE fallback',
+    );
+  }
+  assert.match(summary, /o\.reflection|override\.reflection/);
+});
+
+test('analytics.html has a new-tab CTA and CSS .popup-link has min-height 44px', async () => {
+  const html = await text('analytics.html');
+  const css = await text('newtab.css');
+  const analyticsJs = await text('analytics.js');
+  assert.match(html, /href=["']newtab\.html["']/);
+  const block = css.match(/\.popup-link\s*\{([^}]+)\}/);
+  assert.ok(block, '.popup-link styles required');
+  assert.match(block[1], /min-height:\s*44px/);
+  assert.match(block[1], /display:\s*inline-flex/);
+  assert.doesNotMatch(block[1], /#[0-9a-fA-F]{3,8}/);
+  assert.match(analyticsJs, /chrome\.runtime\.lastError/);
+});
+
+test('popup.js and newtab.js do not use #888', async () => {
+  const popupJs = await text('popup.js');
+  const newtabJs = await text('newtab.js');
+  assert.equal(popupJs.includes('#888'), false);
+  assert.equal(newtabJs.includes('#888'), false);
+  assert.doesNotMatch(popupJs, /font-size:\s*0\.7rem/);
+  assert.doesNotMatch(newtabJs, /color:\s*#888/);
+});
