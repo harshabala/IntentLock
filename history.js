@@ -55,8 +55,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Setup filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+        document.querySelectorAll('.filter-btn').forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
         currentFilter = btn.dataset.filter;
         renderSessions();
       });

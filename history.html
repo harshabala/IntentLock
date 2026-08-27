@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IntentLock — History</title>
   <link rel="stylesheet" href="newtab.css">
 </head>
@@ -19,13 +20,14 @@
 
     <div class="history-controls">
       <div class="search-container">
+        <label for="history-search">Search sessions</label>
         <input type="text" id="history-search" placeholder="Search sessions..." class="search-input">
       </div>
       <div class="history-filters">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="today">Today</button>
-        <button class="filter-btn" data-filter="week">This week</button>
-        <button class="filter-btn" data-filter="month">This month</button>
+        <button type="button" class="filter-btn active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="filter-btn" data-filter="today" aria-pressed="false">Today</button>
+        <button type="button" class="filter-btn" data-filter="week" aria-pressed="false">This week</button>
+        <button type="button" class="filter-btn" data-filter="month" aria-pressed="false">This month</button>
       </div>
     </div>
 

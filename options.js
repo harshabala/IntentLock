@@ -285,7 +285,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const theme = localResult.theme || 'auto';
       document.querySelectorAll('.theme-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.theme === theme);
+        const on = btn.dataset.theme === theme;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
       applyTheme(theme);
     };
@@ -552,7 +554,9 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
         showStatus(dataStatus, 'All data deleted.');
         document.querySelectorAll('.theme-btn').forEach((btn) => {
-          btn.classList.toggle('active', btn.dataset.theme === 'auto');
+          const on = btn.dataset.theme === 'auto';
+          btn.classList.toggle('active', on);
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
         applyTheme('auto');
         deleteDataBtn.disabled = false;
@@ -621,8 +625,11 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
       if (deletionInProgress) return;
       const theme = btn.dataset.theme;
-      document.querySelectorAll('.theme-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('.theme-btn').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       chrome.storage.local.set({ theme }, () => {
         if (deletionInProgress) return;
         applyTheme(theme, true);

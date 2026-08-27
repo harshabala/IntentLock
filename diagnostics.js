@@ -88,8 +88,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       activeFilter = btn.dataset.filter;
       renderEntries();
     });

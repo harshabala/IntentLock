@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IntentLock — Settings</title>
   <link rel="stylesheet" href="newtab.css">
 </head>
@@ -135,9 +136,9 @@
       <p>Choose your preferred color scheme.</p>
 
       <div class="theme-toggle">
-        <button class="theme-btn" data-theme="auto">Auto</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
+        <button type="button" class="theme-btn" data-theme="auto" aria-pressed="true">Auto</button>
+        <button type="button" class="theme-btn" data-theme="dark" aria-pressed="false">Dark</button>
+        <button type="button" class="theme-btn" data-theme="light" aria-pressed="false">Light</button>
       </div>
       <div id="theme-status" class="hidden status-feedback" role="status" aria-live="polite"></div>
     </div>

@@ -536,3 +536,72 @@ test('popup.js and newtab.js do not use #888', async () => {
   assert.doesNotMatch(popupJs, /font-size:\s*0\.7rem/);
   assert.doesNotMatch(newtabJs, /color:\s*#888/);
 });
+
+test('newtab.css category radios are not display none', async () => {
+  const css = await text('newtab.css');
+  const radioBlock = css.match(/\.category-radios input\[type=["']radio["']\]\s*\{([^}]+)\}/);
+  assert.ok(radioBlock, '.category-radios input[type="radio"] styles required');
+  assert.doesNotMatch(radioBlock[1], /display:\s*none/);
+  assert.match(radioBlock[1], /opacity:\s*0/);
+  assert.match(radioBlock[1], /position:\s*absolute/);
+  assert.match(radioBlock[1], /width:\s*1px/);
+  assert.match(radioBlock[1], /height:\s*1px/);
+  assert.match(radioBlock[1], /clip:/);
+  const labelBlock = css.match(/\.category-radios label\s*\{([^}]+)\}/);
+  assert.ok(labelBlock, '.category-radios label styles required');
+  assert.match(labelBlock[1], /min-height:\s*44px/);
+});
+
+test('tracking-toggle input does not set outline none without a focus-visible replacement on the hit box', async () => {
+  const css = await text('newtab.css');
+  const html = await text('options.html');
+  assert.match(html, /class=["']tracking-toggle-hit["']/);
+  const hitTargetBlock = css.match(/\.tracking-toggle-hit\s*\{([^}]+)\}/);
+  assert.ok(hitTargetBlock, 'tracking-toggle-hit styles required');
+  assert.match(hitTargetBlock[1], /min-width:\s*44px/);
+  assert.match(hitTargetBlock[1], /min-height:\s*44px/);
+  const inputBlock = css.match(/\.tracking-toggle-hit input\[type=["']checkbox["']\]\s*\{([^}]+)\}/);
+  assert.ok(inputBlock, 'tracking-toggle checkbox styles required');
+  const outlineNone = /outline:\s*none/.test(inputBlock[1]);
+  const hitFocus = css.match(/\.tracking-toggle-hit(?:\s+input\[type=["']checkbox["']\])?:focus-visible\s*\{([^}]+)\}/);
+  if (outlineNone) {
+    assert.ok(hitFocus, 'outline:none requires :focus-visible on the tracking hit box');
+    assert.match(hitFocus[1], /outline:\s*(?!none\b)/);
+  }
+});
+
+test('popup/options/analytics/intervention HTML include viewport meta', async () => {
+  const pages = ['popup.html', 'options.html', 'analytics.html', 'intervention.html', 'history.html', 'diagnostics.html'];
+  for (const page of pages) {
+    const html = await text(page);
+    assert.match(
+      html,
+      /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1(?:\.0)?["']\s*\/?>/i,
+      `${page} needs viewport meta`,
+    );
+  }
+});
+
+test('history search has a for-linked label and filter buttons expose aria-pressed', async () => {
+  const html = await text('history.html');
+  const optionsHtml = await text('options.html');
+  const optionsJs = await text('options.js');
+  const historyJs = await text('history.js');
+  assert.match(html, /<label[^>]*for=["']history-search["']/);
+  assert.match(html, /filter-btn active[^>]*aria-pressed=["']true["']/);
+  assert.match(optionsHtml, /theme-btn[^>]*aria-pressed=/);
+  assert.match(optionsJs, /setAttribute\(\s*['"]aria-pressed['"]/);
+  assert.match(historyJs, /setAttribute\(\s*['"]aria-pressed['"]/);
+});
+
+test('history-meta diagnostics-meta tabular-nums and h1 intent-statement text-wrap balance', async () => {
+  const css = await text('newtab.css');
+  for (const selector of ['.history-meta', '.diagnostics-meta']) {
+    const escaped = selector.replace(/\./g, '\\.');
+    const block = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`));
+    assert.ok(block, `${selector} styles required`);
+    assert.match(block[1], /font-variant-numeric:\s*tabular-nums/);
+  }
+  assert.match(css, /h1[\s\S]*?text-wrap:\s*balance/);
+  assert.match(css, /\.intent-statement[\s\S]*?text-wrap:\s*balance/);
+});

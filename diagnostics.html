@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IntentLock — Diagnostics</title>
   <link rel="stylesheet" href="newtab.css">
 </head>
@@ -20,12 +21,12 @@
       <div id="copy-status" class="hidden status-feedback"></div>
 
       <div class="history-filters diagnostics-filters">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="api">API</button>
-        <button class="filter-btn" data-filter="validation">Validation</button>
-        <button class="filter-btn" data-filter="storage">Storage</button>
-        <button class="filter-btn" data-filter="ui">UI</button>
-        <button class="filter-btn" data-filter="runtime">Runtime</button>
+        <button type="button" class="filter-btn active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="filter-btn" data-filter="api" aria-pressed="false">API</button>
+        <button type="button" class="filter-btn" data-filter="validation" aria-pressed="false">Validation</button>
+        <button type="button" class="filter-btn" data-filter="storage" aria-pressed="false">Storage</button>
+        <button type="button" class="filter-btn" data-filter="ui" aria-pressed="false">UI</button>
+        <button type="button" class="filter-btn" data-filter="runtime" aria-pressed="false">Runtime</button>
       </div>
 
       <div id="empty-log" class="hidden">
