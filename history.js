@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Load, sanitize, and persist retention-pruned sessions.
+  // Load and sanitize for display; pruning here is in-memory only (not written back).
   loadSessionHistory((sessions) => {
     allSessions = sessions;
 

@@ -367,6 +367,40 @@ test('store listing pack has CWS fields and a five-shot plan', async () => {
   assert.match(shots, /settings/);
 });
 
+test('store-assets-plan blurb matches LISTING heuristics-first short description', async () => {
+  const listing = await text('store/LISTING.md');
+  const plan = await text('docs/store-assets-plan.md');
+  const short = listing.split('## Short description')[1].trim().split('\n')[0].trim();
+  assert.match(short, /Heuristics work with no API key/);
+  assert.ok(plan.includes(short), 'store-assets-plan must include LISTING short description');
+  assert.equal(plan.includes('real-time local and LLM drift interventions'), false);
+});
+
+test('TASKS.md marks IL-2 vow-only declare and IL-4 week glance on analytics', async () => {
+  const tasks = await text('docs/TASKS.md');
+  assert.match(tasks, /IL-2.*Done/s);
+  assert.match(tasks, /IL-2.*vow-only|vow-only declare|no presets/i);
+  assert.match(tasks, /IL-4.*Done/s);
+  assert.match(tasks, /IL-4.*analytics/i);
+  assert.doesNotMatch(tasks, /\| IL-2 \|[^|]*\| Pending \|/);
+  assert.doesNotMatch(tasks, /\| IL-4 \|[^|]*\| Pending \|/);
+});
+
+test('architecture and development inventories list analytics.js and onboarding.js', async () => {
+  const arch = await text('docs/architecture.md');
+  const dev = await text('docs/development.md');
+  assert.match(arch, /analytics\.js/);
+  assert.match(arch, /onboarding\.js/);
+  assert.match(dev, /analytics\.js/);
+  assert.match(dev, /onboarding\.js/);
+});
+
+test('history.js does not claim sanitize persists pruned history', async () => {
+  const history = await text('history.js');
+  assert.doesNotMatch(history, /sanitize,?\s+and\s+persist/i);
+  assert.doesNotMatch(history, /persist retention-pruned/i);
+});
+
 test('fallback lock actions match overlay pair layout', async () => {
   const css = await text('intervention.css');
   const newtab = await text('newtab.css');

@@ -5,19 +5,22 @@ Canonical listing copy lives in `store/LISTING.md`. This document retains the br
 ## 1. Listing Metadata & Copy
 
 ### Single-Sentence Summary (Max 160 characters)
-*Length: 139 characters*
-> Keep your browsing aligned with your goals. Declare your intent, set a time budget, and get real-time local and LLM drift interventions.
+*Length: 110 characters — matches `store/LISTING.md` short description*
+> Declare your intent. IntentLock watches your tabs and locks the page when you drift. Heuristics work with no API key.
 
 ### Detailed Description
-IntentLock is a minimalist, privacy-first tool designed to combat passive browsing and distraction loops. By prompting you to declare a specific task before opening a new tab, IntentLock acts as a cognitive speed bump to keep you focused.
+IntentLock enforces the browsing intent you declare before you start a session. Open a new tab, declare what you intend to do (optional time budget), and IntentLock watches your tabs. Local heuristics run with no API key. If you drift, the page locks — reflect in writing to continue, or close the tab / end the session.
+
+Local-only by default: session data stays on this device. No accounts, sync, telemetry, or habit dashboard. Optional AI is a second opinion only — configure a provider later in Settings if you want one.
 
 **Key Features:**
-- **Stark VV Styling:** A high-contrast, distraction-free aesthetic with monospace typography and sharp geometric borders.
-- **Timer and Alarms:** Explicit session time limits with automatic background alarms to keep you on schedule.
-- **Tab Grouping:** Automatic consolidation of session-related tabs to organize workspace and prevent visual clutter.
-- **Local Heuristics & LLM Check:** Hybrid analysis that runs lightning-fast local keyword checks alongside direct LLM evaluation when a drift occurs.
-- **Local History Export:** Save your session history locally, and export all intent data as structured JSON files.
-- **Secure Session Memory:** All keys are kept in secure session storage (`chrome.storage.session`) and cleared automatically when you close the browser.
+- **Vow-only declare:** Intent plus optional minutes on new tab; no preset upsell on Lock in.
+- **Local heuristics first:** Drift checks work with no API key.
+- **Full-page lock:** Reflect to continue, or close the tab / end the session.
+- **Timer and alarms:** Optional time budget with background alarms.
+- **Week glance:** Compact popup summary plus dedicated analytics page.
+- **Local history:** Bounded on-device session history; optional JSON export.
+- **Optional AI:** Second-opinion LLM only when configured in Settings.
 
 ---
 
