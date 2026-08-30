@@ -330,7 +330,11 @@ test('packaging reports spawn failures accurately and removes partial output', a
 });
 
 test('GitHub Actions workflows use minimal permissions and immutable action references', async () => {
-  for (const workflow of ['.github/workflows/test.yml', '.github/workflows/release.yml']) {
+  for (const workflow of [
+    '.github/workflows/test.yml',
+    '.github/workflows/release.yml',
+    '.github/workflows/pages.yml',
+  ]) {
     const code = await readRoot(workflow);
     assert.match(code, /permissions:/);
     for (const match of code.matchAll(/uses:\s*([^\s]+)@([^\s]+)/g)) {
