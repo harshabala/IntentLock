@@ -23,11 +23,11 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     nextBtn.type = 'button';
     nextBtn.className = 'primary-btn onboarding-btn';
     nextBtn.textContent = 'Continue';
-    nextBtn.addEventListener('click', showStep3);
+    nextBtn.addEventListener('click', showStep2);
     container.appendChild(nextBtn);
   }
 
-  function showStep3() {
+  function showStep2() {
     container.textContent = '';
 
     const header = document.createElement('div');

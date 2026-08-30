@@ -11,7 +11,9 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.remove('theme-dark');
     root.classList.add('theme-light');
   } else {
-    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.remove('theme-light');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('theme-dark', prefersDark);
   }
 });
 

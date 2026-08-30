@@ -10,13 +10,13 @@ Heuristics run with no API key. An optional AI provider in Settings is a second 
 2. Unzip it.
 3. Chrome → `chrome://extensions` → enable **Developer mode**.
 4. **Load unpacked** → select the unzipped folder.
-5. Open a new tab. Welcome → set default policy → **Lock in** an intent.
+5. Open a new tab. Declare your intent. → set default policy → **Lock in** an intent.
 
 From source: clone this repo, load the repo folder unpacked, then `npm test`.
 
 ## First run
 
-1. Welcome
+1. Declare your intent.
 2. Default intent type + strictness (you can change this later in Settings)
 3. Type this session's intent and optional time budget. Click **Lock in**.
 
@@ -73,7 +73,7 @@ Two-step wizard on the new tab page, then the session form:
 
 | Step | What happens |
 |------|-------------|
-| **1 — Welcome** | Explains the extension; one click to continue |
+| **1 — Declare your intent.** | Explains the extension; one click to continue |
 | **2 — Default policy** | Pick your intent category (Job Search, Deep Work, Coding, …) and a strictness preset (relaxed / balanced / strict) |
 
 After onboarding, each new tab shows the **session form**: type your specific intent, set an optional time budget, and click **Lock in**. AI providers are configured later in Settings, not during onboarding.

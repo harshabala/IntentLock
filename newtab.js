@@ -9,7 +9,9 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.remove('theme-dark');
     root.classList.add('theme-light');
   } else {
-    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.remove('theme-light');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('theme-dark', prefersDark);
   }
 });
 
@@ -96,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
       finish();
     });
     // Fallback in case transitionend doesn't fire
-    setTimeout(finish, 250);
+    setTimeout(finish, 180);
   }
 
   function setupModalDialog({ overlay, dialog, heading, trigger }) {
@@ -106,6 +108,11 @@ document.addEventListener('DOMContentLoaded', () => {
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
     dialog.setAttribute('aria-labelledby', headingId);
+
+    requestAnimationFrame(() => {
+      overlay.classList.add('is-open');
+    });
+
 
     const FOCUSABLE_SELECTOR =
       'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -649,11 +656,13 @@ document.addEventListener('DOMContentLoaded', () => {
     content.className = 'shortcuts-content';
 
     const h3 = document.createElement('h3');
-    h3.textContent = 'Keyboard Shortcuts';
+    h3.textContent = 'Keyboard shortcuts';
     content.appendChild(h3);
 
+    const platform = navigator.userAgentData?.platform || navigator.platform || '';
+    const modKey = /mac|iphone|ipad|ipod/i.test(platform) ? '⌘' : 'Ctrl';
     const shortcuts = [
-      { keys: ['Ctrl', 'Shift', 'L'], desc: 'Start/End session' },
+      { keys: [modKey, 'Shift', 'L'], desc: 'Start/End session' },
       { keys: ['Tab'], desc: 'Navigate form fields' },
       { keys: ['Enter'], desc: 'Submit form' },
       { keys: ['Esc'], desc: 'Close modal' }

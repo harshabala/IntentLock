@@ -605,3 +605,97 @@ test('history-meta diagnostics-meta tabular-nums and h1 intent-statement text-wr
   assert.match(css, /h1[\s\S]*?text-wrap:\s*balance/);
   assert.match(css, /\.intent-statement[\s\S]*?text-wrap:\s*balance/);
 });
+
+test('theme auto applies theme-dark when matchMedia prefers dark', async () => {
+  const options = await text('options.js');
+  const newtab = await text('newtab.js');
+  for (const src of [options, newtab]) {
+    assert.match(src, /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/);
+    assert.match(src, /theme-dark/);
+  }
+  const apply = extractNamedFunction(options, 'applyTheme');
+  assert.match(apply, /prefers-color-scheme:\s*dark/);
+  assert.match(apply, /theme-dark/);
+  assert.doesNotMatch(apply, /opacity:\s*['"]?0\.6/);
+  assert.doesNotMatch(options, /opacity:\s*['"]0\.6['"]/);
+});
+
+test('shortcuts heading is sentence case and Mac uses Command glyph', async () => {
+  const code = await text('newtab.js');
+  assert.match(code, /textContent\s*=\s*['"]Keyboard shortcuts['"]/);
+  assert.equal(code.includes('Keyboard Shortcuts'), false);
+  assert.match(code, /userAgentData|navigator\.platform/);
+  assert.match(code, /⌘|Command/);
+});
+
+test('README first-run copy matches wizard Declare your intent', async () => {
+  const readme = await text('README.md');
+  assert.match(readme, /Declare your intent\./);
+  assert.equal(readme.includes('Welcome to IntentLock'), false);
+  assert.doesNotMatch(readme, /\|\s*\*\*1 — Welcome\*\*/);
+});
+
+test('confirm and shortcuts overlays use class opacity without nested dialog fade', async () => {
+  const css = await text('newtab.css');
+  const code = await text('newtab.js');
+  for (const selector of ['.confirm-overlay', '.shortcuts-modal']) {
+    const escaped = selector.replace(/\./g, '\\.');
+    const block = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`, 's'));
+    assert.ok(block, `${selector} styles required`);
+    assert.match(block[1], /transition:\s*opacity\s+160ms\s+ease-out/);
+    assert.doesNotMatch(block[1], /animation:\s*fadeIn/);
+  }
+  const dialog = css.match(/\.confirm-dialog\s*\{([^}]+)\}/s);
+  assert.ok(dialog, '.confirm-dialog styles required');
+  assert.doesNotMatch(dialog[1], /animation:\s*fadeIn/);
+  assert.match(css, /\.confirm-overlay\.is-open|\.shortcuts-modal\.is-open/);
+  assert.match(code, /classList\.add\(\s*['"]is-open['"]\s*\)/);
+  assert.match(code, /setTimeout\(\s*finish\s*,\s*180\s*\)/);
+});
+
+test('options status uses 160ms ease-out and button active includes transform', async () => {
+  const options = await text('options.js');
+  const css = await text('newtab.css');
+  assert.match(options, /opacity\s+160ms\s+ease-out/);
+  assert.doesNotMatch(options, /200ms\s+cubic-bezier\(0\.2,\s*0,\s*0,\s*1\)/);
+  const buttonBlock = css.match(/^button\s*\{([^}]+)\}/m)
+    || css.match(/(?:^|\n)button\s*\{([^}]+)\}/);
+  assert.ok(buttonBlock, 'button styles required');
+  assert.match(buttonBlock[1], /transition:[^;]*transform/);
+});
+
+test('status history diagnostics left rails are 1px and unused preset CSS removed', async () => {
+  const css = await text('newtab.css');
+  for (const selector of ['#status-message', '.reflection-item', '.history-card', '.diagnostics-entry']) {
+    const escaped = selector.replace(/\./g, '\\.').replace(/#/g, '\\#');
+    const block = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`, 's'));
+    assert.ok(block, `${selector} styles required`);
+    assert.match(block[1], /border-left(?:-width)?:\s*1px/);
+    assert.doesNotMatch(block[1], /border-left(?:-width)?:\s*2px/);
+  }
+  assert.doesNotMatch(css, /#intent-preset/);
+  assert.doesNotMatch(css, /#session-strictness/);
+  assert.doesNotMatch(css, /\.plan-list\s*\{/);
+  assert.doesNotMatch(css, /\.plan-step\s*\{/);
+  assert.doesNotMatch(css, /\.api-notice\s*\{/);
+});
+
+test('bundled VV fonts or documented family names remain and no outline none regression', async () => {
+  const css = await text('newtab.css');
+  assert.match(css, /IBM Plex Mono/);
+  assert.match(css, /Source Serif 4/);
+  assert.match(css, /@font-face/);
+  assert.match(css, /fonts\/IBMPlexMono-Regular\.woff2/);
+  assert.match(css, /fonts\/SourceSerif4-Regular\.woff2/);
+  assert.match(css, /fonts\/SourceSerif4-Italic\.woff2/);
+  assert.equal(/outline:\s*none/.test(css), false);
+  assert.match(css, /--bg-white:\s*#ffffff/);
+  assert.match(css, /--fg-black:\s*#000000/);
+  assert.match(css, /--muted-black:\s*#1a1a1a/);
+});
+
+test('onboarding second step is not named showStep3', async () => {
+  const code = await text('onboarding.js');
+  assert.equal(code.includes('showStep3'), false);
+  assert.match(code, /function\s+showStep2\s*\(/);
+});

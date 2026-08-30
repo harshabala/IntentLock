@@ -344,14 +344,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 3000);
     } else {
       el.style.opacity = '0';
-      el.style.transition = 'opacity 200ms cubic-bezier(0.2, 0, 0, 1)';
+      el.style.transition = 'opacity 160ms ease-out';
       el.offsetHeight;
       el.style.opacity = '1';
       el._hideTimer = setTimeout(() => {
         el.style.opacity = '0';
         setTimeout(() => {
           el.style.display = 'none';
-        }, 200);
+        }, 160);
       }, 3000);
     }
   }
@@ -577,33 +577,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  function applyTheme(theme, animate) {
+  function applyTheme(theme) {
     const root = document.documentElement;
-
-    function setTheme() {
-      if (theme === 'auto') {
-        root.style.removeProperty('color-scheme');
-        root.classList.remove('theme-dark', 'theme-light');
-      } else if (theme === 'dark') {
-        root.style.colorScheme = 'dark';
-        root.classList.remove('theme-light');
-        root.classList.add('theme-dark');
-      } else if (theme === 'light') {
-        root.style.colorScheme = 'light';
-        root.classList.remove('theme-dark');
-        root.classList.add('theme-light');
-      }
-    }
-
-    if (animate && !reducedMotion) {
-      document.body.style.transition = 'opacity 150ms cubic-bezier(0.2, 0, 0, 1)';
-      document.body.style.opacity = '0.6';
-      setTimeout(() => {
-        setTheme();
-        document.body.style.opacity = '1';
-      }, 150);
-    } else {
-      setTheme();
+    if (theme === 'auto') {
+      root.style.removeProperty('color-scheme');
+      root.classList.remove('theme-light');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.classList.toggle('theme-dark', prefersDark);
+    } else if (theme === 'dark') {
+      root.style.colorScheme = 'dark';
+      root.classList.remove('theme-light');
+      root.classList.add('theme-dark');
+    } else if (theme === 'light') {
+      root.style.colorScheme = 'light';
+      root.classList.remove('theme-dark');
+      root.classList.add('theme-light');
     }
   }
 
@@ -632,7 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       chrome.storage.local.set({ theme }, () => {
         if (deletionInProgress) return;
-        applyTheme(theme, true);
+        applyTheme(theme);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
       });
