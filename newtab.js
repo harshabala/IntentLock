@@ -15,8 +15,6 @@ chrome.storage.local.get(['theme'], (result) => {
   }
 });
 
-import { generateIntentPlan } from './llm.js';
-import { getLlmConfig, isLlmConfigured } from './providers.js';
 import { mergePolicyWithIntent } from './heuristic-policy.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
@@ -781,27 +779,6 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       startSession();
-
-      getLlmConfig().then((config) => {
-        if (!isLlmConfigured(config)) return null;
-        return generateIntentPlan(intent);
-      }).then((result) => {
-        if (!result) return;
-        if (result.error) {
-          logError({
-            type: ERROR_TYPES.RUNTIME,
-            message: result.error.message,
-            source: 'session_start',
-          });
-        }
-      }).catch((err) => {
-        logError({
-          type: ERROR_TYPES.RUNTIME,
-          message: 'Unexpected error while generating a session plan.',
-          details: { error: err.message },
-          source: 'session_start',
-        });
-      });
     });
   }
 });

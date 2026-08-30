@@ -450,6 +450,12 @@ test('fallback stagger-1 has animation none', async () => {
   assert.match(stagger[1], /animation:\s*none/);
 });
 
+test('fallback lock uses intervention state.intent when GET_SESSION has no intent', async () => {
+  const js = await text('intervention.js');
+  assert.match(js, /GET_SESSION/);
+  assert.match(js, /session\?\.intent\s*\|\|\s*(?:interventionState|state)\?\.intent/);
+});
+
 test('fallback lock textarea maxlength is 2000 and continue hint is present', async () => {
   const html = await text('intervention.html');
   const js = await text('intervention.js');
@@ -476,21 +482,14 @@ test('overlay copy uses sentence-case lock language', async () => {
   assert.match(js, /overlayEnter|scale\(0\.98\)/);
 });
 
-test('Lock in sends SESSION_STARTED without awaiting generateIntentPlan', async () => {
+test('Lock in sends SESSION_STARTED without awaiting or calling generateIntentPlan', async () => {
   const code = await text('newtab.js');
   const bind = extractNamedFunction(code, 'bindForm');
   assert.match(bind, /SESSION_STARTED/);
   assert.match(bind, /startSession\s*\(\s*\)/);
   assert.doesNotMatch(bind, /await\s+generateIntentPlan/);
-  assert.doesNotMatch(bind, /generateIntentPlan\([\s\S]*?\.finally\s*\(\s*startSession/);
-  const planIdx = bind.indexOf('generateIntentPlan');
-  const startedIdx = bind.indexOf('SESSION_STARTED');
-  const startCallIdx = bind.indexOf('startSession()');
-  assert.ok(startedIdx >= 0 && startCallIdx >= 0);
-  if (planIdx >= 0) {
-    assert.ok(startCallIdx < planIdx, 'SESSION_STARTED path must run before generateIntentPlan');
-    assert.match(bind, /isLlmConfigured/);
-  }
+  assert.doesNotMatch(bind, /generateIntentPlan/);
+  assert.doesNotMatch(code, /from ['"]\.\/llm\.js['"]/);
   assert.match(code, /mergePolicyWithIntent\(/);
 });
 
@@ -534,6 +533,16 @@ test('popup idle HTML includes Last session when rendering history without activ
   assert.match(popupJs, /End session\?/);
 });
 
+test('popup.js sets is-open on the confirm overlay after append', async () => {
+  const popupJs = await text('popup.js');
+  const showConfirm = extractNamedFunction(popupJs, 'showConfirmEndDialog');
+  const appendIdx = showConfirm.indexOf('appendChild(overlay)');
+  assert.ok(appendIdx >= 0, 'showConfirmEndDialog must append the overlay');
+  const afterAppend = showConfirm.slice(appendIdx);
+  assert.match(afterAppend, /requestAnimationFrame/);
+  assert.match(afterAppend, /classList\.add\(\s*['"]is-open['"]\s*\)/);
+});
+
 test('showSummary uses session.overrides when events is missing', async () => {
   const code = await text('newtab.js');
   const summary = extractNamedFunction(code, 'showSummary');
@@ -554,6 +563,8 @@ test('analytics.html has a new-tab CTA and CSS .popup-link has min-height 44px',
   const css = await text('newtab.css');
   const analyticsJs = await text('analytics.js');
   assert.match(html, /href=["']newtab\.html["']/);
+  assert.match(html, /Open a new tab to declare intent\./);
+  assert.doesNotMatch(analyticsJs, /Open a new tab to declare intent/);
   const block = css.match(/\.popup-link\s*\{([^}]+)\}/);
   assert.ok(block, '.popup-link styles required');
   assert.match(block[1], /min-height:\s*44px/);

@@ -57,11 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
       emptyP.className = 'no-session';
       emptyP.textContent = 'No sessions this week yet.';
       weekGlance.appendChild(emptyP);
-      const cta = document.createElement('a');
-      cta.href = 'newtab.html';
-      cta.className = 'popup-link';
-      cta.textContent = 'Open a new tab to declare intent.';
-      weekGlance.appendChild(cta);
     } else {
       weekGlance.appendChild(createGlanceRow('Sessions', `${summary.sessionCount}`));
       weekGlance.appendChild(

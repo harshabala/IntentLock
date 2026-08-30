@@ -129,6 +129,9 @@ document.addEventListener('DOMContentLoaded', () => {
     dialog.append(h3, p, actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    requestAnimationFrame(() => {
+      overlay.classList.add('is-open');
+    });
     cancelBtn.focus();
   }
 

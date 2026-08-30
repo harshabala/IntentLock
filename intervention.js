@@ -156,17 +156,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   currentTabId = tabResult?.id ?? null;
 
   const [sessionResult, stateResult] = await Promise.all([
-    new Promise((resolve) => chrome.storage.local.get(['activeSession'], resolve)),
+    sendRuntimeMessage({ type: 'GET_SESSION' }),
     sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE', tabId: currentTabId }),
   ]);
 
-  if (sessionResult.activeSession?.isActive) {
-    currentIntent.textContent = sessionResult.activeSession.intent || 'No active session intent.';
+  const session = sessionResult.response?.session;
+  interventionState = stateResult.response?.state || null;
+  const intent = session?.intent || interventionState?.intent || '';
+  if (intent) {
+    currentIntent.textContent = intent;
+  } else if (session?.isActive) {
+    currentIntent.textContent = 'No active session intent.';
   } else {
     currentIntent.textContent = 'No active session found.';
   }
-
-  interventionState = stateResult.response?.state || null;
   const title = document.getElementById('intervention-title');
   if (interventionState?.reason === 'Time budget exceeded.') {
     if (title) title.textContent = 'Time budget exceeded.';
