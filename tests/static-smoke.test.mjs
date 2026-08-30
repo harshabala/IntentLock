@@ -351,7 +351,7 @@ test('privacy site page exists for Chrome Web Store hosting', async () => {
   assert.match(html, /Ollama/);
   assert.match(html, /does not operate an intermediary/);
   const workflow = await text('.github/workflows/pages.yml');
-  assert.match(workflow, /peaceiris\/actions-gh-pages@329bcc8f12caed2cefe5a5b80781499a6f3b361b/);
+  assert.match(workflow, /peaceiris\/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453/);
   assert.match(workflow, /docs\/site/);
 });
 
