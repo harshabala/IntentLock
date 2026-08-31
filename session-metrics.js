@@ -9,7 +9,7 @@ export const MAX_DOMAIN_ENTRIES = 50;
 export const PRIVACY_COPY = 'Stored locally by default. An enabled remote provider receives minimized intent context.';
 export const ON_INTENT_METHOD_COPY =
   "On-intent % is time on sites that matched your intent policy vs total active browsing in this session. " +
-  "It is an estimate from active-tab time — heuristics don't need an API key.";
+  'It is an estimate from active-tab time and does not need an API key.';
 
 export function createSessionMetrics() {
   return {

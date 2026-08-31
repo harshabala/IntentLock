@@ -33,9 +33,9 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     const header = document.createElement('div');
     header.className = 'header onboarding-header';
     const h1 = document.createElement('h1');
-    h1.textContent = 'Set your default policy';
+    h1.textContent = 'How hard should the lock be?';
     const desc = document.createElement('p');
-    desc.textContent = 'Heuristics work with no API key. Add an AI provider later in Settings.';
+    desc.textContent = 'Works on this device with no account. You can add optional AI later in Settings.';
     header.append(h1, desc);
     container.appendChild(header);
 
@@ -44,7 +44,7 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     categoryGroup.className = 'input-group onboarding-input-group';
     const categoryLabel = document.createElement('label');
     categoryLabel.setAttribute('for', 'onboarding-category');
-    categoryLabel.textContent = 'Default intent type';
+    categoryLabel.textContent = 'What kind of work is this usually?';
     const categorySelect = document.createElement('select');
     categorySelect.id='onboarding-category';
     INTENT_CATEGORIES.forEach(cat => {
@@ -62,13 +62,13 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     strictnessGroup.className = 'input-group onboarding-input-group';
     const strictnessLabel = document.createElement('label');
     strictnessLabel.setAttribute('for', 'onboarding-strictness');
-    strictnessLabel.textContent = 'Strictness';
+    strictnessLabel.textContent = 'How often should it lock?';
     const strictnessSelect = document.createElement('select');
     strictnessSelect.id='onboarding-strictness';
     [
-      { value: 'relaxed', text: 'Relaxed — only block short video' },
-      { value: 'balanced', text: 'Balanced — block social, short video, streaming' },
-      { value: 'strict', text: 'Strict — block social, video, gaming, forums' },
+      { value: 'relaxed', text: 'Relaxed — only lock short video' },
+      { value: 'balanced', text: 'Balanced — lock social, short video, streaming' },
+      { value: 'strict', text: 'Strict — lock social, video, gaming, forums' },
     ].forEach(({ value, text }) => {
       const option = document.createElement('option');
       option.value = value;
@@ -91,7 +91,7 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'primary-btn onboarding-lock-btn';
-    saveBtn.textContent = 'Save policy';
+    saveBtn.textContent = 'Save and continue';
     saveBtn.addEventListener('click', () => {
       const policy = buildDefaultPolicy(categorySelect.value, strictnessSelect.value);
       policy.setupCompleted = true;
@@ -99,7 +99,7 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
       saveBtn.textContent = 'Saving...';
       if (isDeletionInProgress()) {
         saveBtn.disabled = false;
-        saveBtn.textContent = 'Save policy';
+        saveBtn.textContent = 'Save and continue';
         return;
       }
       chrome.storage.local.set({ heuristicPolicy: policy, hasSeenOnboarding: true }, () => {
@@ -108,7 +108,7 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
           statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
           statusEl.classList.remove('hidden');
           saveBtn.disabled = false;
-          saveBtn.textContent = 'Save policy';
+          saveBtn.textContent = 'Save and continue';
           return;
         }
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {

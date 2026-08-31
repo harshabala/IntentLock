@@ -322,7 +322,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const intentQuote = document.createElement('p');
     intentQuote.className = 'intent-quote intent-statement';
     intentQuote.textContent = session.intent;
-    header.appendChild(intentQuote);
+    const nextStep = document.createElement('p');
+    nextStep.className = 'next-step';
+    nextStep.textContent = 'Use the address bar to go to your work. Drift locks the page.';
+    header.append(intentQuote, nextStep);
     container.appendChild(header);
 
     createTimer(session, container);

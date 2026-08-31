@@ -309,11 +309,40 @@ test('onboarding wizard does not collect an API key', async () => {
   assert.equal(wizard.includes('CHOOSE YOUR DETECTION MODE'), false);
   assert.equal(wizard.includes('provider-select'), false);
   assert.match(wizard, /Declare your intent/);
-  assert.match(wizard, /Set your default policy/);
-  assert.match(wizard, /Add an AI provider later in Settings/);
+  assert.match(wizard, /How hard should the lock be\?/);
+  assert.match(wizard, /You can add optional AI later in Settings/);
   assert.match(wizard, /id=['"]onboarding-category['"]/);
   assert.match(wizard, /id=['"]onboarding-strictness['"]/);
   assert.equal(/\bSKIP\b/.test(wizard), false);
+});
+
+test('first-run copy drops jargon and active session has a next step', async () => {
+  const wizard = await text('onboarding.js');
+  assert.match(wizard, /How hard should the lock be\?/);
+  assert.match(wizard, /Works on this device with no account\. You can add optional AI later in Settings\./);
+  assert.match(wizard, /What kind of work is this usually\?/);
+  assert.match(wizard, /How often should it lock\?/);
+  assert.match(wizard, /Relaxed — only lock short video/);
+  assert.match(wizard, /Balanced — lock social, short video, streaming/);
+  assert.match(wizard, /Strict — lock social, video, gaming, forums/);
+  assert.match(wizard, /Save and continue/);
+  assert.equal(wizard.includes('Heuristics work'), false);
+  assert.equal(wizard.includes('Default intent type'), false);
+  assert.doesNotMatch(wizard, /textContent\s*=\s*['"]Strictness['"]/);
+  assert.match(wizard, /id=['"]onboarding-category['"]/);
+  assert.match(wizard, /id=['"]onboarding-strictness['"]/);
+
+  const policy = await text('heuristic-policy.js');
+  assert.doesNotMatch(policy, /\$\{intentCat\.label\} \(heuristic\)/);
+  assert.match(policy, /This looks like \$\{siteCat\.label\} during \$\{intentCat\.label\}\./);
+
+  const active = extractNamedFunction(await text('newtab.js'), 'showActiveState');
+  assert.match(active, /className\s*=\s*['"]next-step['"]/);
+  assert.match(active, /Use the address bar to go to your work\. Drift locks the page\./);
+
+  const metrics = await text('session-metrics.js');
+  assert.match(metrics, /It is an estimate from active-tab time and does not need an API key\./);
+  assert.doesNotMatch(metrics, /heuristics don't need an API key/i);
 });
 
 test('lock copy avoids welcome and on-track coaching', async () => {

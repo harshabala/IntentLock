@@ -214,6 +214,8 @@ test('blocked category domain triggers immediate intervention (score >= 0.9)', (
   assert.equal(result.reason, 'blocked_category');
   assert.ok(Array.isArray(result.signals));
   assert.ok(typeof result.reasonLabel === 'string' && result.reasonLabel.length > 0);
+  assert.doesNotMatch(result.reasonLabel, /\(heuristic\)/);
+  assert.match(result.reasonLabel, /This looks like .+ during .+\./);
 });
 
 test('job_search intent on linkedin does not intervene', () => {

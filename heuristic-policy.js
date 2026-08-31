@@ -749,7 +749,7 @@ export function evaluatePolicyDrift({
     signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');
     const intentCat = INTENT_CATEGORIES.find(c => c.id === safePolicy.intentCategoryId);
     const reasonLabel = (siteCat && intentCat)
-      ? `This looks like ${siteCat.label} during ${intentCat.label} (heuristic).`
+      ? `This looks like ${siteCat.label} during ${intentCat.label}.`
       : REASON_LABELS.blocked_category;
     return {
       shouldIntervene: true,
