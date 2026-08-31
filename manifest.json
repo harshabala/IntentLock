@@ -36,6 +36,14 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [{
+    "resources": [
+      "fonts/IBMPlexMono-Regular.woff2",
+      "fonts/SourceSerif4-Regular.woff2",
+      "fonts/SourceSerif4-Italic.woff2"
+    ],
+    "matches": ["http://*/*", "https://*/*"]
+  }],
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true

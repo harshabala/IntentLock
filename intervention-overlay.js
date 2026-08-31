@@ -11,7 +11,31 @@
   }
 
   function buildOverlayStyles() {
+    const monoRegular = chrome.runtime.getURL('fonts/IBMPlexMono-Regular.woff2');
+    const serifRegular = chrome.runtime.getURL('fonts/SourceSerif4-Regular.woff2');
+    const serifItalic = chrome.runtime.getURL('fonts/SourceSerif4-Italic.woff2');
     return `
+    @font-face {
+      font-family: "IBM Plex Mono";
+      src: url("${monoRegular}") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Source Serif 4";
+      src: url("${serifRegular}") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Source Serif 4";
+      src: url("${serifItalic}") format("woff2");
+      font-weight: 400;
+      font-style: italic;
+      font-display: swap;
+    }
     :host {
       all: initial;
       position: fixed;

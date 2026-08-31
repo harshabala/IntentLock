@@ -98,6 +98,22 @@ test('manifest declares alarms and a supported ordered classic content script', 
   assert.match(contentCode, /IntentLock\.interventionOverlay/);
 });
 
+test('manifest exposes packaged VV fonts to http and https pages', async () => {
+  const manifest = JSON.parse(await readRoot('manifest.json'));
+  const entries = manifest.web_accessible_resources || [];
+  const fontEntry = entries.find((entry) =>
+    (entry.resources || []).includes('fonts/IBMPlexMono-Regular.woff2'),
+  );
+
+  assert.ok(fontEntry, 'web_accessible_resources must list VV font files');
+  assert.deepEqual(fontEntry.resources, [
+    'fonts/IBMPlexMono-Regular.woff2',
+    'fonts/SourceSerif4-Regular.woff2',
+    'fonts/SourceSerif4-Italic.woff2',
+  ]);
+  assert.deepEqual(fontEntry.matches, ['http://*/*', 'https://*/*']);
+});
+
 test('manifest and HTML runtime references resolve to files in the repository', async () => {
   const manifest = JSON.parse(await readRoot('manifest.json'));
   const references = [

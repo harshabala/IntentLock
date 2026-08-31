@@ -3,7 +3,15 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { loadClassicScript } from './helpers/load-classic-script.mjs';
 
-const overlayRuntime = await loadClassicScript(new URL('../intervention-overlay.js', import.meta.url));
+const chrome = {
+  runtime: {
+    getURL: (path) => `chrome-extension://mock/${path}`,
+  },
+};
+
+const overlayRuntime = await loadClassicScript(new URL('../intervention-overlay.js', import.meta.url), {
+  chrome,
+});
 const { buildOverlayStyles, createInterventionOverlay } = overlayRuntime.IntentLock.interventionOverlay;
 
 test('buildOverlayStyles includes core intervention layout rules', () => {
@@ -12,6 +20,16 @@ test('buildOverlayStyles includes core intervention layout rules', () => {
   assert.match(css, /z-index:\s*2147483647/);
   assert.match(css, /flex:\s*1 1 calc\(50% - 6px\)/);
   assert.match(css, /\.end-session-btn[\s\S]*flex:\s*1 1 100%/);
+});
+
+test('buildOverlayStyles loads packaged fonts via chrome.runtime.getURL', () => {
+  const css = buildOverlayStyles();
+  assert.match(css, /@font-face/);
+  assert.match(css, /chrome-extension:\/\/mock\/fonts\/IBMPlexMono-Regular\.woff2/);
+  assert.match(css, /chrome-extension:\/\/mock\/fonts\/SourceSerif4-Regular\.woff2/);
+  assert.match(css, /chrome-extension:\/\/mock\/fonts\/SourceSerif4-Italic\.woff2/);
+  assert.match(css, /font-family:\s*"IBM Plex Mono"/);
+  assert.match(css, /font-family:\s*"Source Serif 4"/);
 });
 
 test('overlay styles include overlayEnter 160ms and no infinite animation', () => {
