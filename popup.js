@@ -231,7 +231,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const notice = document.createElement('p');
         notice.className = 'muted-note';
         const minutesLeft = Math.ceil((backoffUntil - Date.now()) / 60000);
-        notice.textContent = `AI check paused (~${minutesLeft} min). Heuristics still active.`;
+        notice.textContent = `AI check paused (~${minutesLeft} min). Local lock still active.`;
         content.appendChild(notice);
       }
 

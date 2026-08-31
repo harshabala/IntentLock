@@ -8,14 +8,14 @@ IntentLock
 
 ## Short description
 
-Declare your intent. IntentLock watches your tabs and locks the page when you drift. Heuristics work with no API key.
+Declare your intent. IntentLock watches your tabs and locks the page when you drift. Local lock works with no API key.
 
 ## Full description
 
 IntentLock enforces the browsing intent you declare before you start a session.
 
 1. Open a new tab and declare what you intend to do (optional time budget).
-2. IntentLock watches your tabs. Local heuristics run with no API key.
+2. IntentLock watches your tabs. Local lock runs with no API key.
 3. If you drift, the page locks. Reflect in writing to continue, or close the tab / end the session.
 
 Local-only by default: session data stays on this device. No accounts, sync, telemetry, or habit dashboard.

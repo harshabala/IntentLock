@@ -752,7 +752,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
           const activeTab = tabs.find((tab) => tab.id && tab.url && isTrackableUrl(tab.url));
-          triggerIntervention('Test intervention — drift detection is working.', activeTab?.id || null);
+          if (!activeTab) {
+            sendResponse({ ok: false, error: 'Open a website first, then try the lock.' });
+            return;
+          }
+          triggerIntervention('Test intervention — drift detection is working.', activeTab.id);
           sendResponse({ ok: true });
         });
       });

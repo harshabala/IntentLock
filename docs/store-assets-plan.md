@@ -6,10 +6,10 @@ Canonical listing copy lives in `store/LISTING.md`. This document retains the br
 
 ### Single-Sentence Summary (Max 160 characters)
 *Length: 110 characters — matches `store/LISTING.md` short description*
-> Declare your intent. IntentLock watches your tabs and locks the page when you drift. Heuristics work with no API key.
+> Declare your intent. IntentLock watches your tabs and locks the page when you drift. Local lock works with no API key.
 
 ### Detailed Description
-IntentLock enforces the browsing intent you declare before you start a session. Open a new tab, declare what you intend to do (optional time budget), and IntentLock watches your tabs. Local heuristics run with no API key. If you drift, the page locks — reflect in writing to continue, or close the tab / end the session.
+IntentLock enforces the browsing intent you declare before you start a session. Open a new tab, declare what you intend to do (optional time budget), and IntentLock watches your tabs. Local lock runs with no API key. If you drift, the page locks — reflect in writing to continue, or close the tab / end the session.
 
 Local-only by default: session data stays on this device. No accounts, sync, telemetry, or habit dashboard. Optional AI is a second opinion only — configure a provider later in Settings if you want one.
 

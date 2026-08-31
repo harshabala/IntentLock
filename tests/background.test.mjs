@@ -452,3 +452,46 @@ test('PAGE_DWELL alignment uses session-merged heuristicPolicy for LinkedIn duri
   assert.equal(metrics.alignedActiveMs, 4000, 'LinkedIn dwell is on-intent under session job_search policy');
   assert.equal(metrics.domains['linkedin.com'].alignedMs, 4000);
 });
+
+test('TEST_INTERVENTION without a trackable http(s) tab errors and does not create about:blank', async () => {
+  assert.ok(messageListener, 'messageListener should be registered');
+  const previousTabs = new Map(mockTabs);
+  const previousTracking = storageData.trackingEnabled;
+  const previousSession = storageData.activeSession;
+  mockTabs.clear();
+  mockTabs.set(1, { id: 1, url: 'chrome-extension://mock/newtab.html', active: true });
+  storageData.trackingEnabled = true;
+  storageData.activeSession = {
+    id: 'try-lock-session',
+    intent: 'write the report',
+    isActive: true,
+    startTime: Date.now(),
+    events: [],
+  };
+
+  try {
+    let response = null;
+    await new Promise((resolve) => {
+      messageListener({ type: 'TEST_INTERVENTION' }, {}, (res) => {
+        response = res;
+        resolve();
+      });
+    });
+    await enqueueStorageMutation(() => {});
+
+    assert.deepEqual(response, {
+      ok: false,
+      error: 'Open a website first, then try the lock.',
+    });
+    assert.equal(
+      [...mockTabs.values()].some((tab) => tab.url === 'about:blank'),
+      false,
+      'must not open about:blank as a lock fallback',
+    );
+  } finally {
+    mockTabs.clear();
+    for (const [id, tab] of previousTabs) mockTabs.set(id, tab);
+    storageData.trackingEnabled = previousTracking;
+    storageData.activeSession = previousSession;
+  }
+});

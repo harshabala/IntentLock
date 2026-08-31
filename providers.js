@@ -516,7 +516,7 @@ async function chatCompletionInternal(prompt, options = {}) {
       ok: false,
       error: {
         code: 'quota_backoff',
-        message: 'LLM calls paused after a quota error. Heuristic drift still works. Retry later or switch models in Settings.',
+        message: 'AI check paused after a quota error. Local lock still active. Retry later or switch models in Settings.',
         providerId: config.providerId,
       },
     };

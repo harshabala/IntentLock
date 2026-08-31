@@ -67,6 +67,12 @@ test('popup is a compact summary and analytics.html is a week dashboard', async 
   assert.match(popupHtml, /class=["']popup["']/);
   assert.match(popupJs, /End session/);
   assert.match(popupJs, /View stats/);
+  assert.match(popupJs, /Local lock still active\./);
+  assert.doesNotMatch(popupJs, /Heuristics still active/);
+
+  const providersJs = await text('providers.js');
+  assert.match(providersJs, /Local lock still active\./);
+  assert.doesNotMatch(providersJs, /Heuristic drift still works/);
   assert.match(popupJs, /chrome\.runtime\.getURL\(['"]analytics\.html['"]\)/);
   assert.doesNotMatch(popupJs, /week-glance|summarizeWeek|formatWeekExport|Diagnostics/);
   const popupBlock = css.match(/body\.popup\s*\{([^}]+)\}/);
@@ -409,6 +415,8 @@ test('privacy site page exists for Chrome Web Store hosting', async () => {
 test('store listing pack has CWS fields and a five-shot plan', async () => {
   const listing = await text('store/LISTING.md');
   assert.ok(listing.split('## Short description')[1].trim().split('\n')[0].length <= 132);
+  assert.match(listing, /Local lock works with no API key/);
+  assert.doesNotMatch(listing, /Heuristics work with no API key/);
   assert.match(listing, /https:\/\/harshabala\.github\.io\/IntentLock\/privacy\.html/);
   assert.match(listing, /Load unpacked/);
   const shots = await text('store/screenshots/README.md');
@@ -418,11 +426,11 @@ test('store listing pack has CWS fields and a five-shot plan', async () => {
   assert.match(shots, /settings/);
 });
 
-test('store-assets-plan blurb matches LISTING heuristics-first short description', async () => {
+test('store-assets-plan blurb matches LISTING short description', async () => {
   const listing = await text('store/LISTING.md');
   const plan = await text('docs/store-assets-plan.md');
   const short = listing.split('## Short description')[1].trim().split('\n')[0].trim();
-  assert.match(short, /Heuristics work with no API key/);
+  assert.match(short, /Local lock works with no API key/);
   assert.ok(plan.includes(short), 'store-assets-plan must include LISTING short description');
   assert.equal(plan.includes('real-time local and LLM drift interventions'), false);
 });
