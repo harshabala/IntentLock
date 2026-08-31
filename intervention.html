@@ -19,7 +19,7 @@
     <form id="reflection-form">
       <div class="input-group stagger-1">
         <label for="reflection-input">Why?</label>
-        <textarea id="reflection-input" placeholder="Enter why this page, given your intent." required autofocus maxlength="2000"></textarea>
+        <textarea id="reflection-input" placeholder="Enter why this page, given your intent." autofocus maxlength="2000"></textarea>
       </div>
 
       <label class="related-toggle" for="intentlock-mark-related">
@@ -32,7 +32,7 @@
 
       <div class="intervention-actions">
         <button type="button" id="return-btn" class="primary-btn btn--primary stagger-2">Close this tab</button>
-        <button type="submit" id="override-btn" class="override-btn btn--ghost stagger-3" disabled aria-describedby="continue-hint">Continue anyway</button>
+        <button type="submit" id="override-btn" class="override-btn btn--ghost stagger-3" aria-describedby="continue-hint" aria-disabled="true">Continue anyway</button>
         <button type="button" id="end-session-btn" class="end-session-btn">End session</button>
       </div>
     </form>

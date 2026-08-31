@@ -484,6 +484,8 @@ test('lock reflection textarea sets aria-invalid only after empty Continue', asy
   for (const src of [overlay, fallback]) {
     const sync = extractNamedFunction(src, 'syncContinueEnabled');
     assert.doesNotMatch(sync, /aria-invalid/);
+    assert.match(sync, /overrideBtn\.disabled\s*=\s*transitionInFlight\b/);
+    assert.doesNotMatch(sync, /disabled\s*=\s*transitionInFlight\s*\|\|/);
     assert.match(src, /if\s*\(!reflection\)\s*\{[\s\S]*?setAttribute\(['"]aria-invalid['"],\s*['"]true['"]\)/);
     const inputHandler = src.match(/addEventListener\(['"]input['"],\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*\)/);
     assert.ok(inputHandler, 'reflection input handler required');
@@ -492,6 +494,32 @@ test('lock reflection textarea sets aria-invalid only after empty Continue', asy
       /setAttribute\(['"]aria-invalid['"],\s*['"]false['"]\)|removeAttribute\(['"]aria-invalid['"]\)/,
     );
   }
+  const html = await text('intervention.html');
+  assert.doesNotMatch(html, /id=["']override-btn["'][^>]*\sdisabled/);
+  assert.doesNotMatch(html, /id=["']reflection-input["'][^>]*\srequired/);
+});
+
+test('auto theme subscribes to prefers-color-scheme change', async () => {
+  const files = ['newtab.js', 'options.js', 'popup.js', 'analytics.js', 'history.js', 'diagnostics.js'];
+  for (const file of files) {
+    const src = await text(file);
+    assert.match(
+      src,
+      /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/,
+      `${file} must query prefers-color-scheme`,
+    );
+    assert.match(
+      src,
+      /addEventListener\(\s*['"]change['"]/,
+      `${file} must listen for color-scheme change`,
+    );
+  }
+  const options = await text('options.js');
+  assert.match(
+    options,
+    /removeEventListener\(\s*['"]change['"]/,
+    'options must drop the auto listener when theme is light or dark',
+  );
 });
 
 test('fallback stagger-1 has animation none', async () => {

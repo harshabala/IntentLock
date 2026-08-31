@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { loadClassicScript } from './helpers/load-classic-script.mjs';
+import { createOverlayDocument } from './helpers/overlay-dom.mjs';
 
 const chrome = {
   runtime: {
@@ -89,6 +90,44 @@ test('overlay continue empty path does not set aria-invalid until empty Continue
     inputHandler[0],
     /setAttribute\(['"]aria-invalid['"],\s*['"]false['"]\)|removeAttribute\(['"]aria-invalid['"]\)/,
   );
+});
+
+test('empty Continue click on overlay DOM sets aria-invalid and does not override', async () => {
+  const { document, MutationObserver, matchMedia } = createOverlayDocument();
+  const runtime = await loadClassicScript(new URL('../intervention-overlay.js', import.meta.url), {
+    chrome,
+    document,
+    MutationObserver,
+    matchMedia,
+  });
+  const { createInterventionOverlay: createOverlay } = runtime.IntentLock.interventionOverlay;
+  let overrideCalls = 0;
+  const overlay = createOverlay({
+    onOverride() {
+      overrideCalls += 1;
+    },
+    onCloseTab() {},
+    onEndSession() {},
+  });
+  overlay.show({ reason: 'You are drifting from your intent.', intent: 'Write the tests' });
+
+  const host = document.getElementById('intentlock-intervention-host');
+  assert.ok(host, 'show() must attach the overlay host');
+  const shadow = host.__shadow;
+  assert.ok(shadow, 'overlay host must expose a testable shadow root');
+  const textarea = shadow.querySelector('#intentlock-reflection');
+  const overrideBtn = shadow.querySelector('.override-btn');
+  const errorText = shadow.querySelector('#transition-error');
+  assert.ok(textarea && overrideBtn && errorText);
+
+  assert.notEqual(textarea.getAttribute('aria-invalid'), 'true');
+  assert.equal(overrideBtn.disabled, false, 'Continue must stay clickable when why is empty');
+  overrideBtn.click();
+
+  assert.equal(textarea.getAttribute('aria-invalid'), 'true');
+  assert.equal(errorText.textContent, 'Write why, or close this tab.');
+  assert.equal(overrideCalls, 0);
+  assert.equal(document.activeElement, textarea);
 });
 
 test('overlay hide timeout is 180ms and host uses page tokens', async () => {

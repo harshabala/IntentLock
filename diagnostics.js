@@ -10,8 +10,12 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.add('theme-light');
   } else {
     root.classList.remove('theme-light');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    root.classList.toggle('theme-dark', prefersDark);
+    const colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+    const syncAutoTheme = () => {
+      root.classList.toggle('theme-dark', colorSchemeMedia.matches);
+    };
+    syncAutoTheme();
+    colorSchemeMedia.addEventListener('change', syncAutoTheme);
   }
 });
 

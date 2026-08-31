@@ -115,9 +115,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   function syncContinueEnabled() {
     const hasWhy = Boolean(reflectionInput?.value.trim());
     if (overrideBtn) {
-      overrideBtn.disabled = transitionInFlight || !hasWhy;
-      if (!hasWhy) overrideBtn.setAttribute('aria-describedby', 'continue-hint');
-      else overrideBtn.removeAttribute('aria-describedby');
+      overrideBtn.disabled = transitionInFlight;
+      if (!hasWhy) {
+        overrideBtn.setAttribute('aria-describedby', 'continue-hint');
+        overrideBtn.setAttribute('aria-disabled', 'true');
+      } else {
+        overrideBtn.removeAttribute('aria-describedby');
+        overrideBtn.removeAttribute('aria-disabled');
+      }
     }
   }
 

@@ -577,13 +577,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  let autoColorSchemeMedia = null;
+  let autoColorSchemeListener = null;
+
   function applyTheme(theme) {
     const root = document.documentElement;
+    if (autoColorSchemeMedia && autoColorSchemeListener) {
+      autoColorSchemeMedia.removeEventListener('change', autoColorSchemeListener);
+      autoColorSchemeMedia = null;
+      autoColorSchemeListener = null;
+    }
     if (theme === 'auto') {
       root.style.removeProperty('color-scheme');
       root.classList.remove('theme-light');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.classList.toggle('theme-dark', prefersDark);
+      autoColorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+      autoColorSchemeListener = () => {
+        root.classList.toggle('theme-dark', autoColorSchemeMedia.matches);
+      };
+      autoColorSchemeListener();
+      autoColorSchemeMedia.addEventListener('change', autoColorSchemeListener);
     } else if (theme === 'dark') {
       root.style.colorScheme = 'dark';
       root.classList.remove('theme-light');

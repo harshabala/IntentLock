@@ -203,7 +203,8 @@
       background: transparent;
       color: var(--fg);
     }
-    button:disabled {
+    button:disabled,
+    button[aria-disabled="true"] {
       opacity: 0.4;
       cursor: not-allowed;
       transform: none;
@@ -315,10 +316,15 @@
     function syncContinueEnabled() {
       const hasWhy = Boolean(reflectionInput?.value.trim());
       if (overrideBtn) {
-        overrideBtn.disabled = transitionInFlight || !hasWhy;
+        overrideBtn.disabled = transitionInFlight;
         overrideBtn.setAttribute('aria-busy', String(transitionInFlight));
-        if (!hasWhy) overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
-        else overrideBtn.removeAttribute('aria-describedby');
+        if (!hasWhy) {
+          overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
+          overrideBtn.setAttribute('aria-disabled', 'true');
+        } else {
+          overrideBtn.removeAttribute('aria-describedby');
+          overrideBtn.removeAttribute('aria-disabled');
+        }
       }
     }
 
@@ -494,8 +500,8 @@
       overrideBtn.type = 'button';
       overrideBtn.className = 'override-btn btn--ghost';
       overrideBtn.textContent = 'Continue anyway';
-      overrideBtn.disabled = true;
       overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
+      overrideBtn.setAttribute('aria-disabled', 'true');
       overrideBtn.addEventListener('click', () => {
         if (transitionInFlight) return;
         const reflection = reflectionInput.value.trim();

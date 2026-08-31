@@ -375,7 +375,8 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
   transform: none;
