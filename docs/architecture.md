@@ -18,10 +18,13 @@ Chrome MV3 has three separate JavaScript environments that cannot share memory:
   ┌──────────┴──────────┐          ┌───────────────────┐
   │  Extension Pages    │          │  Content Scripts  │
   │  newtab.js          │          │  content.js       │
-  │  options.js         │          │  page-tracker.js  │
-  │  popup.js           │          │  intervention-    │
-  │  intervention.js    │          │  overlay.js       │
+  │  onboarding.js      │          │  page-tracker.js  │
+  │  options.js         │          │  intervention-    │
+  │  popup.js           │          │  overlay.js       │
+  │  analytics.js       │          │                   │
+  │  intervention.js    │          │                   │
   │  diagnostics.js     │          │                   │
+  │  history.js         │          │                   │
   └─────────────────────┘          └───────────────────┘
              │                              │
              └──────────────────────────────┘

@@ -9,7 +9,9 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.remove('theme-dark');
     root.classList.add('theme-light');
   } else {
-    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.remove('theme-light');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('theme-dark', prefersDark);
   }
 });
 
@@ -88,8 +90,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       activeFilter = btn.dataset.filter;
       renderEntries();
     });

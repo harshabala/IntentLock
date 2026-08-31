@@ -1,12 +1,50 @@
 # IntentLock
 
-A Chrome extension (Manifest V3) that enforces your declared browsing intent. You state what you're doing — writing a report, job hunting, deep work — and IntentLock watches every tab, scores drift in real time, and blocks you the moment your browsing stops matching.
+Declare what you are doing. IntentLock watches your tabs and locks the page when you drift.
 
-**Heuristics run without an API key.** YouTube blocks on `job_search + balanced` with zero AI configuration. LLM drift checking is an optional layer on top.
+Heuristics run with no API key. An optional AI provider in Settings is a second opinion only.
+
+## Install (about two minutes)
+
+1. Open [Releases](https://github.com/harshabala/IntentLock/releases/latest) and download the latest `IntentLock-*.zip`.
+2. Unzip it.
+3. Chrome → `chrome://extensions` → enable **Developer mode**.
+4. **Load unpacked** → select the unzipped folder.
+5. Open a new tab. Declare your intent. → set default policy → **Lock in** an intent.
+
+From source: clone this repo, load the repo folder unpacked, then `npm test`.
+
+## First run
+
+1. Declare your intent.
+2. Default intent type + strictness (you can change this later in Settings)
+3. Type this session's intent and optional time budget. Click **Lock in**.
+
+AI providers are not part of setup. Add one in **Settings** if you want a second drift check.
+
+## What it does
+
+- Blocks the page when you leave your declared intent
+- Requires a written reflection to continue, or Close tab / End session
+- Stores session data only on this device
+
+## What it does not do
+
+- No accounts, cloud sync, or telemetry
+- No habit dashboard or rewards
+- No Chrome Web Store listing yet (use the GitHub Release zip)
+
+## Privacy
+
+See [docs/privacy-policy.md](docs/privacy-policy.md). Optional remote LLM providers receive minimized intent and origin-only context when you configure a key.
+
+## License
+
+[MIT](LICENSE) © 2026 Harsha Balakrishnan
 
 ---
 
-## How it works — overview
+## How it works (technical)
 
 ```mermaid
 flowchart TD
@@ -29,35 +67,18 @@ flowchart TD
     N -- Close tab --> P[Tab closed]
 ```
 
----
+### First-run onboarding (technical)
 
-## Install (developer mode)
-
-1. Clone or download this repo
-2. Open Chrome → `chrome://extensions`
-3. Enable **Developer mode** (top-right toggle)
-4. Click **Load unpacked** → select the repo folder
-5. Open a new tab — the IntentLock onboarding wizard appears
-
-> **Loadable folder:** if you keep a separate folder synced from the repo, point Chrome at that instead.
-
----
-
-## First run — onboarding
-
-Three-step wizard on the new tab page:
+Two-step wizard on the new tab page, then the session form:
 
 | Step | What happens |
 |------|-------------|
-| **1 — Welcome** | Explains the extension; one click to continue |
-| **2 — LLM setup** | Optional: pick an AI provider and paste an API key (skip for heuristics-only mode) |
-| **3 — Intent setup** | Pick your intent category (Job Search, Deep Work, Coding, …) and a strictness preset (relaxed / balanced / strict) |
+| **1 — Declare your intent.** | Explains the extension; one click to continue |
+| **2 — Default policy** | Pick your intent category (Job Search, Deep Work, Coding, …) and a strictness preset (relaxed / balanced / strict) |
 
-After onboarding, each new tab shows the **session form**: type your specific intent, set an optional time budget, and click **Lock in**.
+After onboarding, each new tab shows the **session form**: type your specific intent, set an optional time budget, and click **Lock in**. AI providers are configured later in Settings, not during onboarding.
 
----
-
-## Architecture
+### Architecture
 
 ```mermaid
 graph LR
@@ -117,14 +138,12 @@ graph LR
 | `content.js` | Injected into every page — handles `SHOW_INTERVENTION` and routes `CONTENT_EVENT` |
 | `page-tracker.js` | Tracks active dwell time per page; patches `pushState`/`replaceState` for SPAs |
 | `intervention-overlay.js` | Shadow-DOM full-screen overlay with Override + Dismiss actions |
-| `newtab.js` | Onboarding wizard (3 steps) + session form + active session view |
+| `newtab.js` | Onboarding wizard (welcome + default policy) + session form + active session view |
 | `options.js` | Settings: provider config, category policy grid, custom domains, theme, diagnostics |
 | `error-log.js` | Stores up to 200 diagnostic entries in `chrome.storage.local` |
 | `distraction-sites.js` | Legacy 8-domain default list (used during migration to heuristicPolicy) |
 
----
-
-## Drift pipeline (detailed)
+### Drift pipeline (detailed)
 
 Every tab switch or page load runs through this pipeline:
 
@@ -168,9 +187,7 @@ flowchart TD
 | Any domain + unaligned + dwell ≥ 120 s | Floor score at 0.7 → intervene |
 | Threshold | `DRIFT_CONFIDENCE_THRESHOLD = 0.7` |
 
----
-
-## Heuristic policy engine
+### Heuristic policy engine
 
 See [`docs/heuristic-policy.md`](docs/heuristic-policy.md) for the full reference.
 
@@ -188,9 +205,7 @@ See [`docs/heuristic-policy.md`](docs/heuristic-policy.md) for the full referenc
 
 **Category alignment:** `job_search` intent + hostname in `job_boards` or `professional_network` → aligned even without keyword match. Same logic for all 12 intent categories.
 
----
-
-## LLM providers
+### LLM providers
 
 Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` when available (cleared on browser close), with a local fallback only when session storage is unavailable. Remote providers receive minimized intent and origin-only context.
 
@@ -205,9 +220,7 @@ Configured in Settings → LLM provider. The API key is stored in `chrome.storag
 
 LLM is **optional**. Without a key, only heuristic scoring runs. With a key, LLM provides a second opinion only when heuristics score below the threshold.
 
----
-
-## Settings
+### Settings
 
 Open via the extension's options page (right-click icon → Options, or Settings button in popup).
 
@@ -220,9 +233,7 @@ Open via the extension's options page (right-click icon → Options, or Settings
 | **Diagnostics** | View last 200 errors (API failures, quota limits, validation issues) |
 | **Appearance** | Auto / Dark / Light theme |
 
----
-
-## Storage schema
+### Storage schema
 
 See [`docs/storage-schema.md`](docs/storage-schema.md) for full field-by-field reference.
 
@@ -246,9 +257,7 @@ Key `chrome.storage.local` entries:
 |-----|-------------|
 | `openaiApiKey` / `llmApiKey` | API key — never persisted to disk |
 
----
-
-## Testing
+### Testing
 
 ```bash
 node --test tests/heuristic-policy.test.mjs   # 48 tests — policy engine
@@ -275,9 +284,7 @@ npm run package
 
 The package command creates a deterministic ZIP containing only the extension runtime allowlist. Tests, docs, and development files stay out of the release artifact.
 
----
-
-## Development
+### Development
 
 See [`docs/development.md`](docs/development.md) for full setup, reload workflow, and contribution guide.
 
@@ -291,9 +298,7 @@ Quick start:
 # After content.js change: also reload the affected tab
 ```
 
----
-
-## Version history
+### Version history
 
 See [CHANGELOG.md](CHANGELOG.md).
 

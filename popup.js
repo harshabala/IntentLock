@@ -1,4 +1,3 @@
-import { summarizeWeek, formatWeekExport, PRIVACY_COPY } from './session-metrics.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 
 let dataDeletionInProgress = false;
@@ -16,7 +15,6 @@ function loadSessionHistory(callback) {
   });
 }
 
-// Load and apply theme override as early as possible
 chrome.storage.local.get(['theme'], (result) => {
   const theme = result.theme || 'auto';
   const root = document.documentElement;
@@ -27,40 +25,163 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.remove('theme-dark');
     root.classList.add('theme-light');
   } else {
-    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.remove('theme-light');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('theme-dark', prefersDark);
   }
 });
 
+function formatSessionMinutes(session) {
+  const start = session.startTime || 0;
+  const end = session.endTime || Date.now();
+  const fromRange = Math.max(0, Math.round((end - start) / 60000));
+  if (fromRange > 0) return `${fromRange} min`;
+  const fromActive = Math.round((session.activeMs || 0) / 60000);
+  return `${Math.max(0, fromActive)} min`;
+}
+
+function quotedIntent(text) {
+  const el = document.createElement('p');
+  el.className = 'session-intent intent-quote intent-statement';
+  el.textContent = text || '';
+  return el;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const content = document.getElementById('content');
+
+  function addFooter(parent) {
+    const footer = document.createElement('div');
+    footer.className = 'popup-footer';
+
+    const settingsLink = document.createElement('a');
+    settingsLink.href = '#';
+    settingsLink.className = 'popup-link';
+    settingsLink.textContent = 'Settings';
+    settingsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.runtime.openOptionsPage();
+    });
+
+    footer.appendChild(settingsLink);
+    parent.appendChild(footer);
+  }
+
+  function addViewStats(parent) {
+    const statsLink = document.createElement('a');
+    statsLink.href = '#';
+    statsLink.className = 'popup-link';
+    statsLink.textContent = 'View stats';
+    statsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: chrome.runtime.getURL('analytics.html') });
+    });
+    parent.appendChild(statsLink);
+  }
+
+  function showConfirmEndDialog(session, trigger, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+
+    const h3 = document.createElement('h3');
+    h3.id = 'popup-end-title';
+    h3.textContent = 'End session?';
+    dialog.setAttribute('aria-labelledby', h3.id);
+
+    const p = document.createElement('p');
+    const elapsed = Math.round((Date.now() - (session.startTime || Date.now())) / 60000);
+    const events = Array.isArray(session.events) ? session.events : [];
+    const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
+    const overrides = typeof session.overrideCount === 'number'
+      ? session.overrideCount
+      : storedOverrides.length > 0
+        ? storedOverrides.length
+        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+    p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'complete-btn';
+    cancelBtn.textContent = 'Cancel';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = 'End session';
+
+    function closeDialog() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (trigger && typeof trigger.focus === 'function') trigger.focus();
+    }
+
+    cancelBtn.addEventListener('click', () => closeDialog());
+    confirmBtn.addEventListener('click', () => {
+      closeDialog();
+      onConfirm();
+    });
+
+    actions.append(cancelBtn, confirmBtn);
+    dialog.append(h3, p, actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => {
+      overlay.classList.add('is-open');
+    });
+    cancelBtn.focus();
+  }
+
+  function renderIdle(sessionHistory) {
+    content.textContent = '';
+    const last = sessionHistory.length > 0 ? sessionHistory[sessionHistory.length - 1] : null;
+
+    if (last) {
+      const kicker = document.createElement('p');
+      kicker.className = 'session-kicker';
+      kicker.textContent = 'Last session';
+      content.appendChild(kicker);
+      content.appendChild(quotedIntent(last.intent));
+      const timeEl = document.createElement('p');
+      timeEl.className = 'time-remaining';
+      timeEl.textContent = formatSessionMinutes(last);
+      content.appendChild(timeEl);
+    } else {
+      const p1 = document.createElement('p');
+      p1.className = 'no-session';
+      p1.textContent = 'No active session.';
+      content.appendChild(p1);
+    }
+
+    const newTabLink = document.createElement('a');
+    newTabLink.href = '#';
+    newTabLink.className = 'popup-link';
+    newTabLink.textContent = 'Open a new tab to declare intent.';
+    newTabLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') });
+    });
+    content.appendChild(newTabLink);
+
+    addViewStats(content);
+    addFooter(content);
+  }
 
   function updateUI() {
     chrome.storage.local.get(['activeSession', 'llmBackoffUntil'], (result) => {
       const session = result.activeSession;
 
       if (!session || !session.isActive) {
-        content.textContent = '';
-        const p1 = document.createElement('p');
-        p1.className = 'no-session';
-        p1.textContent = 'No active session.';
-        const p2 = document.createElement('p');
-        p2.className = 'no-session';
-        p2.textContent = 'Open a new tab to declare intent.';
-        content.append(p1, p2);
-
-        renderWeekGlanceSection(content);
+        loadSessionHistory(renderIdle);
         return;
       }
 
       content.textContent = '';
+      content.appendChild(quotedIntent(session.intent));
 
-      // Session intent display
-      const intentBox = document.createElement('div');
-      intentBox.className = 'session-intent';
-      intentBox.textContent = session.intent;
-      content.appendChild(intentBox);
-
-      // Time display
       const timeEl = document.createElement('p');
       timeEl.className = 'time-remaining';
       content.appendChild(timeEl);
@@ -84,15 +205,17 @@ document.addEventListener('DOMContentLoaded', () => {
       updateTime();
       setInterval(updateTime, 10000);
 
-      // End session button
       const btn = document.createElement('button');
       btn.className = 'complete-btn';
       btn.textContent = 'End session';
-      btn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-            chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
-            window.close();
+      btn.addEventListener('click', (e) => {
+        if (dataDeletionInProgress) return;
+        showConfirmEndDialog(session, e.currentTarget, () => {
+          chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
+            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
+              chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+              window.close();
+            });
           });
         });
       });
@@ -102,170 +225,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const isBackedOff = backoffUntil > Date.now();
       if (isBackedOff) {
         const notice = document.createElement('p');
-        notice.className = 'no-session';
-        notice.style.cssText = 'font-size:0.7rem;color:#888;margin:4px 0 0;';
+        notice.className = 'muted-note';
         const minutesLeft = Math.ceil((backoffUntil - Date.now()) / 60000);
         notice.textContent = `AI check paused (~${minutesLeft} min). Heuristics still active.`;
         content.appendChild(notice);
       }
 
-      renderWeekGlanceSection(content);
-    });
-  }
-
-  function renderWeekGlanceSection(parentContainer) {
-    loadSessionHistory((sessionHistory) => {
-      const weekGlance = document.createElement('div');
-      weekGlance.className = 'week-glance';
-
-      const heading = document.createElement('h3');
-      heading.textContent = 'This week';
-      weekGlance.appendChild(heading);
-
-      const summary = summarizeWeek(sessionHistory, Date.now());
-
-      if (summary.sessionCount === 0) {
-        const emptyP = document.createElement('p');
-        emptyP.className = 'no-session';
-        emptyP.textContent = 'No sessions this week yet. Open a new tab to start one.';
-        weekGlance.appendChild(emptyP);
-      } else {
-        const createGlanceRow = (label, value) => {
-          const row = document.createElement('div');
-          row.className = 'glance-row';
-          const labelSpan = document.createElement('span');
-          labelSpan.className = 'glance-label';
-          labelSpan.textContent = label;
-          const valueSpan = document.createElement('span');
-          valueSpan.className = 'glance-value';
-          valueSpan.textContent = value;
-          row.append(labelSpan, valueSpan);
-          return row;
-        };
-
-        weekGlance.appendChild(createGlanceRow('Sessions', `${summary.sessionCount}`));
-        weekGlance.appendChild(
-          createGlanceRow(
-            'Avg on-intent',
-            summary.avgOnIntentRatio != null ? `${Math.round(summary.avgOnIntentRatio * 100)}%` : '—'
-          )
-        );
-        if (summary.bestDay) {
-          weekGlance.appendChild(createGlanceRow('Best day', `${summary.bestDay}`));
-        }
-
-        const exportActions = document.createElement('div');
-        exportActions.className = 'export-actions';
-
-        const exportBtn = document.createElement('button');
-        exportBtn.id = 'export-week-btn';
-        exportBtn.className = 'complete-btn';
-        exportBtn.textContent = 'Export week as text';
-
-        const statusSpan = document.createElement('span');
-        statusSpan.className = 'export-status';
-
-        exportBtn.addEventListener('click', async () => {
-          const text = formatWeekExport(summary, Date.now());
-          let copied = false;
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            try {
-              await navigator.clipboard.writeText(text);
-              copied = true;
-              statusSpan.textContent = 'Copied to clipboard.';
-              setTimeout(() => {
-                if (statusSpan.textContent === 'Copied to clipboard.') {
-                  statusSpan.textContent = '';
-                }
-              }, 3000);
-            } catch (e) {
-              copied = false;
-            }
-          }
-          if (!copied) {
-            try {
-              const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `intentlock-week-${new Date().toISOString().slice(0, 10)}.txt`;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              setTimeout(() => URL.revokeObjectURL(url), 1000);
-              statusSpan.textContent = 'Copied to clipboard.';
-              setTimeout(() => {
-                if (statusSpan.textContent === 'Copied to clipboard.') {
-                  statusSpan.textContent = '';
-                }
-              }, 3000);
-            } catch (err) {
-              statusSpan.textContent = 'Export failed.';
-            }
-          }
-        });
-
-        exportActions.append(exportBtn, statusSpan);
-        weekGlance.appendChild(exportActions);
-      }
-
-      const caveatP = document.createElement('p');
-      caveatP.className = 'method-caveat';
-      caveatP.textContent = 'Averages cover sessions ended in the last 7 days; unscored sessions are excluded.';
-      weekGlance.appendChild(caveatP);
-
-      const privacyP = document.createElement('p');
-      privacyP.className = 'privacy-copy';
-      privacyP.textContent = PRIVACY_COPY;
-      weekGlance.appendChild(privacyP);
-
-      parentContainer.appendChild(weekGlance);
-      addFooterLinks(parentContainer);
+      addViewStats(content);
+      addFooter(content);
     });
   }
 
   updateUI();
-
-  function addFooterLinks(parent) {
-    const footer = document.createElement('div');
-    footer.className = 'popup-footer';
-
-    const histLink = document.createElement('a');
-    histLink.href = '#';
-    histLink.className = 'popup-link';
-    histLink.textContent = 'History';
-    histLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
-    });
-
-    const sep = document.createElement('span');
-    sep.className = 'history-sep';
-    sep.textContent = '\u00B7';
-
-    const diagLink = document.createElement('a');
-    diagLink.href = '#';
-    diagLink.className = 'popup-link';
-    diagLink.textContent = 'Diagnostics';
-    diagLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      chrome.tabs.create({ url: chrome.runtime.getURL('diagnostics.html') });
-    });
-
-    const sep2 = document.createElement('span');
-    sep2.className = 'history-sep';
-    sep2.textContent = '\u00B7';
-
-    const settingsLink = document.createElement('a');
-    settingsLink.href = '#';
-    settingsLink.className = 'popup-link';
-    settingsLink.textContent = 'Settings';
-    settingsLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      chrome.runtime.openOptionsPage();
-    });
-
-    footer.append(histLink, sep, diagLink, sep2, settingsLink);
-    parent.appendChild(footer);
-  }
 });

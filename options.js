@@ -62,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function isCloudProvider(providerId) {
     const provider = getProvider(providerId);
+    if (!provider) return false;
     return !provider.isLocal && providerId !== 'custom';
   }
 
@@ -73,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function getFormConfig() {
-    const providerId = providerSelect.value || DEFAULT_PROVIDER_ID;
+    const providerId = getProvider(providerSelect.value)?.id || DEFAULT_PROVIDER_ID;
     const provider = getProvider(providerId);
     return {
       providerId,
@@ -86,8 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateProviderUI(providerId = providerSelect.value) {
-    const provider = getProvider(providerId);
-    const cloudProvider = isCloudProvider(providerId);
+    const provider = getProvider(providerId) || getProvider(DEFAULT_PROVIDER_ID);
+    const cloudProvider = isCloudProvider(provider?.id || providerId);
     providerDescription.textContent = provider.description;
     customProviderFields.classList.toggle('hidden', providerId !== 'custom');
 
@@ -126,8 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function applyStoredConfig(stored = {}) {
-    const providerId = stored.providerId || DEFAULT_PROVIDER_ID;
-    const provider = getProvider(providerId);
+    const provider = getProvider(stored.providerId) || getProvider(DEFAULT_PROVIDER_ID);
+    const providerId = provider.id;
     providerSelect.value = providerId;
     modelInput.value = stored.model || provider.defaultModel;
     baseUrlInput.value = stored.baseUrl || provider.defaultBaseUrl;
@@ -139,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   providerSelect.addEventListener('change', () => {
     if (deletionInProgress) return;
-    const provider = getProvider(providerSelect.value);
+    const provider = getProvider(providerSelect.value) || getProvider(DEFAULT_PROVIDER_ID);
     modelInput.value = provider.defaultModel;
     baseUrlInput.value = provider.defaultBaseUrl;
     providerAdvancedOpen = false;
@@ -265,12 +266,6 @@ document.addEventListener('DOMContentLoaded', () => {
       hasSavedApiKey = Boolean(migratedKey);
       applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
 
-      if (!localResult.llmProviderConfig && !deletionInProgress) {
-        chrome.storage.local.set({
-          llmProviderConfig: getDefaultProviderConfig(DEFAULT_PROVIDER_ID),
-        });
-      }
-
       if (localResult.trackingEnabled !== undefined) {
         trackingToggle.checked = localResult.trackingEnabled;
       }
@@ -290,7 +285,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const theme = localResult.theme || 'auto';
       document.querySelectorAll('.theme-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.theme === theme);
+        const on = btn.dataset.theme === theme;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
       applyTheme(theme);
     };
@@ -347,14 +344,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 3000);
     } else {
       el.style.opacity = '0';
-      el.style.transition = 'opacity 200ms cubic-bezier(0.2, 0, 0, 1)';
+      el.style.transition = 'opacity 160ms ease-out';
       el.offsetHeight;
       el.style.opacity = '1';
       el._hideTimer = setTimeout(() => {
         el.style.opacity = '0';
         setTimeout(() => {
           el.style.display = 'none';
-        }, 200);
+        }, 160);
       }, 3000);
     }
   }
@@ -424,7 +421,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hasSavedApiKey = hasSavedApiKey || Boolean(key);
         apiKeyInput.value = '';
         updateProviderUI(config.providerId);
-        showStatus(providerStatus, `${getProvider(config.providerId).label} settings saved.`);
+        showStatus(providerStatus, `${(getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label} settings saved.`);
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
       };
 
@@ -557,7 +554,9 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
         showStatus(dataStatus, 'All data deleted.');
         document.querySelectorAll('.theme-btn').forEach((btn) => {
-          btn.classList.toggle('active', btn.dataset.theme === 'auto');
+          const on = btn.dataset.theme === 'auto';
+          btn.classList.toggle('active', on);
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
         applyTheme('auto');
         deleteDataBtn.disabled = false;
@@ -578,33 +577,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  function applyTheme(theme, animate) {
+  function applyTheme(theme) {
     const root = document.documentElement;
-
-    function setTheme() {
-      if (theme === 'auto') {
-        root.style.removeProperty('color-scheme');
-        root.classList.remove('theme-dark', 'theme-light');
-      } else if (theme === 'dark') {
-        root.style.colorScheme = 'dark';
-        root.classList.remove('theme-light');
-        root.classList.add('theme-dark');
-      } else if (theme === 'light') {
-        root.style.colorScheme = 'light';
-        root.classList.remove('theme-dark');
-        root.classList.add('theme-light');
-      }
-    }
-
-    if (animate && !reducedMotion) {
-      document.body.style.transition = 'opacity 150ms cubic-bezier(0.2, 0, 0, 1)';
-      document.body.style.opacity = '0.6';
-      setTimeout(() => {
-        setTheme();
-        document.body.style.opacity = '1';
-      }, 150);
-    } else {
-      setTheme();
+    if (theme === 'auto') {
+      root.style.removeProperty('color-scheme');
+      root.classList.remove('theme-light');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.classList.toggle('theme-dark', prefersDark);
+    } else if (theme === 'dark') {
+      root.style.colorScheme = 'dark';
+      root.classList.remove('theme-light');
+      root.classList.add('theme-dark');
+    } else if (theme === 'light') {
+      root.style.colorScheme = 'light';
+      root.classList.remove('theme-dark');
+      root.classList.add('theme-light');
     }
   }
 
@@ -626,11 +613,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
       if (deletionInProgress) return;
       const theme = btn.dataset.theme;
-      document.querySelectorAll('.theme-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('.theme-btn').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       chrome.storage.local.set({ theme }, () => {
         if (deletionInProgress) return;
-        applyTheme(theme, true);
+        applyTheme(theme);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
       });

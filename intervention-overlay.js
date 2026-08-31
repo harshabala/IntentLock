@@ -2,6 +2,14 @@
 // The host contract is INTERVENTION_TRANSITION; content.js supplies the nonce-bound sender.
 
 (function exposeInterventionOverlay(root) {
+  const DRIFT_COPY = 'You are drifting from your intent.';
+  const TIME_BUDGET_COPY = 'Time budget exceeded.';
+  const CONTINUE_HINT_ID = 'intentlock-continue-hint';
+
+  function lockHeading(reason) {
+    return reason === TIME_BUDGET_COPY ? TIME_BUDGET_COPY : DRIFT_COPY;
+  }
+
   function buildOverlayStyles() {
     return `
     :host {
@@ -9,12 +17,25 @@
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, monospace;
+      font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+      --bg-white: #ffffff;
+      --fg-black: #000000;
+      --muted-black: #1a1a1a;
+      --line-width: 1px;
+      --corner-radius: 2px;
+      --bg: #000000;
+      --fg: #ffffff;
+      --muted: #e6e6e6;
+      --line: #ffffff;
+      --surface: #000000;
+      --error: #ffffff;
+      --success: #ffffff;
+      -webkit-font-smoothing: antialiased;
     }
     .backdrop {
       position: absolute;
       inset: 0;
-      background: rgba(0, 0, 0, 0.92);
+      background: var(--bg);
     }
     .panel {
       position: relative;
@@ -24,57 +45,63 @@
       overflow-y: auto;
       margin: 10vh auto 0;
       padding: 48px 32px;
-      color: #ffffff;
-      text-align: center;
+      background-color: var(--bg);
+      color: var(--fg);
+      text-align: left;
+      border: var(--line-width) solid var(--line);
+      border-radius: var(--corner-radius);
+      opacity: 0;
+      transform: scale(0.98);
+      transition: opacity 160ms ease-out, transform 160ms ease-out;
+    }
+    .panel.is-in {
+      opacity: 1;
+      transform: scale(1);
+    }
+    .vv-hatch {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='12'%3E%3Cpath d='M0 12L20 0' stroke='rgba(255,255,255,0.06)' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      background-size: 20px 12px;
+    }
+    @keyframes overlayEnter {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
     }
     h1 {
-      font-size: 1rem;
-      font-weight: 600;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      margin: 0 0 16px;
+      font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+      font-size: 18px;
+      font-weight: 400;
+      line-height: 1.35;
+      margin: 0 0 12px;
+      color: var(--fg);
     }
     .reason, .hint {
-      color: #888888;
-      font-size: 0.8rem;
+      color: var(--muted);
+      font-size: 12px;
       line-height: 1.6;
       margin: 0 0 16px;
     }
-    .intent-box {
-      border: 1px solid #222222;
-      padding: 16px;
-      margin: 24px 0;
-      text-align: left;
-    }
-    .intent-label {
-      font-size: 0.65rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #9a9a9a;
-      margin: 0 0 8px;
-    }
-    .intent-text {
-      font-size: 0.85rem;
-      line-height: 1.5;
-      margin: 0;
-      color: #ffffff;
+    .intent-quote {
+      font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+      font-size: 16px;
+      font-weight: 400;
+      line-height: 1.35;
+      margin: 0 0 16px;
+      color: var(--fg);
     }
     label {
       display: block;
       text-align: left;
-      font-size: 0.7rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
       margin-bottom: 8px;
-      color: #888888;
+      color: var(--muted);
     }
     textarea {
       width: 100%;
       min-height: 96px;
-      background: #111111;
-      color: #ffffff;
-      border: 1px solid #222222;
-      border-radius: 2px;
+      background: var(--bg);
+      color: var(--fg);
+      border: var(--line-width) solid var(--line);
+      border-radius: var(--corner-radius);
       padding: 12px;
       font: inherit;
       resize: vertical;
@@ -82,70 +109,114 @@
       margin-bottom: 16px;
     }
     textarea:focus {
-      outline: none;
-      border-color: #ffffff;
+      outline: 2px solid var(--fg);
+      outline-offset: 2px;
     }
     button:focus-visible, textarea:focus-visible, input:focus-visible {
-      outline: 2px solid #ffffff;
+      outline: 2px solid var(--fg);
       outline-offset: 3px;
     }
     .actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 12px;
     }
     button {
-      flex: 1;
+      flex: 1 1 calc(50% - 6px);
+      width: auto;
+      max-width: 100%;
       min-height: 44px;
-      border-radius: 2px;
+      border-radius: var(--corner-radius);
       font: inherit;
-      font-size: 0.75rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
       cursor: pointer;
+      transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out, transform 160ms ease-out;
     }
+    button:hover {
+      background-color: var(--bg);
+      color: var(--fg);
+      border-color: var(--fg);
+    }
+    button:active {
+      transform: translateY(1px);
+    }
+    .btn--primary,
     .close-tab-btn {
-      background: transparent;
-      color: #888888;
-      border: 1px solid #222222;
+      background: var(--fg);
+      color: var(--bg);
+      border: var(--line-width) solid var(--fg);
     }
+    .btn--primary:hover,
+    .close-tab-btn:hover {
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .btn--ghost,
     .override-btn {
-      background: #ffffff;
-      color: #000000;
-      border: 1px solid #ffffff;
+      background: transparent;
+      color: var(--fg);
+      border: var(--line-width) solid var(--line);
+    }
+    .btn--ghost:hover,
+    .override-btn:hover {
+      background: var(--fg);
+      color: var(--bg);
+      border-color: var(--fg);
     }
     .end-session-btn {
+      flex: 1 1 100%;
       background: transparent;
-      border: 1px solid #444;
-      color: #888;
+      border: none;
+      color: var(--fg);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
       padding: 8px 16px;
       cursor: pointer;
-      font-size: 0.75rem;
-      letter-spacing: 0.05em;
-      margin-top: 4px;
+      font-size: 12px;
+      min-height: 44px;
     }
-    .close-tab-btn:hover, .end-session-btn:hover {
-      border-color: #666;
-      color: #aaa;
+    .end-session-btn:hover {
+      background: transparent;
+      color: var(--fg);
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
     }
     .related-row {
       display: flex;
       align-items: center;
       gap: 8px;
       text-align: left;
-      color: #888888;
-      font-size: 0.7rem;
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 44px;
       margin-bottom: 16px;
     }
     .related-row input {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       margin: 0;
     }
     .error {
       min-height: 1.4em;
-      color: #ff8f8f;
-      font-size: 0.75rem;
+      color: var(--fg);
+      font-size: 12px;
       margin: 8px 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+      .panel,
+      .panel.is-in {
+        opacity: 1;
+        transform: none;
+      }
     }
     `;
   }
@@ -153,21 +224,26 @@
   function createInterventionOverlay({ onOverride, onEndSession, onCloseTab } = {}) {
     let host = null;
     let shadow = null;
+    let panelEl = null;
     let reflectionInput = null;
     let markRelatedInput = null;
     let errorText = null;
+    let overrideBtn = null;
+    let dismissBtn = null;
+    let endBtn = null;
     let currentState = null;
     let hostObserver = null;
     let lockedVisible = false;
-    let currentReason = 'You are deviating from your intent.';
+    let currentReason = DRIFT_COPY;
     let currentIntent = '';
     let repairing = false;
     let previousFocus = null;
     let inertNodes = [];
     let previousOverflow = '';
     let transitionInFlight = false;
-    let transitionButtons = [];
     let rootVisibilitySnapshot = null;
+    let hideFinishTimer = null;
+    let hideEndHandler = null;
 
     function enforceDocumentRootVisibility() {
       const rootElement = document.documentElement;
@@ -204,14 +280,48 @@
       rootVisibilitySnapshot = null;
     }
 
+    function prefersReducedMotion() {
+      try {
+        return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+      } catch {
+        return false;
+      }
+    }
+
+    function syncContinueEnabled() {
+      const hasWhy = Boolean(reflectionInput?.value.trim());
+      if (overrideBtn) {
+        overrideBtn.disabled = transitionInFlight || !hasWhy;
+        overrideBtn.setAttribute('aria-busy', String(transitionInFlight));
+        if (!hasWhy) overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
+        else overrideBtn.removeAttribute('aria-describedby');
+      }
+    }
+
+    function setHeading(reason) {
+      const title = shadow?.querySelector('#intentlock-intervention-title');
+      if (title) title.textContent = lockHeading(reason);
+    }
+
+    function setReasonDisplay(reason) {
+      const reasonEl = shadow?.querySelector('[data-role="reason"]');
+      if (!reasonEl) return;
+      const heading = lockHeading(reason);
+      const text = reason && reason !== heading ? reason : '';
+      reasonEl.textContent = text;
+      reasonEl.hidden = !text;
+    }
+
     function setTransitionBusy(busy) {
       transitionInFlight = busy;
-      transitionButtons.forEach((button) => {
+      [dismissBtn, endBtn].forEach((button) => {
+        if (!button) return;
         button.disabled = busy;
         button.setAttribute('aria-busy', String(busy));
       });
       if (reflectionInput) reflectionInput.disabled = busy;
       if (markRelatedInput) markRelatedInput.disabled = busy;
+      syncContinueEnabled();
     }
 
     function focusableElements() {
@@ -278,9 +388,9 @@
         }
         enforceDocumentRootVisibility();
         enforceHostVisibility();
-        const reasonEl = shadow?.querySelector('[data-role="reason"]');
+        setHeading(currentReason);
+        setReasonDisplay(currentReason);
         const intentEl = shadow?.querySelector('[data-role="intent"]');
-        if (reasonEl) reasonEl.textContent = currentReason;
         if (intentEl) intentEl.textContent = currentIntent || 'No active session intent.';
       } finally {
         repairing = false;
@@ -301,27 +411,32 @@
       const backdrop = document.createElement('div');
       backdrop.className = 'backdrop';
 
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.setAttribute('role', 'dialog');
-      panel.setAttribute('aria-modal', 'true');
-      panel.setAttribute('aria-labelledby', 'intentlock-intervention-title');
-      panel.setAttribute('aria-describedby', 'intentlock-intervention-reason');
-      panel.innerHTML = `
-      <h1>Drift detected</h1>
+      panelEl = document.createElement('div');
+      panelEl.className = 'panel vv-hatch';
+      panelEl.setAttribute('role', 'dialog');
+      panelEl.setAttribute('aria-modal', 'true');
+      panelEl.setAttribute('aria-labelledby', 'intentlock-intervention-title');
+      panelEl.setAttribute('aria-describedby', 'intentlock-intervention-reason');
+      panelEl.innerHTML = `
+      <h1>You are drifting from your intent.</h1>
       <p class="reason" id="intentlock-intervention-reason" data-role="reason"></p>
-      <div class="intent-box">
-        <p class="intent-label">Session intent</p>
-        <p class="intent-text" data-role="intent"></p>
-      </div>
-      <label for="intentlock-reflection">Why are you deviating?</label>
+      <p class="intent-quote" data-role="intent"></p>
+      <label for="intentlock-reflection">Why?</label>
       `;
-      panel.querySelector('h1')?.setAttribute('id', 'intentlock-intervention-title');
+      panelEl.querySelector('h1')?.setAttribute('id', 'intentlock-intervention-title');
 
       reflectionInput = document.createElement('textarea');
       reflectionInput.id = 'intentlock-reflection';
-      reflectionInput.placeholder = 'I need a break, or this is actually relevant...';
+      reflectionInput.placeholder = 'Enter why this page, given your intent.';
+      reflectionInput.maxLength = 2000;
       reflectionInput.setAttribute('autofocus', '');
+      reflectionInput.addEventListener('input', () => {
+        if (errorText?.textContent) errorText.textContent = '';
+        if (reflectionInput.value.trim()) {
+          reflectionInput.setAttribute('aria-invalid', 'false');
+        }
+        syncContinueEnabled();
+      });
 
       const relatedRow = document.createElement('label');
       relatedRow.className = 'related-row';
@@ -334,24 +449,35 @@
       relatedRow.append(markRelatedInput, relatedText);
 
       errorText = document.createElement('p');
+      errorText.id = 'transition-error';
       errorText.className = 'error';
       errorText.setAttribute('role', 'alert');
+      errorText.setAttribute('aria-live', 'polite');
+
+      const continueHint = document.createElement('p');
+      continueHint.id = CONTINUE_HINT_ID;
+      continueHint.className = 'hint';
+      continueHint.textContent = 'Write why to continue.';
 
       const actions = document.createElement('div');
       actions.className = 'actions';
 
-      const dismissBtn = document.createElement('button');
+      dismissBtn = document.createElement('button');
       dismissBtn.type = 'button';
-      dismissBtn.className = 'close-tab-btn';
-      dismissBtn.textContent = 'Close tab';
-      const overrideBtn = document.createElement('button');
+      dismissBtn.className = 'close-tab-btn btn--primary';
+      dismissBtn.textContent = 'Close this tab';
+      overrideBtn = document.createElement('button');
       overrideBtn.type = 'button';
-      overrideBtn.className = 'override-btn';
-      overrideBtn.textContent = 'Override & continue';
+      overrideBtn.className = 'override-btn btn--ghost';
+      overrideBtn.textContent = 'Continue anyway';
+      overrideBtn.disabled = true;
+      overrideBtn.setAttribute('aria-describedby', CONTINUE_HINT_ID);
       overrideBtn.addEventListener('click', () => {
         if (transitionInFlight) return;
         const reflection = reflectionInput.value.trim();
         if (!reflection) {
+          reflectionInput.setAttribute('aria-invalid', 'true');
+          setError('Write why, or close this tab.');
           reflectionInput.focus();
           return;
         }
@@ -370,7 +496,7 @@
       actions.append(dismissBtn, overrideBtn);
 
       if (typeof onEndSession === 'function') {
-        const endBtn = document.createElement('button');
+        endBtn = document.createElement('button');
         endBtn.type = 'button';
         endBtn.className = 'end-session-btn';
         endBtn.textContent = 'End session';
@@ -382,9 +508,6 @@
             .finally(() => setTransitionBusy(false));
         });
         actions.appendChild(endBtn);
-        transitionButtons = [dismissBtn, overrideBtn, endBtn];
-      } else {
-        transitionButtons = [dismissBtn, overrideBtn];
       }
 
       dismissBtn.addEventListener('click', () => {
@@ -395,8 +518,8 @@
           .finally(() => setTransitionBusy(false));
       });
 
-      panel.append(reflectionInput, relatedRow, errorText, actions);
-      shadow.append(backdrop, panel);
+      panelEl.append(reflectionInput, relatedRow, errorText, continueHint, actions);
+      shadow.append(backdrop, panelEl);
       shadow.addEventListener('keydown', onKeyDown);
       document.documentElement.appendChild(host);
       if (typeof MutationObserver === 'function') {
@@ -415,17 +538,39 @@
       }
     }
 
-    function show({ reason = 'You are deviating from your intent.', intent = '', state = null } = {}) {
+    function cancelHideAnimation() {
+      if (hideFinishTimer) {
+        clearTimeout(hideFinishTimer);
+        hideFinishTimer = null;
+      }
+      if (hideEndHandler && panelEl) {
+        panelEl.removeEventListener('transitionend', hideEndHandler);
+        panelEl.removeEventListener('animationend', hideEndHandler);
+        hideEndHandler = null;
+      }
+    }
+
+    function finishHide() {
+      cancelHideAnimation();
+      if (host && !lockedVisible) host.style.setProperty('display', 'none', 'important');
+      restoreDocumentRootVisibility();
+      if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
+      previousFocus = null;
+    }
+
+    function show({ reason = DRIFT_COPY, intent = '', state = null } = {}) {
       ensureHost();
+      cancelHideAnimation();
       currentState = state;
       currentReason = reason;
       currentIntent = intent;
       previousFocus = document.activeElement;
-      const reasonEl = shadow.querySelector('[data-role="reason"]');
+      setHeading(reason);
+      setReasonDisplay(reason);
       const intentEl = shadow.querySelector('[data-role="intent"]');
-      if (reasonEl) reasonEl.textContent = reason;
       if (intentEl) intentEl.textContent = intent || 'No active session intent.';
       reflectionInput.value = '';
+      reflectionInput.removeAttribute('aria-invalid');
       if (markRelatedInput) markRelatedInput.checked = false;
       if (errorText) errorText.textContent = '';
       setTransitionBusy(false);
@@ -433,6 +578,18 @@
       lockedVisible = true;
       enforceDocumentRootVisibility();
       enforceHostVisibility();
+      panelEl?.classList.remove('is-in');
+      const enter = () => {
+        if (!lockedVisible) return;
+        panelEl?.classList.add('is-in');
+      };
+      if (prefersReducedMotion()) {
+        enter();
+      } else if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(enter);
+      } else {
+        enter();
+      }
       reflectionInput.focus();
     }
 
@@ -440,10 +597,23 @@
       lockedVisible = false;
       setTransitionBusy(false);
       setPageInteractionBlocked(false);
-      if (host) host.style.setProperty('display', 'none', 'important');
-      restoreDocumentRootVisibility();
-      if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
-      previousFocus = null;
+      panelEl?.classList.remove('is-in');
+      if (!host) {
+        restoreDocumentRootVisibility();
+        previousFocus = null;
+        return;
+      }
+      if (prefersReducedMotion() || !panelEl) {
+        finishHide();
+        return;
+      }
+      hideEndHandler = (event) => {
+        if (event.target !== panelEl) return;
+        finishHide();
+      };
+      panelEl.addEventListener('transitionend', hideEndHandler);
+      panelEl.addEventListener('animationend', hideEndHandler);
+      hideFinishTimer = setTimeout(finishHide, 180);
     }
 
     function isVisible() {

@@ -1,86 +1,31 @@
-/* Heartbeat Pulse for .lock-container */
 .lock-container {
   position: relative;
   z-index: 1;
-  box-shadow: var(--shadow, 0 12px 30px rgba(0, 0, 0, 0.24));
-  animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: fadeIn 160ms ease-out both;
 }
 
-.lock-container::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
-  box-shadow: 0 0 0 2px rgba(var(--error-rgb, 244, 63, 94), 0.3);
-  animation: pulseRing 2.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-@keyframes pulseRing {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.04);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 0;
-  }
-}
-
-/* Backdrop Snap for overlay */
-/* Apply to body.intervention, not ::before — the pseudo-element is a
-   decorative scan-line texture (z-index 999); backdrop-filter there would
-   blur the texture itself, not the page content behind it. */
-@keyframes backdropSnap {
-  0% {
-    backdrop-filter: blur(0px);
-    -webkit-backdrop-filter: blur(0px);
-  }
-  100% {
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-  }
-}
-
-body.intervention {
-  animation: backdropSnap 0.25s ease-out forwards;
-}
-
-/* Staggered entrances for form elements */
 @keyframes slideUpFade {
-  0% {
-    opacity: 0;
-    transform: translateY(15px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-.stagger-1, .stagger-2, .stagger-3 {
-  opacity: 0;
-  animation: slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.stagger-1 {
-  animation-delay: 0.1s;
-}
-
-.stagger-2 {
-  animation-delay: 0.2s;
-}
-
+.stagger-1,
+.stagger-2,
 .stagger-3 {
-  animation-delay: 0.3s;
+  animation: none;
+}
+
+.intent-quote {
+  font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+  margin: 0 0 16px;
 }
 
 .intervention-actions {
@@ -90,7 +35,18 @@ body.intervention {
 }
 
 .intervention-actions button {
+  flex: 1 1 calc(50% - 6px);
+  width: auto;
+  max-width: 100%;
   min-height: 44px;
+}
+
+.intervention-actions .override-btn {
+  margin-top: 0;
+}
+
+.intervention-actions .end-session-btn {
+  flex: 1 1 100%;
 }
 
 .related-toggle {
@@ -98,7 +54,7 @@ body.intervention {
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  color: var(--text-secondary, #667085);
+  color: var(--muted, #e6e6e6);
 }
 
 .related-toggle input {
@@ -108,7 +64,7 @@ body.intervention {
 
 .transition-error {
   min-height: 1.4em;
-  color: var(--error, #dc2626);
+  color: var(--fg, #ffffff);
 }
 
 @media (max-width: 520px) {
@@ -117,26 +73,11 @@ body.intervention {
   }
 }
 
-/* Respect prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
-  .lock-container {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
-    opacity: 1 !important;
-    transform: none !important;
-  }
-  .lock-container::after {
-    animation: none !important;
-    opacity: 0 !important;
-    transform: none !important;
-  }
-  body.intervention {
-    animation: none;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-  }
-  .stagger-1, .stagger-2, .stagger-3 {
-    animation: none;
-    opacity: 1;
-    transform: translateY(0);
+    transition: none !important;
   }
 }

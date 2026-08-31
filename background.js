@@ -21,6 +21,7 @@ import {
 } from './session-metrics.js';
 import {
   sanitizeSessionHistory,
+  sanitizeUrl,
   SESSION_RETENTION_MS,
   MAX_SESSION_HISTORY,
 } from './privacy-utils.js';
@@ -357,9 +358,7 @@ chrome.idle.onStateChanged.addListener((newState) => {
 
 // Helper for trackable URLs
 function isTrackableUrl(url) {
-  if (!url) return false;
-  const ignoredSchemes = ['chrome://', 'chrome-extension://', 'chrome-search://', 'about:', 'file:'];
-  return !ignoredSchemes.some(scheme => url.startsWith(scheme));
+  return sanitizeUrl(url) != null;
 }
 
 // Helper to extract bare hostname from a URL
@@ -509,7 +508,7 @@ async function handleInterventionTransition(message, sender) {
       return { ok: false, error: 'Unsupported intervention transition.' };
     }
 
-    const reflection = typeof message.reflection === 'string' ? message.reflection.trim() : '';
+    const reflection = typeof message.reflection === 'string' ? message.reflection.trim().slice(0, 2000) : '';
     if ((transition === 'override' || transition === 'mark-related') && !reflection) {
       return { ok: false, error: 'A reflection is required to continue.' };
     }
@@ -767,7 +766,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function loadConfig() {
   if (configPromise) return configPromise;
   const generation = getStorageGeneration();
-  configPromise = new Promise((resolve) => {
+  const pending = new Promise((resolve) => {
     chrome.storage.local.get([
       'activeSession', 'trackingEnabled', 'customDistractionSites',
       'sessionTabGroupId', 'isCurrentlyIdle', 'lastIdleTime',
@@ -776,14 +775,17 @@ function loadConfig() {
     ], (result) => {
       const data = result || {};
       if (generation !== getStorageGeneration() || isStorageDeletionActive()) {
+        if (configPromise === pending) configPromise = null;
         resolve();
         return;
       }
       if (Array.isArray(data.sessionHistory)) {
-        void enqueueStorageMutation(() => {
+        void enqueueStorageMutation(async () => {
           if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+          const latest = await storageGet(['sessionHistory']);
+          if (!Array.isArray(latest.sessionHistory)) return;
           return storageSet({
-            sessionHistory: sanitizeSessionHistory(data.sessionHistory, {
+            sessionHistory: sanitizeSessionHistory(latest.sessionHistory, {
               retentionMs: SESSION_RETENTION_MS,
               maxEntries: MAX_SESSION_HISTORY,
             }),
@@ -803,7 +805,7 @@ function loadConfig() {
               when: currentSession.startTime + (currentSession.timeBudget * 60000) 
             });
           } else {
-            triggerIntervention("Time budget exceeded. Are you still working on your intent?");
+            triggerIntervention("Time budget exceeded.");
           }
         }
       } else {
@@ -862,6 +864,7 @@ function loadConfig() {
       resolve();
     });
   });
+  configPromise = pending;
   return configPromise;
 }
 
@@ -1055,7 +1058,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
-          triggerIntervention("Time budget exceeded. Are you still working on your intent?");
+          triggerIntervention("Time budget exceeded.");
         }
       });
     });
@@ -1095,7 +1098,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
             const lastIdleTimeVal = result.lastIdleTime || 0;
             if (!isCurrentlyIdleVal && lastIdleTimeVal > 0 && (Date.now() - lastIdleTimeVal < 10000)) {
               chrome.storage.local.set({ lastIdleTime: 0 }, () => {
-                triggerIntervention("You were idle and immediately switched context. Are you still aligned?", activeInfo.tabId);
+                triggerIntervention("You switched context after being idle.", activeInfo.tabId);
               });
               return;
             }
@@ -1201,7 +1204,7 @@ function handleContentEvent(payload, tabId) {
       const aligned = isUrlAligned(
         session.intent,
         metricUrl,
-        heuristicPolicy,
+        session.heuristicPolicy || heuristicPolicy,
         relatedHostnamesList()
       );
       session.metrics = applyDwellDelta(session.metrics, {
@@ -1276,7 +1279,7 @@ function evaluateDrift(url, tabId) {
       return;
     }
 
-    const activePolicy = heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
+    const activePolicy = session.heuristicPolicy || heuristicPolicy || buildDefaultPolicy('deep_work', 'balanced');
     const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
@@ -1335,6 +1338,62 @@ function evaluateDrift(url, tabId) {
 
 // ── Intervention ───────────────────────────────────────────────────────
 
+function shouldRetryInterventionDisplay(state) {
+  if (!state) return false;
+  if (state.mode === 'pending') return true;
+  return state.displayed === false;
+}
+
+async function presentIntervention(state, session, states, key) {
+  const targetTabId = Number.isInteger(state.originalTabId) ? state.originalTabId : null;
+  if (targetTabId) {
+    const shown = await sendTabMessage(targetTabId, {
+      type: 'SHOW_INTERVENTION',
+      reason: state.reason,
+      intent: session.intent || state.intent || '',
+      sessionId: state.sessionId,
+      nonce: state.nonce,
+      state,
+    });
+    if (!shown.error && shown.response?.shown) {
+      state.mode = 'overlay';
+      state.displayed = true;
+      states[key] = state;
+      await persistInterventionStates(states);
+      return state;
+    }
+    if (shown.response?.reason === 'tracking_disabled') {
+      delete states[key];
+      await persistInterventionStates(states);
+      return null;
+    }
+    try {
+      await updateTab(targetTabId, { url: chrome.runtime.getURL('intervention.html') });
+    } catch {
+      return state;
+    }
+    state.mode = 'fallback';
+    state.displayed = true;
+    state.fallbackTabId = targetTabId;
+    states[key] = state;
+    await persistInterventionStates(states);
+    return state;
+  }
+
+  if (Number.isInteger(state.fallbackTabId)) {
+    try {
+      await updateTab(state.fallbackTabId, { url: chrome.runtime.getURL('intervention.html') });
+    } catch {
+      return state;
+    }
+    state.mode = 'fallback';
+    state.displayed = true;
+    states[key] = state;
+    await persistInterventionStates(states);
+  }
+  return state;
+}
+
 function triggerIntervention(reason, tabId = null) {
   return enqueueSessionMutation(async () => {
     const result = await storageGet(['activeSession', INTERVENTION_STATE_KEY, 'trackingEnabled']);
@@ -1353,12 +1412,15 @@ function triggerIntervention(reason, tabId = null) {
     }
 
     const targetTabId = Number.isInteger(targetTab?.id) ? targetTab.id : null;
-    const existing = stateForTab(
-      cloneInterventionStates(result[INTERVENTION_STATE_KEY]),
-      targetTabId,
-      session.id,
-    );
-    if (existing) return existing;
+    const states = cloneInterventionStates(result[INTERVENTION_STATE_KEY]);
+    const existing = stateForTab(states, targetTabId, session.id);
+    if (existing) {
+      if (!shouldRetryInterventionDisplay(existing)) return existing;
+      const key = findStateEntry(states, existing);
+      if (!key) return existing;
+      existing.intent = existing.intent || session.intent || '';
+      return presentIntervention(existing, session, states, key);
+    }
 
     ensureMetrics(session);
     session.metrics.interventionCount = (session.metrics.interventionCount || 0) + 1;
@@ -1374,53 +1436,20 @@ function triggerIntervention(reason, tabId = null) {
       sessionId: session.id,
       nonce: createNonce(),
       reason,
+      intent: session.intent || '',
       originalTabId: targetTabId,
       fallbackTabId,
       originalUrl: targetTab?.url || null,
       mode: 'pending',
+      displayed: false,
       timestamp: Date.now(),
     };
-    const states = cloneInterventionStates(result[INTERVENTION_STATE_KEY]);
     const key = interventionKey(session.id, targetTabId ?? fallbackTabId);
     states[key] = state;
     await storageSet({ activeSession: session, [INTERVENTION_STATE_KEY]: states });
     currentSession = session;
 
-    if (targetTabId) {
-      const shown = await sendTabMessage(targetTabId, {
-        type: 'SHOW_INTERVENTION',
-        reason,
-        intent: session.intent || '',
-        sessionId: state.sessionId,
-        nonce: state.nonce,
-        state,
-      });
-      if (!shown.error && shown.response?.shown) {
-        state.mode = 'overlay';
-        states[key] = state;
-        await persistInterventionStates(states);
-        return state;
-      }
-      if (shown.response?.reason === 'tracking_disabled') {
-        delete states[key];
-        await persistInterventionStates(states);
-        return null;
-      }
-      state.mode = 'fallback';
-      state.fallbackTabId = targetTabId;
-      states[key] = state;
-      await persistInterventionStates(states);
-      await updateTab(targetTabId, { url: chrome.runtime.getURL('intervention.html') });
-      return state;
-    }
-
-    state.mode = 'fallback';
-    states[key] = state;
-    await persistInterventionStates(states);
-    if (fallbackTabId) {
-      await updateTab(fallbackTabId, { url: chrome.runtime.getURL('intervention.html') });
-    }
-    return state;
+    return presentIntervention(state, session, states, key);
   });
 }
 
@@ -1458,4 +1487,4 @@ export function getInMemoryState() {
   };
 }
 
-export { reloadConfig, createHistoryEntry, triggerIntervention };
+export { reloadConfig, loadConfig, createHistoryEntry, triggerIntervention, isTrackableUrl };

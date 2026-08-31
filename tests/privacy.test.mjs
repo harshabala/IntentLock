@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   ERROR_LOG_RETENTION_MS,
@@ -16,6 +17,18 @@ test('provider context URL minimization removes path, query, and fragment', () =
   assert.equal(sanitizeUrl('https://example.com/private/page?token=secret#fragment'), 'https://example.com');
   assert.equal(hostnameFromUrl('https://www.Example.com/a'), 'example.com');
   assert.equal(sanitizeUrl('chrome://settings'), null);
+  assert.equal(sanitizeUrl('javascript:alert(1)'), null);
+  assert.equal(sanitizeUrl('data:text/html,hi'), null);
+});
+
+test('fallback restore sets location.href only when sanitizeUrl(originalUrl) is non-null', async () => {
+  const source = await readFile(new URL('../intervention.js', import.meta.url), 'utf8');
+  assert.match(source, /sanitizeUrl\(/);
+  assert.match(source, /sanitizeUrl\(\s*(?:interventionState\.)?originalUrl/);
+  assert.doesNotMatch(
+    source,
+    /if\s*\(\s*interventionState\.originalUrl\s*\)\s*\{\s*window\.location\.href/,
+  );
 });
 
 test('recursive redaction removes nested credentials, secret URLs, and auth schemes', () => {

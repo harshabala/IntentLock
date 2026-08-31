@@ -346,6 +346,138 @@ test('removing a tab cleans only its intervention state', async () => {
   assert.ok(harness.storageData.interventionStates['session-1:8']);
 });
 
+test('triggerIntervention state includes intent matching the session', async () => {
+  const harness = await loadBackground(
+    { activeSession: { id: 'session-1', intent: 'write the report', isActive: true, startTime: 1, events: [] } },
+    { 1: { url: 'https://example.test/one' } },
+  );
+
+  const state = await harness.module.triggerIntervention('first', 1);
+  assert.equal(state.intent, 'write the report');
+  const stored = Object.values(harness.storageData.interventionStates || {});
+  assert.equal(stored[0].intent, 'write the report');
+});
+
+test('failed fallback navigation stays pending so triggerIntervention can retry', async () => {
+  const harness = await loadBackground(
+    {
+      activeSession: {
+        id: 'session-1',
+        intent: 'write',
+        isActive: true,
+        startTime: 1,
+        events: [],
+        metrics: { interventionCount: 1, overrideCount: 0 },
+      },
+    },
+    { 7: { url: 'https://example.test/work' } },
+  );
+
+  harness.chrome.tabs.sendMessage = (tabId, message, callback) => {
+    harness.calls.tabMessages.push({ tabId, message });
+    harness.chrome.runtime.lastError = { message: 'Could not establish connection' };
+    callback?.();
+    harness.chrome.runtime.lastError = undefined;
+    return Promise.resolve();
+  };
+  let updateAttempts = 0;
+  harness.chrome.tabs.update = (tabId, updateProperties, callback) => {
+    harness.calls.tabUpdates.push({ tabId, updateProperties });
+    updateAttempts += 1;
+    if (updateAttempts === 1) {
+      harness.chrome.runtime.lastError = { message: 'tab update failed' };
+      callback?.();
+      harness.chrome.runtime.lastError = undefined;
+      return Promise.resolve();
+    }
+    const tab = harness.tabs.get(tabId) || { id: tabId };
+    Object.assign(tab, updateProperties);
+    harness.tabs.set(tabId, tab);
+    callback?.(tab);
+    return Promise.resolve(tab);
+  };
+
+  const first = await harness.module.triggerIntervention('lock the tab', 7);
+  assert.equal(first?.mode, 'pending');
+  assert.equal(first?.displayed, false);
+  const stored = harness.storageData.interventionStates['session-1:7'];
+  assert.equal(stored.mode, 'pending');
+  assert.equal(stored.displayed, false);
+
+  harness.chrome.tabs.sendMessage = (tabId, message, callback) => {
+    harness.calls.tabMessages.push({ tabId, message });
+    callback?.({ shown: true });
+    return Promise.resolve({ shown: true });
+  };
+
+  const retry = await harness.module.triggerIntervention('lock the tab', 7);
+  assert.equal(retry.mode, 'overlay');
+  assert.equal(retry.displayed, true);
+  assert.equal(harness.storageData.activeSession.metrics.interventionCount, 2);
+  assert.equal(harness.calls.tabMessages.length, 2);
+});
+
+test('second triggerIntervention for a pending tab retries display', async () => {
+  const harness = await loadBackground(
+    {
+      activeSession: {
+        id: 'session-1',
+        intent: 'write',
+        isActive: true,
+        startTime: 1,
+        events: [],
+        metrics: { interventionCount: 2, overrideCount: 0 },
+      },
+      interventionStates: {
+        'session-1:7': {
+          sessionId: 'session-1',
+          nonce: 'nonce-pending',
+          reason: 'drift',
+          originalTabId: 7,
+          originalUrl: 'https://example.test/work',
+          mode: 'pending',
+          timestamp: 10,
+        },
+      },
+    },
+    { 7: { url: 'https://example.test/work' } },
+  );
+
+  const state = await harness.module.triggerIntervention('retry this lock', 7);
+  assert.equal(state.mode, 'overlay');
+  assert.equal(state.nonce, 'nonce-pending');
+  assert.equal(harness.storageData.activeSession.metrics.interventionCount, 2);
+  assert.equal(harness.calls.tabMessages.length, 1);
+  assert.equal(harness.calls.tabMessages[0].message.type, 'SHOW_INTERVENTION');
+  assert.equal(harness.calls.tabMessages[0].tabId, 7);
+});
+
+test('override reflection longer than 2000 is stored truncated', async () => {
+  const harness = await loadBackground({
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    interventionStates: {
+      'session-1:7': {
+        sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
+        originalUrl: 'https://example.test/work', mode: 'overlay', timestamp: 10,
+      },
+    },
+  }, { 7: { url: 'https://example.test/work' } });
+
+  const reflection = 'x'.repeat(2500);
+  const response = await harness.send({
+    type: 'INTERVENTION_TRANSITION',
+    transition: 'override',
+    sessionId: 'session-1',
+    nonce: 'nonce-1',
+    reflection,
+  }, { tab: { id: 7 } });
+
+  assert.equal(response.ok, true);
+  const stored = harness.storageData.activeSession.events.at(-1).reflection;
+  assert.equal(stored.length, 2000);
+  assert.equal(stored, 'x'.repeat(2000));
+});
+
 test('fallback and overlay expose the same authoritative controls', async () => {
   const [overlay, content, intervention, html] = await Promise.all([
     readText('intervention-overlay.js'),

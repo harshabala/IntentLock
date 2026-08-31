@@ -11,6 +11,8 @@ const root = new URL('../', import.meta.url);
 const rootPath = fileURLToPath(root);
 
 const expectedRuntimeFiles = [
+  'analytics.html',
+  'analytics.js',
   'background.js',
   'content.js',
   'diagnostics.html',
@@ -19,6 +21,11 @@ const expectedRuntimeFiles = [
   'drift-cache.js',
   'drift.js',
   'error-log.js',
+  'fonts/IBMPlexMono-Regular.woff2',
+  'fonts/OFL-IBMPlexMono.txt',
+  'fonts/OFL-SourceSerif4.txt',
+  'fonts/SourceSerif4-Italic.woff2',
+  'fonts/SourceSerif4-Regular.woff2',
   'heuristic-policy.js',
   'history.html',
   'history.js',
@@ -35,6 +42,7 @@ const expectedRuntimeFiles = [
   'newtab.css',
   'newtab.html',
   'newtab.js',
+  'onboarding.js',
   'options.html',
   'options.js',
   'page-tracker.js',
@@ -105,6 +113,7 @@ test('manifest and HTML runtime references resolve to files in the repository', 
   ].filter(Boolean);
 
   for (const htmlPath of [
+    'analytics.html',
     'diagnostics.html',
     'history.html',
     'intervention.html',
@@ -321,7 +330,11 @@ test('packaging reports spawn failures accurately and removes partial output', a
 });
 
 test('GitHub Actions workflows use minimal permissions and immutable action references', async () => {
-  for (const workflow of ['.github/workflows/test.yml', '.github/workflows/release.yml']) {
+  for (const workflow of [
+    '.github/workflows/test.yml',
+    '.github/workflows/release.yml',
+    '.github/workflows/pages.yml',
+  ]) {
     const code = await readRoot(workflow);
     assert.match(code, /permissions:/);
     for (const match of code.matchAll(/uses:\s*([^\s]+)@([^\s]+)/g)) {

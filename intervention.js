@@ -105,11 +105,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   const currentIntent = document.getElementById('current-intent');
   const reflectionInput = document.getElementById('reflection-input');
   const returnBtn = document.getElementById('return-btn');
+  const overrideBtn = document.getElementById('override-btn');
   const endSessionBtn = document.getElementById('end-session-btn');
   const reflectionForm = document.getElementById('reflection-form');
   const markRelated = document.getElementById('intentlock-mark-related');
   const dialog = document.querySelector('.lock-container');
   let transitionInFlight = false;
+
+  function syncContinueEnabled() {
+    const hasWhy = Boolean(reflectionInput?.value.trim());
+    if (overrideBtn) {
+      overrideBtn.disabled = transitionInFlight || !hasWhy;
+      if (!hasWhy) overrideBtn.setAttribute('aria-describedby', 'continue-hint');
+      else overrideBtn.removeAttribute('aria-describedby');
+    }
+  }
 
   function setTransitionBusy(busy) {
     transitionInFlight = busy;
@@ -119,6 +129,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (reflectionForm) reflectionForm.setAttribute('aria-busy', String(busy));
     if (reflectionInput) reflectionInput.disabled = busy;
     if (markRelated) markRelated.disabled = busy;
+    syncContinueEnabled();
   }
 
   function getFocusableElements() {
@@ -145,21 +156,42 @@ document.addEventListener('DOMContentLoaded', async () => {
   currentTabId = tabResult?.id ?? null;
 
   const [sessionResult, stateResult] = await Promise.all([
-    new Promise((resolve) => chrome.storage.local.get(['activeSession'], resolve)),
+    sendRuntimeMessage({ type: 'GET_SESSION' }),
     sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE', tabId: currentTabId }),
   ]);
 
-  if (sessionResult.activeSession?.isActive) {
-    currentIntent.textContent = sessionResult.activeSession.intent || 'No active session intent.';
+  const session = sessionResult.response?.session;
+  interventionState = stateResult.response?.state || null;
+  const intent = session?.intent || interventionState?.intent || '';
+  if (intent) {
+    currentIntent.textContent = intent;
+  } else if (session?.isActive) {
+    currentIntent.textContent = 'No active session intent.';
   } else {
     currentIntent.textContent = 'No active session found.';
   }
-
-  interventionState = stateResult.response?.state || null;
-  if (interventionState?.reason) reasonText.textContent = interventionState.reason;
+  const title = document.getElementById('intervention-title');
+  if (interventionState?.reason === 'Time budget exceeded.') {
+    if (title) title.textContent = 'Time budget exceeded.';
+    if (reasonText) {
+      reasonText.textContent = '';
+      reasonText.hidden = true;
+    }
+  } else if (interventionState?.reason) {
+    reasonText.textContent = interventionState.reason;
+  }
   if (!interventionState) {
     setError(stateResult.response?.error || 'This intervention is no longer active.');
   }
+  reflectionInput.addEventListener('input', () => {
+    const error = document.getElementById('transition-error');
+    if (error && error.textContent === 'Write why, or close this tab.') error.textContent = '';
+    if (reflectionInput.value.trim()) {
+      reflectionInput.setAttribute('aria-invalid', 'false');
+    }
+    syncContinueEnabled();
+  });
+  syncContinueEnabled();
   reflectionInput.focus();
 
   returnBtn.addEventListener('click', async () => {
@@ -208,6 +240,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (transitionInFlight) return;
     const reflection = reflectionInput.value.trim();
     if (!reflection) {
+      reflectionInput.setAttribute('aria-invalid', 'true');
+      setError('Write why, or close this tab.');
       reflectionInput.focus();
       return;
     }
@@ -220,7 +254,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       if (!result) return;
 
-      if (interventionState.originalUrl) {
+      const { sanitizeUrl } = await import('./privacy-utils.js');
+      if (sanitizeUrl(interventionState.originalUrl)) {
         window.location.href = interventionState.originalUrl;
       } else {
         replaceWithMessage('Override accepted', 'You may continue your session.');

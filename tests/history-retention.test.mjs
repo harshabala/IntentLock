@@ -11,6 +11,7 @@ async function source(file) {
 test('history and module UIs sanitize and persist retention-pruned session history', async () => {
   const history = await source('history.js');
   const popup = await source('popup.js');
+  const analytics = await source('analytics.js');
   const newtab = await source('newtab.js');
 
   assert.match(history, /import\('\.\/privacy-utils\.js'\)/);
@@ -20,6 +21,10 @@ test('history and module UIs sanitize and persist retention-pruned session histo
   assert.match(popup, /import \{ sanitizeSessionHistory \} from '\.\/privacy-utils\.js';/);
   assert.match(popup, /sanitizeSessionHistory\(rawHistory\)/);
   assert.doesNotMatch(popup, /chrome\.storage\.local\.set\(\{ sessionHistory: sanitizedHistory \}/);
+
+  assert.match(analytics, /import \{ sanitizeSessionHistory \} from '\.\/privacy-utils\.js';/);
+  assert.match(analytics, /sanitizeSessionHistory\(rawHistory\)/);
+  assert.doesNotMatch(analytics, /chrome\.storage\.local\.set\(\{ sessionHistory: sanitizedHistory \}/);
 
   assert.match(newtab, /import \{ sanitizeSessionHistory \} from '\.\/privacy-utils\.js';/);
   assert.match(newtab, /sanitizeSessionHistory\(raw\)/);

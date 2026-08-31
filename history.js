@@ -9,7 +9,9 @@ chrome.storage.local.get(['theme'], (result) => {
     root.classList.remove('theme-dark');
     root.classList.add('theme-light');
   } else {
-    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.remove('theme-light');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('theme-dark', prefersDark);
   }
 });
 
@@ -42,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Load, sanitize, and persist retention-pruned sessions.
+  // Load and sanitize for display; pruning here is in-memory only (not written back).
   loadSessionHistory((sessions) => {
     allSessions = sessions;
 
@@ -55,8 +57,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Setup filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+        document.querySelectorAll('.filter-btn').forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
         currentFilter = btn.dataset.filter;
         renderSessions();
       });

@@ -23,6 +23,8 @@ const FIXED_TIMESTAMP = new Date('1980-01-01T00:00:00Z');
 // Keep this list explicit: source, test, documentation, and local development files
 // must never enter a release artifact by directory traversal.
 export const RUNTIME_FILES = Object.freeze([
+  'analytics.html',
+  'analytics.js',
   'background.js',
   'content.js',
   'diagnostics.html',
@@ -31,6 +33,11 @@ export const RUNTIME_FILES = Object.freeze([
   'drift-cache.js',
   'drift.js',
   'error-log.js',
+  'fonts/IBMPlexMono-Regular.woff2',
+  'fonts/OFL-IBMPlexMono.txt',
+  'fonts/OFL-SourceSerif4.txt',
+  'fonts/SourceSerif4-Italic.woff2',
+  'fonts/SourceSerif4-Regular.woff2',
   'heuristic-policy.js',
   'history.html',
   'history.js',
@@ -47,6 +54,7 @@ export const RUNTIME_FILES = Object.freeze([
   'newtab.css',
   'newtab.html',
   'newtab.js',
+  'onboarding.js',
   'options.html',
   'options.js',
   'page-tracker.js',

@@ -5,12 +5,12 @@ Source: `~/Desktop/product-flow-metrics-task-list.md` · Branch: `feat/flow-metr
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | IL-1 | End-of-session report + on-intent metrics | Done | `session-metrics.js`, dwell deltas, history fields, report UI, REPORT_VIEWED |
-| IL-2 | Session form: preset + strictness + expectation copy | Pending | |
+| IL-2 | Session form: vow-only declare (no presets on declare) | Done | Shipped vow-only: intent + optional minutes; presets/strictness stay in onboarding/Settings |
 | IL-3 | Teach overlay + mark related | Partial | `isUrlAligned` + relatedHostnames in policy; overlay UI pending |
-| IL-4 | Weekly glance in popup + export | Pending | Helpers in `session-metrics.js` |
-| IL-5 | Onboarding heuristics-only default | Pending | |
-| README | Novice + technical sections | Pending | |
-| Ship | PR + merge | Pending | |
+| IL-4 | Weekly glance on analytics + popup summary | Done | Week glance in `analytics.js`; popup is compact summary + View stats (not full glance/export) |
+| IL-5 | Onboarding heuristics-only default | Done | Welcome + default policy only; LLM in Settings |
+| README | Novice + technical sections | Done | Two-minute GitHub Release install path |
+| Ship | PR + merge | Done | 1.6.0 ship docs (LICENSE, privacy site, store pack); CWS approval not claimed |
 
 ## Activation metric
 

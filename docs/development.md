@@ -25,7 +25,7 @@
 | `background.js` or any imported module | Extensions page → refresh icon on the IntentLock card |
 | `content.js`, `page-tracker.js`, `intervention-overlay.js` | Extensions page refresh **+** reload the affected tab |
 | `manifest.json` | Extensions page refresh (same as above) |
-| `newtab.js`, `options.js`, `popup.js` | Close and reopen the page/popup |
+| `newtab.js`, `onboarding.js`, `options.js`, `popup.js`, `analytics.js` | Close and reopen the page/popup |
 | `heuristic-policy.js` | Extensions page refresh (background imports it) |
 
 The reload button is the circular arrow (↻) under the extension card in `chrome://extensions`.
@@ -108,10 +108,12 @@ IntentLock/
 ├── privacy-utils.js               # URL minimization, retention, and secret redaction
 ├── distraction-sites.js           # Legacy 8-domain default list
 ├── error-log.js                   # Diagnostic log (chrome.storage.local)
-├── newtab.html / newtab.js        # New tab override — onboarding + session form
-├── newtab.css                     # Shared styles (used by newtab + options)
+├── newtab.html / newtab.js        # New tab override — session form + active session
+├── onboarding.js                  # First-run wizard (imported by newtab.js)
+├── newtab.css                     # Shared styles (used by newtab + options + analytics)
 ├── options.html / options.js      # Settings page
-├── popup.html / popup.js          # Toolbar popup
+├── popup.html / popup.js          # Toolbar popup (compact summary)
+├── analytics.html / analytics.js  # Week glance dashboard
 ├── intervention.html / .js        # Tab-replacement intervention page
 ├── diagnostics.html / .js         # Error log viewer
 ├── history.html / .js             # Session history viewer

@@ -44,8 +44,10 @@ import {
   chatCompletion,
 } from '../providers.js';
 
-test('getProvider falls back to OpenAI for unknown ids', () => {
-  assert.equal(getProvider('unknown').id, 'openai');
+test('getProvider does not map unknown ids to OpenAI', () => {
+  assert.equal(getProvider('unknown'), null);
+  assert.equal(getProvider('none'), null);
+  assert.equal(getProvider('openai').id, 'openai');
 });
 
 test('providerRequiresApiKey respects local and custom auth settings', () => {
@@ -85,6 +87,9 @@ test('isLlmConfigured allows local providers without API keys', () => {
     isLlmConfigured({ providerId: 'gemini', provider: getProvider('gemini'), apiKey: null }),
     false,
   );
+  assert.equal(isLlmConfigured({ providerId: 'unknown', apiKey: 'sk-test-key' }), false);
+  assert.equal(isLlmConfigured({ providerId: 'none', apiKey: 'sk-test-key' }), false);
+  assert.equal(isLlmConfigured({ apiKey: 'sk-test-key' }), false);
 });
 
 test('getLlmConfig reads provider config and session API key', async () => {
@@ -237,6 +242,55 @@ test('cleanJsonString helper strips markdown fences and surrounding whitespaces'
     cleanJsonString('```json\n{"aligned": true}\n```'),
     '{"aligned": true}',
   );
+});
+
+test('unknown provider id does not become a live OpenAI send', async () => {
+  const previousConfig = storageData.llmProviderConfig;
+  const previousSessionGet = globalThis.chrome.storage.session.get;
+  const previousLocalGet = globalThis.chrome.storage.local.get;
+  const previousFetch = globalThis.fetch;
+  const restoreLocalGet = (keys, callback) => {
+    const res = {};
+    const keysArr = Array.isArray(keys) ? keys : [keys];
+    for (const key of keysArr) {
+      if (storageData[key] !== undefined) res[key] = storageData[key];
+    }
+    callback(res);
+  };
+  globalThis.chrome.storage.local.get = restoreLocalGet;
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({ llmApiKey: 'sk-test-key' });
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run for unknown provider');
+  };
+  try {
+    storageData.llmProviderConfig = { providerId: 'none' };
+    let result = await chatCompletion('should not send');
+    assert.equal(result.ok, false);
+    assert.equal(called, false);
+    assert.equal(isLlmConfigured(await getLlmConfig()), false);
+
+    delete storageData.llmProviderConfig;
+    result = await chatCompletion('missing config');
+    assert.equal(result.ok, false);
+    assert.equal(called, false);
+    assert.equal(isLlmConfigured(await getLlmConfig()), false);
+
+    storageData.llmProviderConfig = { providerId: 'not-a-provider' };
+    result = await chatCompletion('unknown id');
+    assert.equal(result.ok, false);
+    assert.equal(called, false);
+    const config = await getLlmConfig();
+    assert.notEqual(config.providerId, 'openai');
+    assert.equal(isLlmConfigured(config), false);
+  } finally {
+    if (previousConfig === undefined) delete storageData.llmProviderConfig;
+    else storageData.llmProviderConfig = previousConfig;
+    globalThis.chrome.storage.session.get = previousSessionGet;
+    globalThis.chrome.storage.local.get = previousLocalGet;
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test('chatCompletion does not call a provider when tracking is disabled', async () => {
