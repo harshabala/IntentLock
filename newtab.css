@@ -1420,6 +1420,61 @@ button.popup-link {
   margin-top: 24px;
 }
 
+.lock-rehearsal.rehearsal-lock {
+  background: #000000;
+  color: #ffffff;
+  border: var(--line-width) solid #ffffff;
+  border-radius: var(--corner-radius);
+  padding: 16px 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='12'%3E%3Cpath d='M0 12L20 0' stroke='rgba(255,255,255,0.06)' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+  background-size: 20px 12px;
+}
+
+.lock-rehearsal.rehearsal-lock h1 {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: #ffffff;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+.lock-rehearsal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.lock-rehearsal.rehearsal-lock .primary-btn,
+.lock-rehearsal.rehearsal-lock .btn--primary {
+  background-color: #ffffff;
+  color: #000000;
+  border-color: #ffffff;
+}
+
+.lock-rehearsal.rehearsal-lock .override-btn,
+.lock-rehearsal.rehearsal-lock .btn--ghost {
+  color: #ffffff;
+  border-color: #ffffff;
+}
+
+.lock-rehearsal.rehearsal-lock .override-btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.try-lock-btn {
+  margin-top: 12px;
+  width: 100%;
+}
+
+.try-lock-status {
+  margin-top: 8px;
+  color: inherit;
+  font-size: 12px;
+}
+
 .privacy-note {
   margin-bottom: 16px;
 }

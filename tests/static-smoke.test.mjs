@@ -345,6 +345,28 @@ test('first-run copy drops jargon and active session has a next step', async () 
   assert.doesNotMatch(metrics, /heuristics don't need an API key/i);
 });
 
+test('onboarding lock rehearsal is a local preview after policy save', async () => {
+  const wizard = await text('onboarding.js');
+  assert.match(wizard, /This is the lock\./);
+  assert.match(wizard, /Got it/);
+  assert.match(wizard, /When you drift, the page looks like this\. Write why to continue, or leave\./);
+  assert.match(wizard, /lock-rehearsal/);
+  assert.match(wizard, /rehearsal-lock/);
+  assert.match(wizard, /You are drifting from your intent\./);
+  assert.match(wizard, /Continue anyway/);
+  assert.doesNotMatch(wizard, /TEST_INTERVENTION/);
+
+  const css = await text('newtab.css');
+  assert.match(css, /\.lock-rehearsal/);
+  assert.match(css, /\.rehearsal-lock/);
+});
+
+test('active session can try the lock', async () => {
+  const active = extractNamedFunction(await text('newtab.js'), 'showActiveState');
+  assert.match(active, /Try the lock/);
+  assert.match(active, /TEST_INTERVENTION/);
+});
+
 test('lock copy avoids welcome and on-track coaching', async () => {
   const sources = [
     await text('onboarding.js'),

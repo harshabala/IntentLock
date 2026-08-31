@@ -114,13 +114,53 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
           void chrome.runtime.lastError;
         });
-        showNewSessionForm(container);
+        showLockRehearsal();
       });
     });
 
     actionsRow.append(saveBtn);
     container.appendChild(actionsRow);
     categorySelect.focus();
+  }
+
+  function showLockRehearsal() {
+    container.textContent = '';
+
+    const header = document.createElement('div');
+    header.className = 'header onboarding-header';
+    const h1 = document.createElement('h1');
+    h1.textContent = 'This is the lock.';
+    const desc = document.createElement('p');
+    desc.textContent = 'When you drift, the page looks like this. Write why to continue, or leave.';
+    header.append(h1, desc);
+    container.appendChild(header);
+
+    const card = document.createElement('div');
+    card.className = 'lock-rehearsal rehearsal-lock';
+
+    const lockHeading = document.createElement('h1');
+    lockHeading.textContent = 'You are drifting from your intent.';
+    card.appendChild(lockHeading);
+
+    const actions = document.createElement('div');
+    actions.className = 'lock-rehearsal-actions';
+
+    const gotIt = document.createElement('button');
+    gotIt.type = 'button';
+    gotIt.className = 'primary-btn btn--primary';
+    gotIt.textContent = 'Got it';
+    gotIt.addEventListener('click', () => showNewSessionForm(container));
+
+    const continueBtn = document.createElement('button');
+    continueBtn.type = 'button';
+    continueBtn.className = 'override-btn btn--ghost';
+    continueBtn.textContent = 'Continue anyway';
+    continueBtn.disabled = true;
+
+    actions.append(gotIt, continueBtn);
+    card.appendChild(actions);
+    container.appendChild(card);
+    gotIt.focus();
   }
 
   showStep1();

@@ -325,7 +325,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const nextStep = document.createElement('p');
     nextStep.className = 'next-step';
     nextStep.textContent = 'Use the address bar to go to your work. Drift locks the page.';
-    header.append(intentQuote, nextStep);
+    const tryLock = document.createElement('button');
+    tryLock.type = 'button';
+    tryLock.className = 'btn--ghost try-lock-btn';
+    tryLock.textContent = 'Try the lock';
+    const tryLockStatus = document.createElement('p');
+    tryLockStatus.className = 'try-lock-status hidden';
+    tryLockStatus.setAttribute('role', 'alert');
+    tryLockStatus.setAttribute('aria-live', 'polite');
+    tryLock.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'TEST_INTERVENTION' }, (response) => {
+        if (chrome.runtime.lastError) {
+          tryLockStatus.textContent = chrome.runtime.lastError.message;
+          tryLockStatus.classList.remove('hidden');
+          return;
+        }
+        if (!response?.ok) {
+          tryLockStatus.textContent = response?.error || 'Could not trigger intervention.';
+          tryLockStatus.classList.remove('hidden');
+          return;
+        }
+        tryLockStatus.textContent = '';
+        tryLockStatus.classList.add('hidden');
+      });
+    });
+    header.append(intentQuote, nextStep, tryLock, tryLockStatus);
     container.appendChild(header);
 
     createTimer(session, container);
