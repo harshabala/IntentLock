@@ -26,8 +26,9 @@ in a private study setup record. Blank fields mean enrollment is not ready:
 | Manual acceptance results reviewed; no unresolved privacy/data-loss blockers | Pending |
 | Separate authorization to enroll and collect optional feedback | Pending |
 
-The owner has approved the **proposed** 30-day study-note retention for preparation;
-confirm its implementation and dates before enrollment. Do not invent a contact
+Study-note retention is proposed at 30 days after pilot end and remains pending
+explicit owner approval before enrollment. Implementation and dates also remain
+pending confirmation before enrollment. Do not invent a contact
 or silently choose email, a form, or a storage service. Keep completed records out
 of this repository. No names, contact lists, employer identifiers, or code-to-name
 mapping belong in study notes. A participant keeps a random code to request
