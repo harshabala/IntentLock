@@ -693,11 +693,7 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
   const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
     ? policy
     : buildDefaultPolicy('deep_work', 'balanced');
-  const terms = intentTerms(intent);
-  const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
-  if (keywordAligned || categoryAligned) return true;
-
+  // A user correction is explicit authority, unlike inferred category/keyword matches.
   const related = Array.isArray(relatedHostnames) ? relatedHostnames : [];
   const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
   for (const raw of related) {
@@ -705,7 +701,12 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
     if (!r) continue;
     if (host === r || host.endsWith(`.${r}`)) return true;
   }
-  return false;
+  const customBlocks = Array.isArray(safePolicy.customBlockDomains) ? safePolicy.customBlockDomains : [];
+  if (resolveDomainPolicy(host, safePolicy) === 'block'
+    && customBlocks.some(domain => normalizeHostname(domain) === host)) return false;
+
+  return isKeywordAligned(url, intentTerms(intent))
+    || isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
 }
 
 const REASON_LABELS = {
@@ -738,13 +739,9 @@ export function evaluatePolicyDrift({
   const signals = [];
 
   const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
-  const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
-  const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)
-    && !keywordAligned && !categoryAligned;
-  const isAligned = keywordAligned || categoryAligned || relatedAligned;
+  const isAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames);
 
-  // Immediate block: domain is in a blocked category and not aligned with intent
+  // Explicit custom blocks beat automatic alignment; user-related corrections still win.
   if (domainDecision === 'block' && !isAligned) {
     const siteCat = getSiteCategory(parsed.hostname);
     signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');

@@ -86,7 +86,8 @@ Three narrow defects were reproduced before their fixes:
    reproduced that result, then passed after adding the existing `productivity`
    site category to `deep_work` alignment. The same regression checks that YouTube
    entertainment still blocks. This allows the existing productivity category,
-   not only Docs; classification within a productivity app remains heuristic.
+   not only Docs, unless the user explicitly custom-blocked the domain;
+   classification within a productivity app remains heuristic.
 2. Related-host marks survived session end/start. Node regressions for both
    boundaries failed; the actual browser end/start journey also reproduced the
    leaked mark. Finalization and start now clear stored and in-memory marks.
@@ -157,3 +158,26 @@ change.
 Packaging already enumerates runtime assets in `scripts/package-release.mjs`;
 no packaging expansion was needed. Development dependencies and test outputs are
 ignored and never enter that allowlist.
+
+### Quality-review follow-up — 2026-09-06
+
+Review of `02a182f` identified an introduced precedence regression: with intent
+`Draft quarterly report`, an explicit `customBlockDomains: ['docs.google.com']`
+was bypassed by automatic productivity alignment. A new focused Node regression
+failed before the fix. It now verifies an immediate 0.95 lock for both an ordinary
+Docs URL and a URL containing matching quarterly/report keywords.
+
+Alignment now checks explicit session-related corrections first, then honors a
+resolved custom block before considering automatic category/keyword matches.
+Existing custom-allow precedence is retained. A user who reflects and marks a
+custom-blocked site related can still override it for the session, even when the
+URL also matches an automatic category or keyword. Ordinary, non-custom-blocked
+Docs remains aligned. Both drift evaluation and the alignment helper use this
+same precedence.
+
+Verification after the fix: `npm test` **246 passed**, zero failures/skips;
+`npm run test:browser` **2 passed in 9.6s**, using real Chromium **148.0.7778.96**
+on macOS arm64. The existing browser journey retained its explicit-related
+override, reload, and new-session relock assertions. Node tests additionally
+cover related corrections on Docs (with/without keyword overlap) and the
+synthetic blocked host. Public-host checks remain data-only Node assertions.
