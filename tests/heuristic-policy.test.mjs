@@ -326,6 +326,21 @@ test('invalid url returns shouldIntervene false without throwing', () => {
 
 // ── UI exports and migration ──────────────────────────────────────────
 
+test('quarterly report in Google Docs stays aligned after two minutes', () => {
+  const intent = 'Draft quarterly report';
+  const policy = mergePolicyWithIntent(intent, buildDefaultPolicy('deep_work', 'balanced'));
+  const url = 'https://docs.google.com/document/d/example';
+  const now = 180000;
+  assert.equal(policy.intentCategoryId, 'deep_work');
+  const result = evaluatePolicyDrift({ intent, policy, url, now,
+    events: [{ actionType: 'PAGE_DWELL', url, timestamp: now, dwellMs: 120000 }] });
+  assert.equal(result.shouldIntervene, false, JSON.stringify(result));
+  assert.equal(result.reason, 'aligned');
+  const distraction = evaluatePolicyDrift({ intent, policy, now,
+    url: 'https://www.youtube.com/watch?v=entertainment', events: [] });
+  assert.equal(distraction.shouldIntervene, true);
+});
+
 import {
   SETUP_WIZARD_STEPS,
   getCategoryPolicyOptions,

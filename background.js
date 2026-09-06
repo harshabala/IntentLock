@@ -440,11 +440,12 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     session.topDomains = entry.topDomains;
 
     await storageSet({ sessionHistory: history });
-    await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns']);
+    await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns', 'relatedDomainMarks']);
     hideInterventionsFromTabs();
     ungroupTabs();
     currentSession = null;
     overrideCooldowns.clear();
+    relatedDomainMarks = {};
     chrome.alarms.clear(timeBudgetAlarmName);
     return session;
 }
@@ -989,9 +990,13 @@ function handleSessionStart(session) {
     currentSession = session;
     clearDriftCache();
     clearLlmBackoff();
+    // A new session must evaluate even a URL checked in the previous session.
+    lastEvaluatedUrl = null;
+    lastEvaluatedTime = 0;
     await storageRemove(['llmBackoffUntil']);
     overrideCooldowns.clear(); // clear cooldowns on new session
-    await storageRemove(['overrideCooldowns']);
+    relatedDomainMarks = {}; // related exceptions belong only to this session
+    await storageRemove(['overrideCooldowns', 'relatedDomainMarks']);
     await storageSet({ activeSession: session });
 
     chrome.alarms.clear(timeBudgetAlarmName);

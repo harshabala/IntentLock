@@ -662,6 +662,7 @@ function isKeywordAligned(url, terms) {
 // Category-aware alignment: some intent categories have a natural set of site
 // categories that are aligned even without keyword overlap (e.g. job_search + job_boards)
 const CATEGORY_ALIGNMENT = {
+  deep_work:           ['productivity'],
   job_search:          ['job_boards', 'professional_network'],
   coding:              ['code_forge', 'documentation', 'ai_tools'],
   research:            ['documentation', 'news', 'forums'],

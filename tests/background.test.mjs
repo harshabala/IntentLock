@@ -495,3 +495,27 @@ test('TEST_INTERVENTION without a trackable http(s) tab errors and does not crea
     storageData.activeSession = previousSession;
   }
 });
+
+test('starting a session clears related-domain exceptions from the previous session', async () => {
+  storageData.relatedDomainMarks = { 'distraction.localhost': { count: 1, lastMarkedAt: Date.now() } };
+  await reloadConfig();
+  const response = await new Promise(resolve => messageListener({
+    type: 'SESSION_STARTED',
+    session: { id: 'fresh-related-scope', intent: 'Draft quarterly report',
+      startTime: Date.now(), isActive: true, timeBudget: null, events: [] },
+  }, {}, resolve));
+  assert.equal(response.status, 'ok');
+  assert.deepEqual(storageData.relatedDomainMarks || {}, {});
+});
+
+test('ending a session removes its related-domain exceptions', async () => {
+  storageData.activeSession = { id: 'ending-related-scope', intent: 'Draft quarterly report',
+    startTime: Date.now(), isActive: true, events: [] };
+  storageData.relatedDomainMarks = { 'distraction.localhost': { count: 1, lastMarkedAt: Date.now() } };
+  await reloadConfig();
+  const response = await new Promise(resolve => messageListener({
+    type: 'END_ACTIVE_SESSION', sessionId: 'ending-related-scope',
+  }, {}, resolve));
+  assert.equal(response.status, 'ok');
+  assert.deepEqual(storageData.relatedDomainMarks || {}, {});
+});
