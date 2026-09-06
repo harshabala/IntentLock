@@ -181,3 +181,39 @@ on macOS arm64. The existing browser journey retained its explicit-related
 override, reload, and new-session relock assertions. Node tests additionally
 cover related corrections on Docs (with/without keyword overlap) and the
 synthetic blocked host. Public-host checks remain data-only Node assertions.
+
+### CI test-environment follow-up — 2026-09-06
+
+The controller reported four failures in the Node 18 job of GitHub push run
+`34013322601` at HEAD `5bf02fa` (draft PR #6): `ReferenceError: crypto is not
+defined` at `error-log.js:119`, where diagnostic logging calls
+`crypto.randomUUID()`. The original call sites were
+`tests/error-log.test.mjs:45`, `tests/llm.test.mjs:187`, and
+`tests/providers.test.mjs:233` and `:269`. Node 22 CI and local Node 26 had passed.
+The affected test harnesses mocked browser storage but did not supply Web Crypto
+when Node lacked the browser global.
+
+Each of those three test files now imports `webcrypto` from built-in `node:crypto`
+and uses `globalThis.crypto ??= webcrypto`. Existing native crypto is preserved.
+This adds no dependency or shared helper; production code, assertions, packaging,
+and the Node 18/20/22 CI matrix are unchanged.
+
+Local verification used macOS arm64, Node **26.5.0**. A temporary CommonJS preload
+deleted `globalThis.crypto` and asserted it was undefined before test imports;
+`node --require <preload> --test` propagated that condition to the test workers.
+For the full suite, the same preload was supplied through `NODE_OPTIONS` to
+`npm test`.
+
+| Check | Observed result |
+| --- | --- |
+| Before fix, three affected test files with crypto absent at startup | 24 passed, the same 4 failures at `error-log.js:119`. |
+| After fix, same focused reproduction | 28 passed, 0 failed/skipped. |
+| Full `npm test`, crypto absent at startup | 246 passed, 0 failed/skipped. |
+| Full `npm test`, native crypto present | 246 passed, 0 failed/skipped; a temporary preload asserted native-object identity at process exit. |
+| `npm run verify:static` | 73 passed, 0 failed/skipped. |
+
+Actual Node 18/20/22 executions and a new GitHub CI result are not claimed for this
+follow-up. Subagent tools were unavailable; the implementation received a direct
+diff review, with controller review and push still pending. Browser journeys were
+not rerun for this test-only environment change. Earlier execution records above
+remain historical evidence.
