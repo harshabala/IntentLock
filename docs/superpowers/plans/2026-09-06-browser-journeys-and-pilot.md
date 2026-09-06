@@ -36,3 +36,14 @@ Task 1: implemented in `02a182f`, with explicit-block precedence correction in `
 Verification evidence: 241 baseline Node tests; 246 after fixes; two real Chromium journeys passed after the final runtime correction; 73 static checks passed. Version 1.6.0 validation, packaging, ZIP integrity and whitespace checks passed. See `docs/browser-journeys.md` for commands, dates, browser version, regressions and explicit coverage limits. No broad tests were repeated solely for the subsequent documentation edits.
 
 These completed tasks deliver the browser suite and pilot preparation. The participant study and remaining manual acceptance checks are NOT RUN. Enrollment, study-note retention, contact/channel and dates remain pending explicit owner confirmation; no recruitment, participant data collection, release or store publication occurred.
+
+## CI follow-up: Node 18 test environment
+
+The initial GitHub push exposed four existing test paths that assume global `crypto`, absent in Node 18. All failures originated at `error-log.js` when called by diagnostic, LLM, and provider tests. Scope is a test-only Web Crypto setup using Node's built-in implementation, preserving native globals when present. Do not modify production cryptography, remove assertions, or drop the supported CI target.
+
+- [x] Reproduce absent-global failures; fix the three affected test environments and record focused/full verification.
+- [x] Independent spec and quality review of the CI follow-up.
+
+Correction `55077b1` supplies built-in Web Crypto only when the test global is absent. Four original failures were reproduced; afterward 28 focused tests and all 246 tests passed with the global absent, and all 246 passed with native crypto present. Static checks passed (73). Spec and final quality/integration reviews approved the correction without remaining findings.
+
+Publication acceptance requires successful actual Node 18/20/22 GitHub checks after pushing the correction. The live check results on [draft PR #6](https://github.com/harshabala/IntentLock/pull/6) are the authoritative remote execution record, separate from the local evidence above.
