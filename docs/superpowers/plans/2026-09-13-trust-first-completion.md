@@ -10,6 +10,7 @@
 
 ## Resume here
 
+- Current checkpoint: Task 1 specification approved at `13cb946`; independent quality review is running. Tasks 2–6 have not started. Do not mark Task 1 accepted until the quality gate passes. No current-turn runtime commits pushed yet. Execution-log entries below are historical checkpoints in order, not simultaneous current statuses.
 - Working directory: `/Users/harshabalakrishnan/Documents/Projects/IntentLock/.worktrees/browser-journeys`.
 - Branch: `feat/browser-journeys`; initial HEAD `5df4f3d5ac4b1fd9c0b34c32dc20ed299008e5c5`.
 - Existing draft PR: https://github.com/harshabala/IntentLock/pull/6. Main is `195f57f20f2d9f7206e99fad74c987df65a3b96d`. Recheck before resuming.
@@ -43,6 +44,8 @@ const oldAction = { epoch: 7, values: { activeSession: { id: 'old' } } };
 ## Task 2 — Credential lifetime and provider cancellation
 
 Files: `providers.js`, `llm.js`, `background.js`, `options.js`, `options.html`; tests `providers.test.mjs`, `llm.test.mjs`, `background.test.mjs`, new `credential-storage.test.mjs` if isolation needs it. A focused `credential-storage.js` module is allowed if it centralizes all key lifecycle operations; add it to packaging.
+
+Integration notes from Task 1: `storage-authority.js` now owns `saveProvider`, `clearKey`, `tracking` and `migrateKeys`; extend those typed commands rather than introducing another writer. `captureErrorEpoch` fences deletion but does not by itself detect opt-out followed by immediate re-enable. Request validity therefore needs an authoritative privacy-change identity, not only a final `trackingEnabled` read or best-effort change-listener abort. `providers.js` currently releases its controller when headers arrive; cover body consumption too. Bind caches and downstream decisions to their originating session, and preserve the page-client action/reply epoch checks.
 
 - [ ] Reproduce session `openaiApiKey`-only migration loss, failed canonical write, concurrent replacement, missing session area, and delayed response-body completion during deletion/opt-out/re-enable.
 - [ ] Run `node --test tests/providers.test.mjs tests/llm.test.mjs tests/background.test.mjs` plus the new test file; observe specific failures.
@@ -79,11 +82,11 @@ Starter accounting regression:
 const now = 180000;
 const events = [30000, 60000, 90000].map((dwellMs, i) => ({
   actionType: 'PAGE_DWELL', url: 'https://unknown.example/',
-  timestamp: now - (2 - i) * 30000, dwellMs, deltaDwellMs: 30000,
+  timestamp: now - (2 - i) * 30000, dwellMs, dwellDeltaMs: 30000,
 }));
 // Feed real evaluator with coding/balanced policy and unrelated intent.
 // Assert no 120-second dwell interruption; add fourth delta and assert one.
-// Confirm the producer's actual delta field name before wiring this fixture.
+// page-tracker.js emits dwellDeltaMs; preserve that producer contract.
 ```
 
 ## Task 5 — Explainable sessions and dependable UI
@@ -102,6 +105,8 @@ Files: `newtab.js`, `newtab.html`, `newtab.css`, `popup.js`, `popup.html`, `inte
 
 Files: `tests/browser/fixtures.mjs`, `tests/browser/journeys.spec.mjs`, new `tests/browser/lifecycle.spec.mjs`, `playwright.config.mjs`, `.github/workflows/test.yml`, `docs/browser-journeys.md`, `docs/manual-acceptance.md`, `docs/architecture.md`, `docs/storage-schema.md`, `docs/privacy-policy.md`, `docs/site/privacy.html`, `docs/development.md`, `README.md`, `store/LISTING.md`, `docs/pilot/README.md`.
 
+Documentation audit anchors (verify against final implementation, not anticipated behavior): README provider/key tables and both privacy-policy variants describe a local-key fallback. Storage schema describes alias keys, read-time-only pruning and retained reflections. Architecture omits the new storage authority/client modules and epoch-bound messages. Pilot README data disclosure currently says history retains reflection text. Replace these together after Tasks 2–5; avoid changing unimplemented behavior claims prematurely.
+
 - [ ] Extend fixture with safe worker reacquisition and same-profile restart. Keep synthetic non-forwarding proxy, temp profile cleanup, actual production extension and browser sandbox. No test-only runtime backdoors or fake success skips.
 - [ ] Add real same-URL/two-tab and separate-window locks, worker restart, browser restart/key expiry, deletion while locked, and a real time-budget expiry. Provider delayed-body/race tests may use a local synthetic server; clearly distinguish Node controlled races from browser evidence.
 - [ ] Add separate Chromium CI job with pinned actions, read-only permissions, npm ci and browser installation. Preserve dependency-free Node matrix. Use failure artifacts with short retention containing synthetic data only; do not access secrets on PR runs.
@@ -119,4 +124,14 @@ Files: `tests/browser/fixtures.mjs`, `tests/browser/journeys.spec.mjs`, new `tes
 
 ## Execution log
 
-2026-09-13: plan/design saved before runtime changes. Tasks 1–6 not started. Existing browser-journeys worktree clean at 5df4f3d; PR6 open draft. Subsequent agents must update this section with commits, review outcomes and next task before handoff.
+2026-09-13: plan/design committed as b83fda9 before runtime changes. Baseline rerun: 246 passed, zero failed/skipped. Task 1 implementation eeb926a adds worker authority plus storage-client.js/storage-authority.js and includes live onboarding/popup paths. Controller independently observed 266/266 Node and 73/73 static passing. Independent specification review and real-browser integration underway; task not yet accepted. Tasks 2–6 not started; PR6 open draft. Subsequent agents must update this section with commits, review outcomes and next task before handoff.
+
+Task 1 review checkpoint: controller Chromium 148.0.7778.96 macOS arm64 journeys 2/2 passed in 8.7 seconds. Spec reviewer independently reproduced four gaps: delayed actual epoch-read can bless old payload; late provider diagnostic uses new epoch; stale intervention-state response can reopen deleted lock; initial marker-write failure permits idle collection. Implementer fixing with new regressions; quality review has not begun. Do not treat eeb926a as accepted or push it as completed hardening.
+
+Task 1 follow-up f7de8a3: implementer reports 277/277 full and 73/73 static passing after reproducing/fixing four gaps and direct equivalents. Controller independently ran 25/25 storage regressions during the follow-up and final real Chromium journeys 2/2 passed in 14.6 seconds. Spec re-review underway; quality gate still pending. Key lifetime and actual network cancellation remain Task 2.
+
+Task 1 second specification checkpoint: all four earlier reproduction probes pass; reviewer independently verified 277/277 full and 73/73 static. A delayed successful start/end reply can still render deleted data after deletion completes. Implementer is adding response-delivery regressions and fencing reply consumption before the next re-review. Task 1 remains unaccepted.
+
+Task 1 reply follow-up 13cb946: nine new response/render regressions, origin-epoch reply validation and guarded UI continuations. Controller independently verified full 286/286 and actual Chromium 2/2 in 9.7 seconds; implementer static 73/73. Specification re-review pending; quality review has not started. Main checkout remains clean.
+
+Task 1 specification accepted at 13cb946: reviewer independently reproduced both delayed response delivery and deletion between accepted reply and rendering, verified fresh post-deletion actions remain usable, and passed 286/286 full plus 73/73 static. Fresh quality reviewer now inspecting b83fda9..13cb946; implementer retained for any fixes.

@@ -18,3 +18,8 @@ Keep Chrome MV3, vanilla JavaScript, offline heuristics, decisive full-page inte
 Every implementation task needs failing regression evidence, passing focused/full tests, independent specification review and then quality review. Final integration adds browser tests, packaging and CI. No silent test skips or substituted production runtime. Do not merge, publish a store release, recruit participants or send study messages without explicit instructions. Existing GitHub update authorization permits pushing reviewed changes and updating the existing draft PR.
 
 The seven-day voluntary pilot kit already exists. Actual recruitment, consent, owner/contact/channel decisions and subjective usefulness evidence cannot be replaced with synthetic tests or fabricated outcomes. Report those as pending, not as completed development.
+
+## Verified platform references
+
+- [Chrome storage API](https://developer.chrome.com/docs/extensions/reference/api/storage/): session storage is memory-backed, restricted to trusted contexts by default, and cleared on extension disable/reload/update and browser restart. Local storage is asynchronous and persists; a runtime-local queue is not cross-context coordination.
+- [Playwright extension testing](https://playwright.dev/docs/chrome-extensions): use bundled Chromium and a persistent context for unpacked extensions. Keep lifecycle tests distinct from ordinary page reload tests.
