@@ -221,8 +221,9 @@ test('delete-all-data flow does not recreate provider configuration', async () =
   const options = await text('options.js');
   const background = await text('background.js');
   assert.match(options, /type:\s*['"]DELETE_ALL_DATA['"]/);
-  assert.match(background, /function\s+storageClear/);
-  assert.match(background, /beginStorageDeletion/);
+  assert.match(background, /deleteStorageData/);
+  const queue = await text('storage-queue.js');
+  assert.match(queue, /key !== PRIVACY_MARKER/);
   assert.match(options, /All data deleted/);
   assert.doesNotMatch(background, /if \(!localRes\?\.llmProviderConfig\)\s*\{[\s\S]*llmProviderConfig:/);
 });

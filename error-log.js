@@ -6,11 +6,14 @@ import {
   pruneByRetention,
   redactSecrets,
 } from './privacy-utils.js';
-import {
-  enqueueStorageMutation,
-  getStorageGeneration,
-  isStorageDeletionActive,
-} from './storage-queue.js';
+import { getStorageGeneration } from './storage-queue.js';
+import { captureStorageEpoch, mutateStorage } from './storage-client.js';
+
+let localAuthority = null;
+export function registerErrorLogAuthority(authority) { localAuthority = authority; }
+function dispatch(command, payload = {}, epoch) {
+  return localAuthority ? localAuthority(command, payload, epoch ?? getStorageGeneration()) : mutateStorage(command, payload, epoch ?? captureStorageEpoch());
+}
 
 export const ERROR_TYPES = {
   API: 'api',
@@ -113,7 +116,7 @@ function sanitizeDetails(details) {
 export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }) {
   if (!message) return Promise.resolve(null);
 
-  const generation = getStorageGeneration();
+  const generation = localAuthority ? getStorageGeneration() : (globalThis.chrome?.storage ? captureStorageEpoch() : null);
 
   const entry = {
     id: crypto.randomUUID(),
@@ -130,50 +133,16 @@ export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, 
     return Promise.resolve(entry);
   }
 
-  return enqueueStorageMutation(() => {
-    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return null;
-    return new Promise((resolve) => {
-      chrome.storage.local.get(['errorLog'], (result) => {
-        const log = pruneByRetention(
-          Array.isArray(result?.errorLog) ? result.errorLog : [],
-          { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
-        );
-        log.unshift(entry);
-        if (log.length > MAX_LOG_ENTRIES) log.length = MAX_LOG_ENTRIES;
-        chrome.storage.local.set({ errorLog: log }, () => resolve(entry));
-      });
-    });
-  });
+  // Logging is best-effort and must never recursively log a failed mutation.
+  return dispatch('appendError', { entry }, generation).catch(() => null);
 }
 
 export function getErrorLog() {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) {
-    return Promise.resolve([]);
-  }
-  const generation = getStorageGeneration();
-  return enqueueStorageMutation(() => {
-    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return [];
-    return new Promise((resolve) => {
-    chrome.storage.local.get(['errorLog'], (result) => {
-      const log = pruneByRetention(
-        Array.isArray(result?.errorLog) ? result.errorLog : [],
-        { retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_LOG_ENTRIES, newestFirst: true },
-      ).map((entry) => redactSecrets(entry));
-      chrome.storage.local.set({ errorLog: log }, () => resolve(log));
-    });
-    });
-  });
+  if (!globalThis.chrome?.storage?.local) return Promise.resolve([]);
+  return dispatch('readErrors');
 }
 
 export function clearErrorLog() {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) {
-    return Promise.resolve();
-  }
-  const generation = getStorageGeneration();
-  return enqueueStorageMutation(() => {
-    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-    return new Promise((resolve) => {
-    chrome.storage.local.set({ errorLog: [] }, () => resolve());
-    });
-  });
+  if (!globalThis.chrome?.storage?.local) return Promise.resolve();
+  return dispatch('clearErrors');
 }

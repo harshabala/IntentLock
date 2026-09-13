@@ -1,3 +1,4 @@
+import { captureStorageEpoch, mutateStorage } from './storage-client.js';
 import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
@@ -93,6 +94,8 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
     saveBtn.className = 'primary-btn onboarding-lock-btn';
     saveBtn.textContent = 'Save and continue';
     saveBtn.addEventListener('click', () => {
+      const epoch = captureStorageEpoch();
+      epoch.catch(() => {});
       const policy = buildDefaultPolicy(categorySelect.value, strictnessSelect.value);
       policy.setupCompleted = true;
       saveBtn.disabled = true;
@@ -102,19 +105,14 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
         saveBtn.textContent = 'Save and continue';
         return;
       }
-      chrome.storage.local.set({ heuristicPolicy: policy, hasSeenOnboarding: true }, () => {
-        if (isDeletionInProgress()) return;
-        if (chrome.runtime.lastError) {
-          statusEl.textContent = 'Could not save policy. You can set this later in Settings.';
-          statusEl.classList.remove('hidden');
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Save and continue';
-          return;
-        }
-        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => {
-          void chrome.runtime.lastError;
-        });
+      mutateStorage('onboarding', { category: categorySelect.value, strictness: strictnessSelect.value }, epoch).then(() => {
+        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => { void chrome.runtime.lastError; });
         showLockRehearsal();
+      }, error => {
+        statusEl.textContent = error.message;
+        statusEl.classList.remove('hidden');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save and continue';
       });
     });
 

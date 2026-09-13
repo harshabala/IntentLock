@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { getStorageGeneration } from '../storage-queue.js';
 
 const root = new URL('../', import.meta.url);
 
@@ -134,10 +135,10 @@ async function loadBackground(initialStorage = {}, initialTabs = {}) {
   const module = await import(`../background.js?intervention-state=${Date.now()}-${Math.random()}`);
   await module.reloadConfig();
 
-  async function send(message, sender = {}) {
+  async function send(message, sender = { url: 'chrome-extension://mock/intervention.html' }) {
     let response;
     await Promise.all(listenersFor(harness).map((listener) => new Promise((resolve) => {
-      const result = listener(message, sender, (value) => {
+      const result = listener({ epoch: getStorageGeneration(), ...message }, sender, (value) => {
         response = value;
         resolve();
       });
@@ -262,7 +263,7 @@ test('end-session transition and repeated end are idempotent', async () => {
   }, { tab: { id: 7 } });
   const second = await harness.send({
     type: 'END_ACTIVE_SESSION',
-  }, { tab: { id: 7 } });
+  }, { url: 'chrome-extension://mock/newtab.html' });
 
   assert.equal(first.ok, true);
   assert.equal(second.status, 'ok');

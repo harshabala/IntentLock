@@ -103,7 +103,7 @@ globalThis.chrome = {
     session: {
       get: (keys, callback) => {
         const res = {};
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const key of keysArr) {
           if (sessionStorageData[key] !== undefined) {
             res[key] = sessionStorageData[key];
@@ -116,7 +116,7 @@ globalThis.chrome = {
         if (callback) callback();
       },
       remove: (keys, callback) => {
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const k of keysArr) {
           delete sessionStorageData[k];
         }
@@ -130,7 +130,7 @@ globalThis.chrome = {
     local: {
       get: (keys, callback) => {
         const res = {};
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const key of keysArr) {
           if (storageData[key] !== undefined) {
             res[key] = structuredClone(storageData[key]);
@@ -147,7 +147,7 @@ globalThis.chrome = {
         if (callback) callback();
       },
       remove: (keys, callback) => {
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const k of keysArr) {
           delete storageData[k];
         }
@@ -169,7 +169,21 @@ const {
   createHistoryEntry,
   isTrackableUrl,
 } = await import('../background.js');
-const { beginStorageDeletion, endStorageDeletion, enqueueStorageMutation } = await import('../storage-queue.js');
+const { beginStorageDeletion, endStorageDeletion, enqueueStorageMutation, getStorageGeneration } = await import('../storage-queue.js');
+
+// Model the epoch attached by actual extension-page clients.
+const originalListener = messageListener;
+messageListener = (message, sender, respond) => originalListener({ epoch: getStorageGeneration(), ...message }, sender, respond);
+
+test('content-script senders cannot delete personal storage', async () => {
+  storageData.syntheticSentinel = 'keep';
+  const response = await new Promise(resolve => messageListener(
+    { type: 'DELETE_ALL_DATA' }, { tab: { id: 7 }, url: 'https://example.test/' }, resolve,
+  ));
+  assert.equal(storageData.syntheticSentinel, 'keep');
+  assert.equal(response.status, 'error');
+  delete storageData.syntheticSentinel;
+});
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
   // Verify initially loaded values (non-defaults)
@@ -258,7 +272,7 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
 
   let response = null;
   await new Promise((resolve) => {
-    messageListener({ type: 'SESSION_CLEARED' }, {}, (res) => {
+    messageListener({ type: 'SESSION_CLEARED' }, { url: 'chrome-extension://mock/newtab.html' }, (res) => {
       response = res;
       resolve();
     });
@@ -472,7 +486,7 @@ test('TEST_INTERVENTION without a trackable http(s) tab errors and does not crea
   try {
     let response = null;
     await new Promise((resolve) => {
-      messageListener({ type: 'TEST_INTERVENTION' }, {}, (res) => {
+      messageListener({ type: 'TEST_INTERVENTION' }, { url: 'chrome-extension://mock/options.html' }, (res) => {
         response = res;
         resolve();
       });
@@ -503,7 +517,7 @@ test('starting a session clears related-domain exceptions from the previous sess
     type: 'SESSION_STARTED',
     session: { id: 'fresh-related-scope', intent: 'Draft quarterly report',
       startTime: Date.now(), isActive: true, timeBudget: null, events: [] },
-  }, {}, resolve));
+  }, { url: 'chrome-extension://mock/newtab.html' }, resolve));
   assert.equal(response.status, 'ok');
   assert.deepEqual(storageData.relatedDomainMarks || {}, {});
 });
@@ -515,7 +529,7 @@ test('ending a session removes its related-domain exceptions', async () => {
   await reloadConfig();
   const response = await new Promise(resolve => messageListener({
     type: 'END_ACTIVE_SESSION', sessionId: 'ending-related-scope',
-  }, {}, resolve));
+  }, { url: 'chrome-extension://mock/newtab.html' }, resolve));
   assert.equal(response.status, 'ok');
   assert.deepEqual(storageData.relatedDomainMarks || {}, {});
 });

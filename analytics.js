@@ -1,3 +1,11 @@
+let privacyRevision = 0;
+chrome.runtime.onMessage.addListener(message => {
+  if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+    privacyRevision++;
+    const summary = document.getElementById('week-summary');
+    if (summary) summary.textContent = '';
+  }
+});
 import { summarizeWeek, PRIVACY_COPY } from './session-metrics.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 
@@ -38,7 +46,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const weekGlance = document.getElementById('week-summary');
   if (!weekGlance) return;
 
+  const revision = privacyRevision;
   chrome.storage.local.get(['sessionHistory'], (result) => {
+    if (revision !== privacyRevision) return;
     weekGlance.textContent = '';
 
     if (chrome.runtime.lastError) {

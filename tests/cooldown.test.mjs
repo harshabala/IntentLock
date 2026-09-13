@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getStorageGeneration } from '../storage-queue.js';
 
 // Setup global mock for Chrome APIs before importing background.js
 let sessionStorageData = {};
@@ -142,7 +143,7 @@ function triggerTabActivated(activeInfo) {
   }
 }
 
-function triggerMessage(message, sender = {}) {
+function triggerMessage(message, sender = { url: 'chrome-extension://mock/newtab.html' }) {
   return new Promise((resolve) => {
     let responded = false;
     const sendResponse = (response) => {
@@ -150,7 +151,7 @@ function triggerMessage(message, sender = {}) {
       resolve(response);
     };
     for (const listener of messageListeners) {
-      const isAsync = listener(message, sender, sendResponse);
+      const isAsync = listener({ epoch: getStorageGeneration(), ...message }, sender, sendResponse);
       if (!isAsync && !responded) {
         resolve();
       }
@@ -320,7 +321,7 @@ test('Session Reset Cleanup clears active cooldowns on SESSION_STARTED and SESSI
 
   await triggerMessage({
     type: 'SESSION_STARTED',
-    session: { id: 'new-session-456', intent: 'writing tests', startTime: Date.now() }
+    session: { id: 'new-session-456', intent: 'writing tests', isActive: true, startTime: Date.now() }
   });
 
   assert.equal(state.overrideCooldowns.size, 0, 'overrideCooldowns map in memory should be cleared on session start');

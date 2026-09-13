@@ -26,20 +26,23 @@ import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
 } from './session-metrics.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import { captureStorageEpoch, sendStorageAction } from './storage-client.js';
 import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
+let privacyRevision = 0;
 let cachedHeuristicPolicy = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED') {
     dataDeletionInProgress = true;
-    beginStorageDeletion();
+    privacyRevision++;
+    cachedHeuristicPolicy = null;
   }
   if (message?.type === 'DATA_DELETED') {
     dataDeletionInProgress = false;
-    endStorageDeletion();
+    privacyRevision++;
+    cachedHeuristicPolicy = null;
   }
 });
 
@@ -184,7 +187,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const wantReport = new URLSearchParams(location.search).get('report') === 'last';
 
+  const initialRevision = privacyRevision;
   chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory', 'heuristicPolicy'], (result) => {
+    if (dataDeletionInProgress || initialRevision !== privacyRevision) return;
     cachedHeuristicPolicy = result.heuristicPolicy || null;
     const container = document.querySelector('.lock-container');
     if (result.activeSession && result.activeSession.isActive) {
@@ -209,7 +214,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+      document.querySelectorAll('.confirm-overlay').forEach(el => el.remove());
+      showNewSessionForm(document.querySelector('.lock-container'));
+    }
+  });
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (dataDeletionInProgress) return;
     if (areaName === 'local' && Object.prototype.hasOwnProperty.call(changes, 'heuristicPolicy')) {
       cachedHeuristicPolicy = changes.heuristicPolicy.newValue || null;
     }
@@ -226,7 +241,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const oldSession = changes.activeSession.oldValue;
         if (oldSession && oldSession.isActive) {
+          const revision = privacyRevision;
           chrome.storage.local.get(['sessionHistory'], (result) => {
+            if (dataDeletionInProgress || revision !== privacyRevision) return;
             const history = sanitizeStoredHistory(result.sessionHistory);
             const lastSession = history.find(h => h.id === oldSession.id);
             if (lastSession) {
@@ -414,13 +431,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Session summary ─────────────────────────────────────────────────
 
   function endSession(container, session) {
-    if (timerInterval) clearInterval(timerInterval);
-
-    chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, (response) => {
-      chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-        const endedSession = (response && response.session) ? response.session : session;
-        showSummary(container, endedSession);
-      });
+    const epoch = captureStorageEpoch();
+    sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(response => {
+      if (!response.session) throw new Error('The session could not be ended.');
+      if (timerInterval) clearInterval(timerInterval);
+      showSummary(container, response.session);
+    }).catch(error => {
+      const status = document.createElement('p');
+      status.setAttribute('role', 'alert');
+      status.textContent = error.message;
+      container.appendChild(status);
     });
   }
 
@@ -743,6 +763,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      const epoch = captureStorageEpoch();
+      epoch.catch(() => {});
       const intentInput = document.getElementById('intent-input');
       const timeBudgetInput = document.getElementById('time-budget');
       const startBtn = document.getElementById('start-btn');
@@ -792,20 +814,12 @@ document.addEventListener('DOMContentLoaded', () => {
           startBtn.textContent = 'Lock in';
           return;
         }
-        chrome.runtime.sendMessage({ type: 'SESSION_STARTED', session: sessionData }, (response) => {
-          if (chrome.runtime.lastError || response?.status !== 'ok') {
-            logError({
-              type: ERROR_TYPES.RUNTIME,
-              message: response?.message || 'Could not start session.',
-              details: { error: chrome.runtime.lastError?.message },
-              source: 'session_start',
-            });
-            setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
-            startBtn.disabled = false;
-            startBtn.textContent = 'Lock in';
-            return;
-          }
+        sendStorageAction({ type: 'SESSION_STARTED', session: sessionData }, epoch).then(() => {
           showActiveState(sessionData);
+        }, error => {
+          setFieldError(intentInput, error.message);
+          startBtn.disabled = false;
+          startBtn.textContent = 'Lock in';
         });
       };
 

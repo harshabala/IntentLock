@@ -52,6 +52,8 @@ const expectedRuntimeFiles = [
   'privacy-utils.js',
   'session-metrics.js',
   'storage-queue.js',
+  'storage-client.js',
+  'storage-authority.js',
 ];
 
 async function readRoot(relativePath) {
