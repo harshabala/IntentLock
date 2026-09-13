@@ -6,7 +6,7 @@ import {
   pruneByRetention,
   redactSecrets,
 } from './privacy-utils.js';
-import { getStorageGeneration } from './storage-queue.js';
+import { getStorageGeneration, assertStorageEpoch } from './storage-queue.js';
 import { captureStorageEpoch, mutateStorage } from './storage-client.js';
 
 let localAuthority = null;
@@ -113,10 +113,28 @@ function sanitizeDetails(details) {
   return redactSecrets(details);
 }
 
-export function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }) {
+export function captureErrorEpoch() {
+  const token = localAuthority ? getStorageGeneration() : captureStorageEpoch();
+  // Some async operations exit before logging. Rejected page initialization
+  // must not become an unhandled rejection in those paths.
+  if (token?.catch) token.catch(() => {});
+  return token;
+}
+
+export async function isErrorEpochCurrent(token) {
+  try {
+    const epoch = await token;
+    if (localAuthority) assertStorageEpoch(epoch);
+    else if (epoch !== await captureStorageEpoch()) return false;
+    return true;
+  } catch { return false; }
+}
+
+export async function logError({ type = ERROR_TYPES.RUNTIME, message, details = null, source = 'unknown' }, token = captureErrorEpoch()) {
   if (!message) return Promise.resolve(null);
 
-  const generation = localAuthority ? getStorageGeneration() : (globalThis.chrome?.storage ? captureStorageEpoch() : null);
+  if (!await isErrorEpochCurrent(token)) return null;
+  const generation = await token;
 
   const entry = {
     id: crypto.randomUUID(),

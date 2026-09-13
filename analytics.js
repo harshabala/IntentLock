@@ -47,8 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!weekGlance) return;
 
   const revision = privacyRevision;
-  chrome.storage.local.get(['sessionHistory'], (result) => {
-    if (revision !== privacyRevision) return;
+  chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+    if (revision !== privacyRevision || result.privacyMutationState?.deleting) return;
     weekGlance.textContent = '';
 
     if (chrome.runtime.lastError) {

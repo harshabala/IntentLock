@@ -57,12 +57,15 @@ export function initializeStorageAuthority(onFence = () => {}) {
       throw new Error('Invalid privacy safety marker. Deletion retry is required.');
     }
     storageGeneration = Math.max(storageGeneration, marker?.epoch || 0);
-    deletionActive = wasDeleting || marker?.deleting === true;
-    if (deletionActive) {
+    if (wasDeleting || marker?.deleting === true) {
       onFence();
       await finishStorageDeletion();
-    } else if (!marker) {
-      await storageCall('local', 'set', { [PRIVACY_MARKER]: { epoch: storageGeneration, deleting: false } });
+    } else {
+      if (!marker) {
+        await storageCall('local', 'set', { [PRIVACY_MARKER]: { epoch: storageGeneration, deleting: false } });
+      }
+      // Only confirmed durable initialization may open the mutation boundary.
+      deletionActive = false;
     }
   });
   return initialization;

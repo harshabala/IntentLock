@@ -46,8 +46,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadSessionHistory(callback) {
     const revision = privacyRevision;
     import('./privacy-utils.js').then(({ sanitizeSessionHistory }) => {
-      chrome.storage.local.get(['sessionHistory'], (result) => {
-        if (dataDeletionInProgress || revision !== privacyRevision) { callback([]); return; }
+      chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+        if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) { callback([]); return; }
         const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
         const sanitizedHistory = sanitizeSessionHistory(rawHistory);
         callback(sanitizedHistory);

@@ -26,7 +26,7 @@ import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
 } from './session-metrics.js';
-import { captureStorageEpoch, sendStorageAction } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction } from './storage-client.js';
 import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
@@ -52,7 +52,15 @@ function sanitizeStoredHistory(rawHistory) {
   return sanitized;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function setFieldError(field, message, hintId) {

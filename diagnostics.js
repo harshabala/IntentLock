@@ -1,3 +1,4 @@
+import { initializeStorageClient } from './storage-client.js';
 // Load and apply theme override as early as possible
 chrome.storage.local.get(['theme'], (result) => {
   const theme = result.theme || 'auto';
@@ -30,7 +31,15 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') privacyRevision++;
 });
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const listEl = document.getElementById('error-log-list');
   const emptyEl = document.getElementById('empty-log');
   const copyBtn = document.getElementById('copy-log-btn');

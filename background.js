@@ -416,9 +416,10 @@ function endActiveSession(reflection = null, callback = null, expectedSessionId 
   return operation;
 }
 
-async function getInterventionStateForTab(tabId) {
+async function getInterventionStateForTab(tabId, epoch = getStorageGeneration()) {
   if (!Number.isInteger(tabId)) return null;
   const result = await storageGet(['activeSession', INTERVENTION_STATE_KEY, 'trackingEnabled']);
+  assertStorageEpoch(epoch);
   if (result.trackingEnabled === false) return null;
   if (!result.activeSession?.isActive) return null;
   return stateForTab(
@@ -576,7 +577,7 @@ function handleSessionCleared(sendResponse) {
     fencePrivateState();
     authorityReady = Promise.resolve();
     await reloadConfig();
-    chrome.runtime.sendMessage?.({ type: 'DATA_DELETED' }, () => { void chrome.runtime.lastError; });
+    chrome.runtime.sendMessage?.({ type: 'DATA_DELETED', epoch: getStorageGeneration() }, () => { void chrome.runtime.lastError; });
     sendResponse({ status: 'ok' });
   }, error => {
     sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
@@ -662,14 +663,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ session: currentSession });
       } else {
         chrome.storage.local.get(['activeSession'], (result) => {
+          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) {
+            sendResponse({ status: 'error', session: null, message: 'Data changed while reading the session.' });
+            return;
+          }
           sendResponse({ session: result.activeSession || null });
         });
       }
     } else if (message.type === 'GET_INTERVENTION_STATE') {
       const requestedTabId = Number.isInteger(sender.tab?.id) ? sender.tab.id : message.tabId;
-      getInterventionStateForTab(requestedTabId).then((state) => {
+      getInterventionStateForTab(requestedTabId, epoch).then((state) => {
+        assertStorageEpoch(epoch);
         sendResponse({ ok: true, state });
-      }, (error) => {
+      }).catch((error) => {
         sendResponse({ ok: false, error: error.message || 'Unable to read intervention state.' });
       });
     } else if (message.type === 'CONFIG_UPDATED') {

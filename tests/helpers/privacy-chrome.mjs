@@ -11,9 +11,11 @@ export function privacyChrome(localData = {}, sessionData = {}) {
       onMessage: { addListener(fn) { listeners.push(fn); } },
       sendMessage(message, callback) {
         if (['DATA_DELETION_STARTED', 'DATA_DELETED', 'HIDE_INTERVENTION'].includes(message.type)) {
-          calls.push(message.type); callback?.(); return;
+          calls.push(message.type);
+          for (const listener of listeners.slice(1)) listener(message, { id: 'privacy-test' }, () => {});
+          callback?.(); return;
         }
-        listeners.at(-1)(message, { id: 'privacy-test', url: chrome.runtime.getURL('options.html') }, callback || (() => {}));
+        listeners[0](message, { id: 'privacy-test', url: chrome.runtime.getURL('options.html') }, callback || (() => {}));
       },
     },
     idle: { setDetectionInterval() {}, onStateChanged: event },
@@ -56,7 +58,7 @@ export function privacyChrome(localData = {}, sessionData = {}) {
     get isHeld() { return Boolean(held); },
     release() { const complete = held; held = null; complete?.(); },
     send(message, sender = { id: 'privacy-test', url: chrome.runtime.getURL('options.html') }) {
-      return new Promise(resolve => listeners.at(-1)(message, sender, resolve));
+      return new Promise(resolve => listeners[0](message, sender, resolve));
     },
   };
 }

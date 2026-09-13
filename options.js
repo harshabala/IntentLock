@@ -10,9 +10,19 @@ import {
 import { logError, ERROR_TYPES } from './error-log.js';
 import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
-import { captureStorageEpoch, mutateStorage } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, mutateStorage } from './storage-client.js';
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  let clientReady = false;
+  try { await initializeStorageClient(); clientReady = true; }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    // Retry deletion remains available even when the durable barrier blocks
+    // initialization. No stored settings are loaded in this state.
+  }
   const providerSelect = document.getElementById('provider-select');
   const providerDescription = document.getElementById('provider-description');
   const customProviderFields = document.getElementById('custom-provider-fields');
@@ -45,7 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const testInterventionStatus = document.getElementById('test-intervention-status');
   let deleteArmed = false;
   let deleteArmTimer = null;
-  let deletionInProgress = false;
+  let deletionInProgress = !clientReady;
   let privacyRevision = 0;
   let hasSavedApiKey = false;
   let providerAdvancedOpen = false;
@@ -141,7 +151,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   providerSelect.addEventListener('change', () => {
-    const epoch = captureStorageEpoch();
     if (deletionInProgress) return;
     const provider = getProvider(providerSelect.value) || getProvider(DEFAULT_PROVIDER_ID);
     modelInput.value = provider.defaultModel;
@@ -156,6 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (chrome.storage.session) {
+      const epoch = captureStorageEpoch();
       mutateStorage('clearKey', {}, epoch).then(finishProviderSwitch, error => showStatus(providerStatus, error.message));
     } else {
       finishProviderSwitch();
@@ -242,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const settingsRevision = privacyRevision;
-  chrome.storage.local.get([
+  if (clientReady) chrome.storage.local.get([
     'llmProviderConfig', 'llmApiKey', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
     if (deletionInProgress || settingsRevision !== privacyRevision) return;

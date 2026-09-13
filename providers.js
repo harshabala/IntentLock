@@ -1,6 +1,6 @@
 // providers.js — Multi-provider LLM adapter for IntentLock
 
-import { classifyApiError, logError, ERROR_TYPES } from './error-log.js';
+import { classifyApiError, logError, ERROR_TYPES, captureErrorEpoch, isErrorEpochCurrent } from './error-log.js';
 import {
   isLlmBackedOff,
   parseRetryAfterMs,
@@ -479,7 +479,7 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
 }
 
 async function chatCompletionInternal(prompt, options = {}) {
-  const { jsonMode = true, maxTokens = 100, temperature = 0.1 } = options;
+  const { jsonMode = true, maxTokens = 100, temperature = 0.1, storageEpoch } = options;
   if (isStorageDeletionActive()) {
     return {
       ok: false,
@@ -503,7 +503,7 @@ async function chatCompletionInternal(prompt, options = {}) {
   const configError = validateProviderConfig(config);
   if (configError) {
     const error = { code: 'invalid_provider_config', message: configError, providerId: config.providerId };
-    await logError({ type: ERROR_TYPES.CONFIG, message: configError, details: redactSecrets(error), source: 'chatCompletion' });
+    await logError({ type: ERROR_TYPES.CONFIG, message: configError, details: redactSecrets(error), source: 'chatCompletion' }, storageEpoch);
     return { ok: false, error };
   }
 
@@ -569,6 +569,7 @@ async function chatCompletionInternal(prompt, options = {}) {
         return { ok: false, error: { code: 'unsupported_provider', message: 'Unsupported API format.', providerId: config.providerId } };
     }
 
+    if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
     if (!text) {
       const emptyError = { code: 'empty_response', message: 'API returned an empty response.', providerId: config.providerId };
       await logError({
@@ -576,12 +577,13 @@ async function chatCompletionInternal(prompt, options = {}) {
         message: emptyError.message,
         details: emptyError,
         source: 'chatCompletion',
-      });
+      }, storageEpoch);
       return { ok: false, error: emptyError };
     }
 
     return { ok: true, text };
   } catch (error) {
+    if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
     if (error?.code === 'tracking_disabled') {
       return trackingDisabledResult(error.providerId || config.providerId);
     }
@@ -599,7 +601,7 @@ async function chatCompletionInternal(prompt, options = {}) {
           message: `${apiError.message}${modelHint}`,
           details: { ...apiError, model: config.model },
           source: 'chatCompletion',
-        });
+        }, storageEpoch);
       }
     } else {
       await logError({
@@ -607,7 +609,7 @@ async function chatCompletionInternal(prompt, options = {}) {
         message: apiError.message,
         details: apiError,
         source: 'chatCompletion',
-      });
+      }, storageEpoch);
     }
 
     return { ok: false, error: apiError };
@@ -615,10 +617,12 @@ async function chatCompletionInternal(prompt, options = {}) {
 }
 
 export async function chatCompletion(prompt, options = {}) {
+  const storageEpoch = options.storageEpoch ?? captureErrorEpoch();
   if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
     return { ok: false, error: { code: 'prompt_too_large', message: 'Provider prompt exceeds the safety limit.' } };
   }
-  const key = JSON.stringify([prompt, options]);
+  if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
+  const key = JSON.stringify([prompt, options, await storageEpoch]);
   const existing = inFlightRequests.get(key);
   if (existing) return existing;
   if (inFlightRequests.size >= MAX_PROVIDER_CONCURRENCY) {
@@ -626,6 +630,7 @@ export async function chatCompletion(prompt, options = {}) {
   }
   const request = chatCompletionInternal(prompt, {
     ...options,
+    storageEpoch,
     maxTokens: Math.max(1, Math.min(Number.isFinite(options.maxTokens) ? options.maxTokens : 100, 500)),
   });
   inFlightRequests.set(key, request);

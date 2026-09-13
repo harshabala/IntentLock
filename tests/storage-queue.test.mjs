@@ -12,6 +12,8 @@ await worker.reloadConfig();
 // Independent page modules cross the real worker message boundary.
 const a = await import('../storage-client.js?page-a');
 const b = await import('../storage-client.js?page-b');
+await a.initializeStorageClient();
+await b.initializeStorageClient();
 const marker = queue.PRIVACY_MARKER;
 const config = { providerId: 'ollama', model: 'synthetic', baseUrl: 'http://127.0.0.1:11434/api/chat' };
 const session = id => ({ id, intent: 'synthetic work', startTime: Date.now(), isActive: true, events: [] });
@@ -35,11 +37,11 @@ test('two page runtimes serialize commands without losing another page entry', a
 });
 
 test('delayed Settings save cannot restore data after completed deletion', async () => {
-  h.holdNext(op => op.area === 'local' && op.method === 'get' && op.value?.includes(marker));
-  const epoch = a.captureStorageEpoch();
-  await until(() => h.isHeld);
+  const originalEpoch = a.captureStorageEpoch();
+  let release;
+  const epoch = new Promise(resolve => { release = async () => resolve(await originalEpoch); });
   await erase();
-  h.release();
+  release();
   await assert.rejects(a.mutateStorage('saveProvider', { config, key: 'synthetic-key' }, epoch), /changed|deletion/);
   onlyMarker();
   await b.mutateStorage('theme', { theme: 'dark' });
@@ -235,4 +237,122 @@ test('failed start persistence does not expose an in-memory active session', asy
   assert.equal(worker.getInMemoryState().currentSession, null);
   const response = await h.send({ type: 'GET_SESSION' });
   assert.equal(response.session, null);
+});
+
+test('actual late marker read cannot bless a predeletion Settings payload', async () => {
+  const get = chrome.storage.local.get;
+  let releaseRead;
+  chrome.storage.local.get = (keys, callback) => {
+    if (keys?.includes(marker)) releaseRead = () => get(keys, callback);
+    else get(keys, callback);
+  };
+  const epoch = a.captureStorageEpoch();
+  const payload = { config, key: 'predeletion-key' };
+  chrome.storage.local.get = get;
+  await erase();
+  releaseRead?.(); // Read the NEW marker now, not an old invocation snapshot.
+  await assert.rejects(a.mutateStorage('saveProvider', payload, epoch), /changed|deletion|ready/);
+  onlyMarker();
+});
+
+test('delayed real provider failure cannot recreate deleted diagnostic data', async () => {
+  await a.mutateStorage('saveProvider', { config });
+  const { chatCompletion } = await import('../providers.js');
+  const oldFetch = globalThis.fetch;
+  let releaseResponse;
+  globalThis.fetch = () => new Promise(resolve => { releaseResponse = resolve; });
+  try {
+    const pending = chatCompletion('synthetic prior intent');
+    await until(() => Boolean(releaseResponse));
+    await erase();
+    onlyMarker();
+    releaseResponse({ ok: false, status: 500, text: async () => JSON.stringify({
+      error: { message: 'synthetic prior intent echoed' },
+    }) });
+    await pending;
+    onlyMarker();
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test('intervention read paused across deletion never returns deleted state', async () => {
+  await a.sendStorageAction({ type: 'SESSION_STARTED', session: session('locked') });
+  h.local.interventionStates = { 'locked:7': {
+    sessionId: 'locked', originalTabId: 7, nonce: 'old-nonce', intent: 'deleted intent',
+  } };
+  h.holdNext(op => op.method === 'get' && op.value?.includes('interventionStates'));
+  const reading = h.send({ type: 'GET_INTERVENTION_STATE' },
+    { id: 'privacy-test', tab: { id: 7 }, url: 'https://example.test' });
+  await until(() => h.isHeld);
+  await erase();
+  h.release();
+  const response = await reading;
+  assert.equal(response.state ?? null, null);
+  assert.equal(response.ok, false);
+  onlyMarker();
+});
+
+test('fallback GET_SESSION read paused across deletion never returns old session', async () => {
+  h.local.activeSession = session('uncached');
+  h.holdNext(op => op.method === 'get' && op.value?.includes('activeSession'));
+  const reading = h.send({ type: 'GET_SESSION' });
+  await until(() => h.isHeld);
+  await erase();
+  h.release();
+  const response = await reading;
+  assert.equal(response.session ?? null, null);
+  onlyMarker();
+});
+
+test('failed initial marker persistence stays closed to idle writes and deletion retry recovers', () => {
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { privacyChrome } from './tests/helpers/privacy-chrome.mjs';
+    const h = privacyChrome();
+    let idle;
+    h.chrome.idle.onStateChanged = { addListener(fn) { idle = fn; } };
+    h.failNext(op => op.method === 'set' && op.value?.privacyMutationState);
+    globalThis.chrome = h.chrome;
+    await import('./background.js');
+    const queue = await import('./storage-queue.js');
+    const failed = await h.send({ type: 'CONFIG_UPDATED' });
+    const blocked = queue.isStorageDeletionActive();
+    idle('idle');
+    await queue.enqueueStorageMutation(() => {});
+    const beforeRetry = structuredClone(h.local);
+    const retry = await h.send({ type: 'DELETE_ALL_DATA' });
+    const saved = await h.send({ type: 'STORAGE_MUTATION', command: 'theme',
+      payload: { theme: 'dark' }, epoch: queue.getStorageGeneration() });
+    console.log(JSON.stringify({ failed, blocked, beforeRetry, retry, saved, local: h.local }));
+  `], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout.trim());
+  assert.equal(result.failed.status, 'error');
+  assert.equal(result.blocked, true);
+  assert.deepEqual(result.beforeRetry, {});
+  assert.equal(result.retry.status, 'ok');
+  assert.equal(result.saved.status, 'ok');
+  assert.equal(result.local[marker].deleting, false);
+  assert.equal(result.local.theme, 'dark');
+});
+
+test('plan work keeps its origin when a delayed config read spans deletion and new settings', async () => {
+  await a.mutateStorage('saveProvider', { config });
+  const { generateIntentPlan } = await import('../llm.js');
+  h.holdNext(op => op.method === 'get' && op.value?.includes('llmProviderConfig'));
+  const oldFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: true, json: async () => ({ message: { content: '{"steps":["old plan"]}' } }) };
+  };
+  try {
+    const pending = generateIntentPlan('synthetic deleted intent');
+    await until(() => h.isHeld);
+    await erase();
+    await b.mutateStorage('saveProvider', { config });
+    h.release();
+    await pending;
+    assert.equal(calls, 0, 'old plan must not be sent using the new settings epoch');
+    assert.equal(h.local.errorLog, undefined);
+    await erase();
+  } finally { globalThis.fetch = oldFetch; }
 });

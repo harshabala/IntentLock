@@ -2,6 +2,7 @@
 
 let interventionState = null;
 let currentTabId = null;
+let privacyRevision = 0;
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -61,6 +62,7 @@ function closeCurrentTab(onFailure = setError) {
 }
 
 function dismissFallbackLock(message) {
+  privacyRevision++;
   interventionState = null;
   replaceWithMessage('Lock disabled', message);
   void closeCurrentTab((error) => setError(error));
@@ -85,6 +87,7 @@ async function submitTransition(transition, details = {}) {
     return null;
   }
 
+  const revision = privacyRevision;
   const result = await sendRuntimeMessage({
     type: 'INTERVENTION_TRANSITION',
     transition,
@@ -93,6 +96,7 @@ async function submitTransition(transition, details = {}) {
     tabId: currentTabId,
     ...details,
   });
+  if (revision !== privacyRevision) return null;
   if (!result.response?.ok) {
     setError(result.response?.error || result.error?.message || 'Unable to update the lock.');
     return null;
@@ -157,6 +161,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  const revision = privacyRevision;
   const tabResult = await new Promise((resolve) => chrome.tabs.getCurrent(resolve));
   currentTabId = tabResult?.id ?? null;
 
@@ -165,6 +170,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE', tabId: currentTabId }),
   ]);
 
+  if (revision !== privacyRevision) return;
   const session = sessionResult.response?.session;
   interventionState = stateResult.response?.state || null;
   const intent = session?.intent || interventionState?.intent || '';

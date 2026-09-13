@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { privacyChrome, until } from './helpers/privacy-chrome.mjs';
-import { captureStorageEpoch, mutateStorage } from '../storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, mutateStorage } from '../storage-client.js';
 import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
@@ -37,6 +37,7 @@ test('onboarding Continue then Save shows lock rehearsal, Got it opens the sessi
   globalThis.chrome = h.chrome;
   await import('../background.js');
   await h.send({ type: 'CONFIG_UPDATED' });
+  await initializeStorageClient();
   const chrome = h.chrome;
   const { showOnboardingWizard } = await loadOnboardingWizard({ document, chrome });
   assert.equal(typeof showOnboardingWizard, 'function');

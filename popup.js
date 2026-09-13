@@ -1,15 +1,23 @@
-import { captureStorageEpoch, sendStorageAction } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction } from './storage-client.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 
 let dataDeletionInProgress = false;
+let privacyRevision = 0;
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+    privacyRevision++;
+    const content = document.getElementById('content');
+    if (content) content.textContent = '';
+  }
   if (message?.type === 'DATA_DELETION_STARTED') dataDeletionInProgress = true;
   if (message?.type === 'DATA_DELETED') dataDeletionInProgress = false;
 });
 
 function loadSessionHistory(callback) {
-  chrome.storage.local.get(['sessionHistory'], (result) => {
+  const revision = privacyRevision;
+  chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+    if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) return;
     const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
     const sanitizedHistory = sanitizeSessionHistory(rawHistory);
     callback(sanitizedHistory);
@@ -52,7 +60,15 @@ function quotedIntent(text) {
   return el;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const content = document.getElementById('content');
 
   function addFooter(parent) {
@@ -176,7 +192,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateUI() {
-    chrome.storage.local.get(['activeSession', 'llmBackoffUntil'], (result) => {
+    const revision = privacyRevision;
+    chrome.storage.local.get(['activeSession', 'llmBackoffUntil', 'privacyMutationState'], (result) => {
+      if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) return;
       const session = result.activeSession;
 
       if (!session || !session.isActive) {
