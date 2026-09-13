@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { privacyChrome, until } from './helpers/privacy-chrome.mjs';
-import { initializeStorageClient, captureStorageEpoch, mutateStorage } from '../storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, mutateStorage, guardStorageContinuation } from '../storage-client.js';
 import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
@@ -25,6 +25,7 @@ async function loadOnboardingWizard(globals) {
     buildDefaultPolicy,
     captureStorageEpoch,
     mutateStorage,
+    guardStorageContinuation,
     ...globals,
   });
   vm.runInContext(code, context, { filename: 'onboarding.js' });

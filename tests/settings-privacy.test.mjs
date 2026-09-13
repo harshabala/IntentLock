@@ -81,3 +81,25 @@ test('a newly opened Settings page retains deletion retry while its client is bl
   assert.equal(h.session.llmApiKey, undefined);
   assert.equal(document.getElementById('data-status').textContent, 'All data deleted.');
 });
+
+test('Settings success queued before deletion cannot restore saved-key UI afterward', async () => {
+  const document = await loadSettings(client);
+  await until(() => document.getElementById('provider-select').value !== '');
+  document.getElementById('provider-select').value = 'ollama';
+  document.getElementById('model-input').value = 'synthetic-model';
+  document.getElementById('base-url-input').value = 'http://127.0.0.1:11434/api/chat';
+  document.getElementById('api-key').value = 'synthetic-key';
+  h.holdNextReply((message, response) => message.command === 'saveProvider' && response.status === 'ok');
+  document.getElementById('save-provider-btn').click();
+  await until(() => h.isReplyHeld);
+  h.releaseReply();
+  h.holdNext(op => op.area === 'local' && op.method === 'remove');
+  const deleting = h.send({ type: 'DELETE_ALL_DATA' });
+  await until(() => h.isHeld);
+  const obsoleteSuccess = document.getElementById('provider-status').textContent.includes('settings saved');
+  h.release();
+  await deleting;
+  assert.equal(obsoleteSuccess, false, 'deleted credentials must not be presented as saved');
+  assert.deepEqual(Object.keys(h.local), ['privacyMutationState']);
+  assert.equal(h.session.llmApiKey, undefined);
+});

@@ -2,7 +2,7 @@
 export function privacyChrome(localData = {}, sessionData = {}) {
   const local = structuredClone(localData), session = structuredClone(sessionData);
   const listeners = [], calls = [];
-  let pause, failure, held;
+  let pause, failure, held, replyPause, heldReply;
   const event = { addListener() {} };
   const chrome = {
     runtime: {
@@ -15,7 +15,12 @@ export function privacyChrome(localData = {}, sessionData = {}) {
           for (const listener of listeners.slice(1)) listener(message, { id: 'privacy-test' }, () => {});
           callback?.(); return;
         }
-        listeners[0](message, { id: 'privacy-test', url: chrome.runtime.getURL('options.html') }, callback || (() => {}));
+        listeners[0](message, { id: 'privacy-test', url: chrome.runtime.getURL('options.html') }, response => {
+          if (replyPause?.(message, response)) {
+            replyPause = null;
+            heldReply = () => callback?.(response);
+          } else callback?.(response);
+        });
       },
     },
     idle: { setDetectionInterval() {}, onStateChanged: event },
@@ -54,6 +59,9 @@ export function privacyChrome(localData = {}, sessionData = {}) {
   }
   return {
     chrome, local, session, calls,
+    holdNextReply(predicate) { replyPause = predicate; },
+    get isReplyHeld() { return Boolean(heldReply); },
+    releaseReply() { const deliver = heldReply; heldReply = null; deliver?.(); },
     holdNext(predicate) { pause = predicate; }, failNext(predicate) { failure = predicate; },
     get isHeld() { return Boolean(held); },
     release() { const complete = held; held = null; complete?.(); },

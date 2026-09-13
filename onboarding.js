@@ -1,4 +1,4 @@
-import { captureStorageEpoch, mutateStorage } from './storage-client.js';
+import { captureStorageEpoch, mutateStorage, guardStorageContinuation } from './storage-client.js';
 import {
   INTENT_CATEGORIES,
   buildDefaultPolicy,
@@ -105,10 +105,10 @@ export function showOnboardingWizard(container, { showNewSessionForm, isDeletion
         saveBtn.textContent = 'Save and continue';
         return;
       }
-      mutateStorage('onboarding', { category: categorySelect.value, strictness: strictnessSelect.value }, epoch).then(() => {
+      mutateStorage('onboarding', { category: categorySelect.value, strictness: strictnessSelect.value }, epoch).then(guardStorageContinuation(() => {
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' }, () => { void chrome.runtime.lastError; });
         showLockRehearsal();
-      }, error => {
+      }), error => {
         statusEl.textContent = error.message;
         statusEl.classList.remove('hidden');
         saveBtn.disabled = false;

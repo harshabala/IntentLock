@@ -26,7 +26,7 @@ import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
 } from './session-metrics.js';
-import { initializeStorageClient, captureStorageEpoch, sendStorageAction } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
@@ -440,11 +440,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function endSession(container, session) {
     const epoch = captureStorageEpoch();
-    sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(response => {
+    sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(guardStorageContinuation(response => {
       if (!response.session) throw new Error('The session could not be ended.');
       if (timerInterval) clearInterval(timerInterval);
       showSummary(container, response.session);
-    }).catch(error => {
+    })).catch(error => {
       const status = document.createElement('p');
       status.setAttribute('role', 'alert');
       status.textContent = error.message;
@@ -822,9 +822,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           startBtn.textContent = 'Lock in';
           return;
         }
-        sendStorageAction({ type: 'SESSION_STARTED', session: sessionData }, epoch).then(() => {
+        sendStorageAction({ type: 'SESSION_STARTED', session: sessionData }, epoch).then(guardStorageContinuation(() => {
           showActiveState(sessionData);
-        }, error => {
+        }), error => {
           setFieldError(intentInput, error.message);
           startBtn.disabled = false;
           startBtn.textContent = 'Lock in';

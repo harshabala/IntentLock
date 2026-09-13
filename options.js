@@ -10,7 +10,7 @@ import {
 import { logError, ERROR_TYPES } from './error-log.js';
 import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
-import { initializeStorageClient, captureStorageEpoch, mutateStorage } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, mutateStorage, guardStorageContinuation } from './storage-client.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
   let clientReady = false;
@@ -166,7 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (chrome.storage.session) {
       const epoch = captureStorageEpoch();
-      mutateStorage('clearKey', {}, epoch).then(finishProviderSwitch, error => showStatus(providerStatus, error.message));
+      mutateStorage('clearKey', {}, epoch).then(guardStorageContinuation(finishProviderSwitch), error => showStatus(providerStatus, error.message));
     } else {
       finishProviderSwitch();
     }
@@ -404,13 +404,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (deletionInProgress) return;
     saveProviderBtn.disabled = true;
-    mutateStorage('saveProvider', { config, ...(key ? { key } : {}) }, epoch).then(() => {
+    mutateStorage('saveProvider', { config, ...(key ? { key } : {}) }, epoch).then(guardStorageContinuation(() => {
       hasSavedApiKey = hasSavedApiKey || Boolean(key);
       apiKeyInput.value = '';
       updateProviderUI(config.providerId);
       showStatus(providerStatus, `${(getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label} settings saved.`);
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    }, error => {
+    }), error => {
       showStatus(providerStatus, error.message);
     }).finally(() => { saveProviderBtn.disabled = false; });
   });
@@ -438,10 +438,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     );
 
     saveSitesBtn.disabled = true;
-    mutateStorage('saveSites', { categoryPolicies, customBlockDomains, customAllowDomains }, epoch).then(() => {
+    mutateStorage('saveSites', { categoryPolicies, customBlockDomains, customAllowDomains }, epoch).then(guardStorageContinuation(() => {
       showStatus(sitesStatus, 'Site policies saved.');
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    }, error => showStatus(sitesStatus, error.message))
+    }), error => showStatus(sitesStatus, error.message))
       .finally(() => { saveSitesBtn.disabled = false; });
   });
 
@@ -452,10 +452,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     trackingToggle.disabled = true;
-    mutateStorage('tracking', { enabled }).then(() => {
+    mutateStorage('tracking', { enabled }).then(guardStorageContinuation(() => {
       showStatus(dataStatus, enabled ? 'Tracking enabled.' : 'Tracking disabled.');
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    }, error => {
+    }), error => {
       trackingToggle.checked = !enabled;
       showStatus(dataStatus, error.message);
     }).finally(() => { trackingToggle.disabled = false; });
@@ -587,7 +587,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     btn.addEventListener('click', () => {
       if (deletionInProgress) return;
       const theme = btn.dataset.theme;
-      mutateStorage('theme', { theme }).then(() => {
+      mutateStorage('theme', { theme }).then(guardStorageContinuation(() => {
         document.querySelectorAll('.theme-btn').forEach((b) => {
           const on = b === btn;
           b.classList.toggle('active', on);
@@ -597,7 +597,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         applyTheme(theme);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-      }, error => showStatus(themeStatus, error.message));
+      }), error => showStatus(themeStatus, error.message));
     });
   });
 });

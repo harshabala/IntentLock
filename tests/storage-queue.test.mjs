@@ -356,3 +356,21 @@ test('plan work keeps its origin when a delayed config read spans deletion and n
     await erase();
   } finally { globalThis.fetch = oldFetch; }
 });
+
+for (const type of ['SESSION_STARTED', 'END_ACTIVE_SESSION']) {
+  test(`successful ${type} reply delivered after deletion rejects the old action`, async () => {
+    if (type === 'END_ACTIVE_SESSION') await a.sendStorageAction({ type: 'SESSION_STARTED', session: session('reply-race') });
+    h.holdNextReply((message, response) => message.type === type && response?.status === 'ok');
+    const pending = a.sendStorageAction(type === 'SESSION_STARTED'
+      ? { type, session: session('reply-race') } : { type, sessionId: 'reply-race' });
+    await until(() => h.isReplyHeld);
+    if (type === 'SESSION_STARTED') assert.equal(h.local.activeSession.id, 'reply-race');
+    else assert.equal(h.local.sessionHistory.at(-1).id, 'reply-race');
+    await erase();
+    onlyMarker();
+    const rejected = assert.rejects(pending, /changed|deletion/);
+    h.releaseReply();
+    await rejected;
+    onlyMarker();
+  });
+}

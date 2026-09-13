@@ -47,10 +47,25 @@ export function captureStorageEpoch() {
     : Promise.reject(new Error('The page is not ready or data deletion is pending. Reload before continuing.'));
 }
 
+// Capture while attaching a synchronous UI continuation, not when it runs.
+// A reply may be accepted just before deletion invalidates the queued render.
+export function guardStorageContinuation(callback) {
+  const epoch = pageEpoch;
+  const startedRevision = revision;
+  return (...args) => {
+    if (!Number.isSafeInteger(epoch) || epoch !== pageEpoch || startedRevision !== revision) return;
+    return callback(...args);
+  };
+}
+
 export async function sendStorageAction(message, epochPromise = captureStorageEpoch()) {
   const epoch = await epochPromise;
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ ...message, epoch }, response => {
+      if (epoch !== pageEpoch) {
+        reject(new Error('Data changed during this action. Please try again.'));
+        return;
+      }
       if (chrome.runtime.lastError || response?.status === 'error' || !response) {
         reject(new Error(chrome.runtime.lastError?.message || response?.message || 'Unable to persist the change.'));
       } else resolve(response);

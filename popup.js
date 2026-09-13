@@ -1,4 +1,4 @@
-import { initializeStorageClient, captureStorageEpoch, sendStorageAction } from './storage-client.js';
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 
 let dataDeletionInProgress = false;
@@ -236,11 +236,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         showConfirmEndDialog(session, e.currentTarget, () => {
           const epoch = captureStorageEpoch();
           btn.disabled = true;
-          sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(response => {
+          sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(guardStorageContinuation(response => {
             if (!response.session) throw new Error('The session could not be ended.');
             chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
             window.close();
-          }).catch(error => {
+          })).catch(error => {
             btn.disabled = false;
             const status = document.createElement('p');
             status.setAttribute('role', 'alert');
