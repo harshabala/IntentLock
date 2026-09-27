@@ -13,7 +13,7 @@ IntentLock stores session data, browsing metadata, settings, and diagnostic logs
 - **Browsing History & Logs:** The metadata and URLs of active tabs monitored during a session.
 - **Alignment Events & Drift Logs:** Heuristic evaluations, tab-switch counts, and drift-intervention history.
 
-IntentLock does not use analytics, advertising, or telemetry services. You can view, export, or delete all local data through Settings (Options). Session history is automatically limited to the newest 100 entries from the last 30 days, and diagnostic logs to the newest 200 entries from the last 14 days.
+IntentLock does not use analytics, advertising, or telemetry services. You can view, export, or delete all local data through Settings (Options). Session history is automatically limited to the newest 100 entries from the last 30 days, and diagnostic logs to the newest 200 entries from the last 14 days; both are pruned in storage at startup and hourly. A session that is not ended within 24 hours is ended automatically and stops collecting.
 
 ## 2. API Key & LLM Drift Evaluation
 

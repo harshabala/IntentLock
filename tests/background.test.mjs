@@ -261,7 +261,7 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
   setQuotaBackoff({ retryAfterMs: 100000 });
   assert.ok(isLlmBackedOff(), 'LLM should be backed off initially');
 
-  storageData.activeSession = { id: 'session-456', intent: 'code', isActive: true };
+  storageData.activeSession = { id: 'session-456', intent: 'code', isActive: true, startTime: Date.now() };
   storageData.overrideCooldowns = [['some-site.com', 8888]];
   await reloadConfig();
 
@@ -307,7 +307,7 @@ test('loadConfig queued sanitize does not overwrite a newer history written whil
 });
 
 test('aborted loadConfig allows a later loadConfig to apply storage', async () => {
-  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: Date.now() + 1, events: [] };
   pauseStorageGets = true;
   try {
     const aborted = reloadConfig();
@@ -320,13 +320,13 @@ test('aborted loadConfig allows a later loadConfig to apply storage', async () =
     flushPausedStorageGets();
   }
 
-  storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: 2, events: [] };
+  storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: Date.now() + 2, events: [] };
   await loadConfig();
   assert.equal(getInMemoryState().currentSession?.id, 'fresh-session');
 });
 
 test('aborted loadConfig does not null a newer in-flight configPromise', async () => {
-  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: Date.now() + 1, events: [] };
   pauseStorageGets = true;
   let aborted;
   let later;
@@ -335,10 +335,10 @@ test('aborted loadConfig does not null a newer in-flight configPromise', async (
     aborted = reloadConfig();
     beginStorageDeletion();
     endStorageDeletion();
-    storageData.activeSession = { id: 'from-B', intent: 'keep', isActive: true, startTime: 2, events: [] };
+    storageData.activeSession = { id: 'from-B', intent: 'keep', isActive: true, startTime: Date.now() + 2, events: [] };
     later = reloadConfig();
     flushOnePausedStorageGet();
-    storageData.activeSession = { id: 'from-C', intent: 'should-not-apply', isActive: true, startTime: 3, events: [] };
+    storageData.activeSession = { id: 'from-C', intent: 'should-not-apply', isActive: true, startTime: Date.now() + 3, events: [] };
     third = loadConfig();
     flushPausedStorageGets();
     await Promise.all([aborted, later, third]);

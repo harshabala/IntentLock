@@ -23,7 +23,9 @@ The currently running session. Absent when no session is active.
               | 'SPA_NAVIGATION' | 'OVERRIDE',
     url: string,
     timestamp: number,
-    dwellMs?: number,      // PAGE_DWELL only — active milliseconds on page
+    dwellMs?: number,      // PAGE_DWELL / SPA_NAVIGATION — cumulative active milliseconds on page
+    dwellDeltaMs?: number, // active milliseconds since the previous report (counted once)
+    previousUrl?: string, navigationUrl?: string, // SPA_NAVIGATION only
     reflection?: string,   // OVERRIDE only — user's written reflection
   }>,
   metrics?: {
@@ -37,6 +39,8 @@ The currently running session. Absent when no session is active.
 ```
 
 During an active session, `activeSession.metrics` accumulates real-time tracking data for the current session.
+
+An active session expires 24 hours after `startTime` (or immediately if `startTime` is not a number). The worker ends it on startup or on the retention alarm, writes the normal bounded summary, and stops collecting for it.
 
 ---
 
@@ -71,7 +75,7 @@ The user's site policy, version 1. Set during onboarding step 3 or Settings save
 
 ### `sessionHistory`
 
-Array of completed session summaries. Appended to on `END_ACTIVE_SESSION`. On reads and exports, entries are sanitized and pruned at rest to the newest 100 entries from the last 30 days.
+Array of completed session summaries. Appended to on `END_ACTIVE_SESSION` and when an abandoned session expires. The worker prunes entries at rest to the newest 100 from the last 30 days on startup and on an hourly `intentlock-retention` alarm (kept only while data remains); reads and exports sanitize again.
 
 ```js
 Array<{
@@ -142,7 +146,7 @@ Selected AI provider and its settings. Absent until the user configures one.
 
 ### `errorLog`
 
-Array of diagnostic entries, capped at 200 and retained for 14 days. Reads and exports redact secret-shaped fields and prune expired entries at rest. Written by `error-log.js`. Viewable at Settings → Diagnostics.
+Array of diagnostic entries, capped at 200 and retained for 14 days. The worker prunes and redacts entries at rest on startup and on the hourly retention alarm; reads and exports redact secret-shaped fields and prune expired entries again. Written by `error-log.js`. Viewable at Settings → Diagnostics.
 
 ```js
 Array<{

@@ -22,8 +22,13 @@ import {
 import {
   sanitizeSessionHistory,
   sanitizeUrl,
+  pruneByRetention,
+  redactSecrets,
   SESSION_RETENTION_MS,
   MAX_SESSION_HISTORY,
+  ERROR_LOG_RETENTION_MS,
+  MAX_ERROR_LOG_ENTRIES,
+  ACTIVE_SESSION_MAX_MS,
 } from './privacy-utils.js';
 import {
   initializeStorageAuthority,
@@ -410,6 +415,59 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     return session;
 }
 
+const RETENTION_ALARM = 'intentlock-retention';
+
+function isSessionExpired(session, now = Date.now()) {
+  return Boolean(session?.isActive) &&
+    (!Number.isFinite(session.startTime) || now - session.startTime >= ACTIVE_SESSION_MAX_MS);
+}
+
+function sameJson(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Must run inside a storage mutation. Ends an abandoned session, then prunes
+// summaries and diagnostics to their stated bounds in storage.
+async function applyRetention(now = Date.now()) {
+  const session = (await storageGet(['activeSession'])).activeSession;
+  if (isSessionExpired(session, now)) await finalizeActiveSession(null, session.id || null);
+
+  const data = await storageGet(['activeSession', 'sessionHistory', 'errorLog']);
+  const values = {};
+  if (data.sessionHistory !== undefined) {
+    const history = sanitizeSessionHistory(Array.isArray(data.sessionHistory) ? data.sessionHistory : [], {
+      now, retentionMs: SESSION_RETENTION_MS, maxEntries: MAX_SESSION_HISTORY,
+    });
+    if (!sameJson(history, data.sessionHistory)) values.sessionHistory = history;
+  }
+  if (data.errorLog !== undefined) {
+    const log = pruneByRetention(Array.isArray(data.errorLog) ? data.errorLog : [], {
+      now, retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_ERROR_LOG_ENTRIES, newestFirst: true,
+    }).map(entry => redactSecrets(entry));
+    if (!sameJson(log, data.errorLog)) values.errorLog = log;
+  }
+  if (Object.keys(values).length) await storageSet(values);
+
+  const retained = data.activeSession?.isActive ||
+    (values.sessionHistory || data.sessionHistory || []).length > 0 ||
+    (values.errorLog || data.errorLog || []).length > 0;
+  scheduleRetention(Boolean(retained));
+}
+
+function scheduleRetention(needed) {
+  if (!needed) {
+    chrome.alarms.clear(RETENTION_ALARM);
+    return;
+  }
+  const create = () => chrome.alarms.create(RETENTION_ALARM, { periodInMinutes: 60 });
+  // Recreating on every worker start would keep resetting the period.
+  if (typeof chrome.alarms.get === 'function') {
+    chrome.alarms.get(RETENTION_ALARM, (alarm) => { if (!alarm) create(); });
+  } else {
+    create();
+  }
+}
+
 function endActiveSession(reflection = null, callback = null, expectedSessionId = null, epoch = getStorageGeneration()) {
   const operation = enqueueSessionMutation(() => finalizeActiveSession(reflection, expectedSessionId), epoch);
   if (callback) operation.then(callback, error => callback(null, error));
@@ -769,20 +827,14 @@ function loadConfig() {
         resolve();
         return;
       }
-      if (Array.isArray(data.sessionHistory)) {
-        void enqueueSessionMutation(async () => {
-          if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-          const latest = await storageGet(['sessionHistory']);
-          if (!Array.isArray(latest.sessionHistory)) return;
-          return storageSet({
-            sessionHistory: sanitizeSessionHistory(latest.sessionHistory, {
-              retentionMs: SESSION_RETENTION_MS,
-              maxEntries: MAX_SESSION_HISTORY,
-            }),
-          });
-        });
-      }
-      if (data.activeSession && data.activeSession.isActive) {
+      // Startup enforces retention in storage, not only when a page displays it.
+      void enqueueSessionMutation(async () => {
+        if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+        await applyRetention();
+      });
+      if (isSessionExpired(data.activeSession)) {
+        currentSession = null;
+      } else if (data.activeSession && data.activeSession.isActive) {
         currentSession = data.activeSession;
         ensureMetrics(currentSession);
 
@@ -988,6 +1040,15 @@ function ungroupTabs() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   const epoch = getStorageGeneration();
+  if (alarm.name === RETENTION_ALARM) {
+    authorityReady.then(() => {
+      void enqueueSessionMutation(async () => {
+        await applyRetention();
+        if (!(await storageGet(['activeSession'])).activeSession?.isActive) currentSession = null;
+      }, epoch);
+    }, () => {});
+    return;
+  }
   if (alarm.name === timeBudgetAlarmName) {
     loadConfig().then(() => {
       chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {

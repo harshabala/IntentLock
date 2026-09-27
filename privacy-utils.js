@@ -4,6 +4,8 @@ export const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const ERROR_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 export const MAX_SESSION_HISTORY = 100;
 export const MAX_ERROR_LOG_ENTRIES = 200;
+// A session nobody ended (closed laptop, forgotten window) stops collecting.
+export const ACTIVE_SESSION_MAX_MS = 24 * 60 * 60 * 1000;
 
 const SECRET_KEY_RE = /(api[-_]?key|access[-_]?token|(?:client|refresh|id|oauth)[-_]?token|token|auth(?:orization)?|bearer|cookie|password|secret|credential|private[-_]?key)/i;
 const SECRET_QUERY_RE = /([?#&](?:x[-_]?api[-_]?key|api[-_]?key|client[-_]?secret|app[-_]?secret|access[-_]?token|(?:client|refresh|id|oauth)[-_]?token|auth(?:orization)?|bearer|cookie|password|secret|credential|private[-_]?key|signature|sig|token|key)=)[^&#\s]*/gi;
