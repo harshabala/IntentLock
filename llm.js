@@ -89,7 +89,12 @@ async function checkDriftLLM(intent, url, history) {
 
     const parsed = JSON.parse(cleanJsonString(result.text));
 
-    if (!parsed || typeof parsed.aligned !== 'boolean' || typeof parsed.confidence !== 'number') {
+    // A hostile page or provider must not smuggle a decision through an
+    // ambiguous shape: anything but a plain object with a boolean verdict and a
+    // finite 0–1 confidence is discarded and cannot lock.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        typeof parsed.aligned !== 'boolean' || typeof parsed.confidence !== 'number' ||
+        !Number.isFinite(parsed.confidence) || parsed.confidence < 0 || parsed.confidence > 1) {
       await logError({
         type: ERROR_TYPES.API,
         message: 'LLM drift check returned an unexpected response shape.',
@@ -167,7 +172,13 @@ async function generateIntentPlan(intent) {
       }, storageEpoch);
       return { steps: [], error: { code: 'invalid_response', message: 'Plan generation returned an unexpected format.' } };
     }
-    return { steps: steps.filter((step) => typeof step === 'string').slice(0, 3), error: null };
+    return {
+      steps: steps
+        .filter((step) => typeof step === 'string' && step.trim())
+        .slice(0, 3)
+        .map((step) => step.trim().slice(0, 200)),
+      error: null,
+    };
   } catch (err) {
     await logError({
       type: ERROR_TYPES.API,
