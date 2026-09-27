@@ -238,8 +238,8 @@ Fast paths (return immediately):
 
 Converts the old flat domain list to a v1 policy:
 
-- Domains already in `DOMAIN_TO_CATEGORY` (e.g. `twitter.com`, `youtube.com`) are covered by category policy — **not** added to `customBlockDomains`
-- Domains not in any category (user's custom additions) are preserved in `customBlockDomains`
+- Domains whose category the default policy already blocks (e.g. `twitter.com`, `youtube.com`) are covered by category policy — **not** added to `customBlockDomains`
+- Every other valid entry, including catalogued domains the default would allow or warn on (e.g. `github.com`), is preserved in `customBlockDomains`; malformed entries are dropped
 - Base policy: `buildDefaultPolicy('deep_work', 'balanced')`
 
 Called automatically in `background.js` `loadConfig()` if `heuristicPolicy` is missing but `customDistractionSites` exists. Result is persisted back to storage.

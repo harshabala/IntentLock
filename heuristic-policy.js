@@ -930,6 +930,8 @@ const DEFAULT_LEGACY_DOMAINS = new Set([
   'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com',
 ]);
 
+const LEGACY_HOSTNAME_RE = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
+
 export function migrateLegacyDistractionSites(customDistractionSites) {
   const list = Array.isArray(customDistractionSites) ? customDistractionSites : [];
   const base = buildDefaultPolicy('deep_work', 'balanced');
@@ -941,10 +943,17 @@ export function migrateLegacyDistractionSites(customDistractionSites) {
 
   if (isDefaultList) return base;
 
-  const customBlocks = list.filter(d => {
-    const n = String(d).replace(/^www\./, '').toLowerCase();
-    return !DOMAIN_TO_CATEGORY.has(n);
-  });
-  base.customBlockDomains = customBlocks;
+  // Every legacy entry was an always-block site. Keep it unless the default
+  // category policy already blocks it (github.com is allowed by default, so a
+  // legacy GitHub block must survive). Drop malformed entries.
+  const customBlocks = new Set();
+  for (const entry of list) {
+    const n = normalizeHostname(String(entry ?? '').trim());
+    if (!LEGACY_HOSTNAME_RE.test(n)) continue;
+    const category = DOMAIN_TO_CATEGORY.get(n);
+    if (category && base.categoryPolicies[category] === 'block') continue;
+    customBlocks.add(n);
+  }
+  base.customBlockDomains = [...customBlocks].slice(0, 200);
   return base;
 }

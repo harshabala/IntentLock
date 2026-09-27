@@ -415,6 +415,16 @@ test('migrateLegacyDistractionSites preserves non-catalogued custom domains', ()
   assert.ok(!policy.customBlockDomains.includes('twitter.com'));
 });
 
+test('migrateLegacyDistractionSites keeps a legacy block the default policy would allow', () => {
+  const policy = migrateLegacyDistractionSites(['www.GitHub.com', 'reddit.com', 'twitter.com', 'github.com',
+    '', null, 'not a host', 'javascript:alert(1)']);
+  assert.deepEqual(policy.customBlockDomains, ['github.com', 'reddit.com']);
+  assert.equal(resolveDomainPolicy('github.com', policy), 'block');
+  const coding = evaluatePolicyDrift({ intent: 'fix github actions workflow', policy, events: [],
+    url: 'https://github.com/synthetic/repo' });
+  assert.equal(coding.shouldIntervene, true);
+});
+
 test('migrateLegacyDistractionSites with empty list returns default policy without throwing', () => {
   const policy = migrateLegacyDistractionSites([]);
   assert.equal(policy.version, 1);
