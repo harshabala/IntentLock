@@ -1120,8 +1120,9 @@ function handleContentEvent(payload, tabId) {
   bucket.count += 1;
   contentEventBuckets.set(tabId, bucket);
 
+  // Page titles can carry private text (mail subjects, document names) and no
+  // decision uses them, so they are never persisted.
   const extras = {};
-  if (payload.pageTitle) extras.pageTitle = payload.pageTitle;
   if (typeof payload.dwellMs === 'number') extras.dwellMs = payload.dwellMs;
   if (typeof payload.dwellDeltaMs === 'number') extras.dwellDeltaMs = payload.dwellDeltaMs;
   if (payload.previousUrl) extras.previousUrl = payload.previousUrl;

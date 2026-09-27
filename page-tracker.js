@@ -27,7 +27,6 @@
   function createPageTracker({
     onReport,
     getLocation = () => globalThis.location?.href || '',
-    getTitle = () => globalThis.document?.title || '',
     isVisible = () => !globalThis.document?.hidden,
     now = () => Date.now(),
     reportIntervalMs = DWELL_REPORT_INTERVAL_MS,
@@ -58,7 +57,6 @@
       lastTick = state.lastTick;
       return {
         url: urlOverride || getLocation(),
-        pageTitle: getTitle(),
         dwellMs: activeMs,
       };
     }
@@ -70,7 +68,6 @@
       onReport({
         actionType,
         url: data.url,
-        pageTitle: data.pageTitle,
         dwellMs: data.dwellMs,
         dwellDeltaMs,
         ...extra,
