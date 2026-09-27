@@ -698,8 +698,21 @@ const CATEGORY_ALIGNMENT = {
   entertainment_allowed: ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
 };
 
+// Technical Q&A sites are catalogued as forums, but for coding and learning
+// they are working references. This is deliberately narrow: other forums
+// (reddit, Hacker News) stay subject to the forum policy.
+const TECHNICAL_QA_HOSTS = ['stackoverflow.com', 'stackexchange.com', 'superuser.com',
+  'serverfault.com', 'askubuntu.com', 'mathoverflow.net'];
+const TECHNICAL_QA_INTENTS = new Set(['coding', 'learning']);
+
+function isTechnicalQaHost(hostname) {
+  const host = normalizeHostname(hostname);
+  return TECHNICAL_QA_HOSTS.some(domain => host === domain || host.endsWith(`.${domain}`));
+}
+
 function isCategoryAligned(hostname, intentCategoryId) {
   if (!intentCategoryId || !hostname) return false;
+  if (TECHNICAL_QA_INTENTS.has(intentCategoryId) && isTechnicalQaHost(hostname)) return true;
   const siteCat = getSiteCategory(hostname);
   if (!siteCat) return false;
   const aligned = CATEGORY_ALIGNMENT[intentCategoryId] || [];

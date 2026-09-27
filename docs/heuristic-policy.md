@@ -188,20 +188,21 @@ Returns `'block' | 'warn' | 'allow' | 'neutral'`. Safe with `null` policy (retur
 
 ```js
 const CATEGORY_ALIGNMENT = {
+  deep_work:              ['productivity'],
   job_search:             ['job_boards', 'professional_network'],
-  deep_work:              ['documentation', 'productivity', 'code_forge', 'ai_tools'],
   coding:                 ['code_forge', 'documentation', 'ai_tools'],
+  research:               ['documentation', 'news', 'forums'],
   learning:               ['documentation', 'code_forge', 'ai_tools'],
-  writing:                ['documentation', 'productivity', 'ai_tools'],
-  research:               ['documentation', 'news', 'ai_tools'],
   admin:                  ['email', 'messaging', 'productivity'],
+  communication:          ['messaging', 'email'],
   creative:               ['productivity', 'ai_tools'],
   health:                 ['health'],
   shopping:               ['shopping'],
-  communication:          ['email', 'messaging'],
-  entertainment_allowed:  ['streaming', 'gaming', 'short_video', 'social_media'],
+  entertainment_allowed:  ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
 };
 ```
+
+Technical Q&A hosts (`stackoverflow.com`, `*.stackexchange.com`, `superuser.com`, `serverfault.com`, `askubuntu.com`, `mathoverflow.net`) are catalogued as forums but count as aligned for `coding` and `learning` intents only. A custom block still wins.
 
 ---
 
@@ -214,18 +215,24 @@ evaluatePolicyDrift({
   events: Array,         // session.events — last N tab/dwell/SPA events
   policy: HeuristicPolicy | null,  // null → fail-open to deep_work/balanced
   now: number,           // Date.now() — injectable for tests
+  relatedHostnames: string[], // session-related corrections
 }) → {
   shouldIntervene: boolean,
   score: number,          // 0–1
   reason: string,         // machine code: 'blocked_category' | 'aligned' | 'empty_terms' | 'invalid_url' | ...
   reasonLabel: string,    // human-readable for intervention UI
   signals: string[],      // e.g. ['blocked_category:social_media', 'tab_switches:5', 'dwell:130s']
+  explicit?: true,        // present for 'related_correction' / 'explicit_allow'; the worker then skips optional AI
 }
 ```
+
+Dwell counts each report's `dwellDeltaMs` once (events without a delta contribute their largest cumulative `dwellMs`). Events that are malformed, future-dated or older than two minutes are ignored.
 
 Fast paths (return immediately):
 - `url` fails `new URL()` → `{ shouldIntervene: false, reason: 'invalid_url' }`
 - Policy null/invalid → fail-open to `buildDefaultPolicy('deep_work', 'balanced')`
+- Session-related correction matches → score 0, `reason: 'related_correction'`
+- Custom allow is the most specific rule → score 0, `reason: 'explicit_allow'`
 - `domainPolicy === 'block'` + not category-aligned + not keyword-aligned → score 0.95, `reason: 'blocked_category'`
 - `domainPolicy === 'allow'` + category-aligned → score 0, `reason: 'aligned'`
 - `intentTerms(intent).length === 0` → score 0, `reason: 'empty_terms'`
