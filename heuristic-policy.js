@@ -718,6 +718,20 @@ const REASON_LABELS = {
   low_confidence:            'Browsing pattern is drifting from your declared intent.',
 };
 
+// page-tracker reports cumulative dwellMs plus the dwellDeltaMs since its last
+// report. Sum deltas so each active second counts once; events without a delta
+// (older sessions) contribute only their largest cumulative value.
+function recentDwellMs(recentEvents, url) {
+  let deltaTotal = 0;
+  let legacyMax = 0;
+  for (const e of recentEvents) {
+    if (e.actionType !== 'PAGE_DWELL' || e.url !== url) continue;
+    if (Number.isFinite(e.dwellDeltaMs)) deltaTotal += Math.max(0, e.dwellDeltaMs);
+    else if (Number.isFinite(e.dwellMs)) legacyMax = Math.max(legacyMax, e.dwellMs);
+  }
+  return deltaTotal + legacyMax;
+}
+
 export function evaluatePolicyDrift({
   intent,
   url,
@@ -767,7 +781,11 @@ export function evaluatePolicyDrift({
     return { shouldIntervene: false, score: 0, reason: 'empty_terms', reasonLabel: '', signals };
   }
 
-  const recentEvents = events.filter(e => now - e.timestamp <= 2 * 60 * 1000);
+  // Malformed, future-dated or stale evidence never counts toward drift.
+  const recentEvents = (Array.isArray(events) ? events : []).filter(e => (
+    e && typeof e === 'object' && Number.isFinite(e.timestamp) &&
+    e.timestamp <= now && now - e.timestamp <= 2 * 60 * 1000
+  ));
   const unrelated = recentEvents.filter(e => {
     if (!e.url) return false;
     const ep = parseUrl(e.url);
@@ -778,9 +796,7 @@ export function evaluatePolicyDrift({
     const ep = parseUrl(e.url);
     return ep && ep.hostname === parsed.hostname;
   }).length;
-  const dwellForUrl = recentEvents
-    .filter(e => e.actionType === 'PAGE_DWELL' && e.url === url)
-    .reduce((t, e) => t + (e.dwellMs || 0), 0);
+  const dwellForUrl = recentDwellMs(recentEvents, url);
 
   // +0.1 base for being on an unaligned domain
   let score = isAligned ? 0 : 0.1;
