@@ -777,7 +777,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const timeBudgetInput = document.getElementById('time-budget');
       const startBtn = document.getElementById('start-btn');
       const intent = intentInput.value.trim();
-      const timeBudget = parseInt(timeBudgetInput.value, 10);
+      // Whole minutes only: parseInt would silently read "12abc" as 12 and
+      // "abc" as no budget at all.
+      const rawBudget = timeBudgetInput.value.trim();
+      const timeBudget = rawBudget === '' ? null : (/^[0-9]+$/.test(rawBudget) ? Number(rawBudget) : NaN);
 
       if (!intent) {
         setFieldError(intentInput, 'Please declare your intent.');
@@ -786,9 +789,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       clearFieldError(timeBudgetInput);
 
-      if (!isNaN(timeBudget) && timeBudgetInput.value.trim() && (timeBudget < 1 || timeBudget > 480)) {
-        const budgetError = 'Time budget must be between 1 and 480 minutes.';
+      if (timeBudget !== null && !(Number.isInteger(timeBudget) && timeBudget >= 1 && timeBudget <= 480)) {
+        const budgetError = 'Time budget must be whole minutes between 1 and 480, or blank.';
         setFieldError(timeBudgetInput, budgetError);
+        timeBudgetInput.focus?.();
         logError({
           type: ERROR_TYPES.VALIDATION,
           message: budgetError,
@@ -805,7 +809,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         id: crypto.randomUUID(),
         intent: intent,
         startTime: Date.now(),
-        timeBudget: isNaN(timeBudget) ? null : timeBudget,
+        timeBudget,
         isActive: true,
         events: [],
         plan: []

@@ -119,3 +119,27 @@ for (const page of ['popup', 'onboarding']) test(`${page} ignores success accept
   assert.equal(rehearsal, false, 'obsolete onboarding reply must not replace the fresh form');
   assert.deepEqual(Object.keys(h.local), ['privacyMutationState']);
 });
+
+test('newtab rejects malformed time budgets without starting a session', async () => {
+  await h.send({ type: 'DELETE_ALL_DATA' });
+  h.local.hasSeenOnboarding = true;
+  for (const value of ['12abc', 'abc', '1.5', '0', '481', '-5', '1e2']) {
+    const { document } = await loadPage();
+    document.getElementById('intent-input').value = 'synthetic budget intent';
+    document.getElementById('time-budget').value = value;
+    document.getElementById('intent-form').dispatchEvent({ type: 'submit', preventDefault() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.local.activeSession, undefined, `${value} must not start a session`);
+    assert.equal(document.getElementById('time-budget').getAttribute('aria-invalid'), 'true', value);
+  }
+  for (const [value, expected] of [['', null], [' 45 ', 45]]) {
+    const { document } = await loadPage();
+    document.getElementById('intent-input').value = 'synthetic budget intent';
+    document.getElementById('time-budget').value = value;
+    document.getElementById('intent-form').dispatchEvent({ type: 'submit', preventDefault() {} });
+    await until(() => h.local.activeSession);
+    assert.equal(h.local.activeSession.timeBudget, expected, JSON.stringify(value));
+    await h.send({ type: 'DELETE_ALL_DATA' });
+    h.local.hasSeenOnboarding = true;
+  }
+});
