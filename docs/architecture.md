@@ -100,7 +100,7 @@ A session object (`activeSession`) stored in `chrome.storage.local`:
 The service worker can be terminated and restarted at any time by Chrome. On every revival:
 
 1. `loadConfig()` reads `chrome.storage.local` — active session, heuristicPolicy, distractionSites, trackingEnabled, overrideCooldowns
-2. `migrateLlmStorage()` — moves API key from local to session storage if it was left behind
+2. `migrateKeys()` — moves legacy key aliases to the canonical session `llmApiKey` (sources removed only after the copy is verified; local copies are dropped when session storage is missing), then retention runs: sessions older than 24 hours are ended and history/diagnostics are pruned at rest, with an hourly `intentlock-retention` alarm while data remains
 3. Registers `chrome.tabs.onActivated`, `onUpdated`, `onRemoved`, `onCreated` listeners
 4. Registers `chrome.alarms.onAlarm` for time-budget enforcement
 5. Registers `chrome.commands.onCommand` for `toggle-session` shortcut

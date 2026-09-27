@@ -215,9 +215,9 @@ lastIdleTime: number   // timestamp when idle state began, 0 if not idle
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `openaiApiKey` | string | API key — never written to `local` storage |
-| `llmApiKey` | string | Alias used by some provider paths |
+| `llmApiKey` | string | The only API key used for provider requests |
+| `openaiApiKey` | string | Legacy alias; migrated to `llmApiKey` and removed |
 
-The API key is kept here when this storage area is available — it is never synced, never backed up, and never survives a browser restart. If session storage is unavailable, the provider path may use the local `llmApiKey` fallback. The user must re-enter the key after closing Chrome when session storage is used.
+The API key lives only here (trusted contexts; content scripts cannot read it). It is never synced, backed up, or written to `local`, and it does not survive a browser restart, so the user re-enters it after closing Chrome. If session storage is unavailable, saving a key fails with a visible error and AI stays off; the local lock keeps working.
 
-On startup, `background.js` checks `chrome.storage.local` for a legacy `openaiApiKey` (written by versions before 1.2.1) and migrates it to session storage, removing the local copy.
+On startup, `background.js` migrates legacy `openaiApiKey` / `llmApiKey` values from `local` (and a session `openaiApiKey`) to the canonical session `llmApiKey`, removing the sources only after the canonical copy is verified. Without session storage, legacy local keys are removed. Remove key and a provider switch clear every alias. Saving a different provider, custom endpoint, auth placement or API style without entering a key removes the saved key so it is never sent to the new destination.

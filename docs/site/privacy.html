@@ -45,7 +45,7 @@
     If you enable tracking and configure a cloud or custom remote provider for LLM-powered features (optional providers include OpenAI, Google Gemini, Grok, Ollama, and LM Studio):
   </p>
   <ul>
-    <li><strong>Key storage:</strong> When <code>chrome.storage.session</code> is available, the API key is kept there and is <strong>automatically cleared</strong> when you close the browser. A local-storage fallback may be used when session storage is unavailable; the extension does not sync keys to a remote service.</li>
+    <li><strong>Key storage:</strong> When <code>chrome.storage.session</code> is available, the API key is kept there and is <strong>automatically cleared</strong> when you close the browser. The key is never written to local storage; if session storage is unavailable, a key cannot be saved and AI checks stay off. Changing the provider or endpoint without re-entering the key removes it. The extension does not sync keys to a remote service.</li>
     <li><strong>Direct API Communication:</strong> IntentLock sends the declared intent and minimized browsing context directly to the provider you selected. Page context is reduced to origins and bounded recent events; full paths, query strings, and fragments are not sent.</li>
     <li><strong>Provider choice matters:</strong> The selected provider receives the request under its own privacy policy. Local providers such as Ollama and LM Studio keep the request on your machine. IntentLock does not operate an intermediary analytics or proxy service.</li>
     <li><strong>Tracking control:</strong> Turning tracking off suppresses provider requests and browsing-event collection.</li>
