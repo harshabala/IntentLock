@@ -6,6 +6,7 @@ import {
   parseRetryAfterMs,
   setQuotaBackoff,
   shouldLogQuotaError,
+  TRANSIENT_BACKOFF_MS,
 } from './llm-backoff.js';
 import { redactSecrets } from './privacy-utils.js';
 import { isStorageDeletionActive } from './storage-queue.js';
@@ -260,6 +261,7 @@ async function throwApiFailure(response, providerId) {
   err.apiError = apiError;
   err.bodyText = bodyText;
   err.status = response.status;
+  err.retryAfterHeader = response.headers?.get?.('retry-after') || null;
   throw err;
 }
 
@@ -513,7 +515,7 @@ async function chatCompletionInternal(prompt, options = {}) {
       ok: false,
       error: {
         code: 'quota_backoff',
-        message: 'AI check paused after a quota error. Local lock still active. Retry later or switch models in Settings.',
+        message: 'AI check paused after a provider error. Local lock still active. Retry later or switch models in Settings.',
         providerId: config.providerId,
       },
     };
@@ -581,14 +583,18 @@ async function chatCompletionInternal(prompt, options = {}) {
     return { ok: true, text };
   } catch (error) {
     if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
-    if (error?.code === 'tracking_disabled') {
+    // An opt-out aborts in-flight requests; that is not a provider failure.
+    if (error?.code === 'tracking_disabled' || await trackingIsDisabled()) {
       return trackingDisabledResult(error.providerId || config.providerId);
     }
     const bodyText = error.bodyText || error.message || '';
     const apiError = error.apiError || classifyApiError(error.status || 0, bodyText, config.providerId);
 
+    if (apiError.code === 'network_error' || (apiError.status || 0) >= 500) {
+      setQuotaBackoff({ retryAfterMs: TRANSIENT_BACKOFF_MS });
+    }
     if (apiError.code === 'quota_exceeded') {
-      setQuotaBackoff({ retryAfterMs: parseRetryAfterMs(bodyText) });
+      setQuotaBackoff({ retryAfterMs: parseRetryAfterMs(bodyText, Date.now(), error.retryAfterHeader) });
       if (shouldLogQuotaError()) {
         const modelHint = config.providerId === 'gemini'
           ? ' Try model gemini-2.0-flash-lite in Advanced settings, or wait for quota reset.'

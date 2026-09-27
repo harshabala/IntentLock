@@ -339,3 +339,70 @@ test('chatCompletion is blocked while delete-all data is in progress', async () 
     endStorageDeletion();
   }
 });
+
+// Earlier cases replace the storage getters; restore data-backed ones.
+function useStorageData() {
+  const previous = [globalThis.chrome.storage.local.get, globalThis.chrome.storage.session.get];
+  globalThis.chrome.storage.local.get = (keys, callback) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    callback(Object.fromEntries(list.filter(key => storageData[key] !== undefined).map(key => [key, storageData[key]])));
+  };
+  globalThis.chrome.storage.session.get = (_keys, callback) => callback({ llmApiKey: 'gemini-test-key' });
+  return () => { [globalThis.chrome.storage.local.get, globalThis.chrome.storage.session.get] = previous; };
+}
+
+test('provider failures pause AI briefly and honor Retry-After without retrying every page', async () => {
+  const { clearLlmBackoff, getQuotaBackoffUntil, TRANSIENT_BACKOFF_MS } = await import('../llm-backoff.js');
+  const previousConfig = storageData.llmProviderConfig;
+  storageData.llmProviderConfig = { providerId: 'gemini', model: 'gemini-2.0-flash',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models' };
+  let calls = 0;
+  const restore = useStorageData();
+  try {
+    for (const [name, respond, expectedMs] of [
+      ['network', async () => { throw new TypeError('Failed to fetch'); }, TRANSIENT_BACKOFF_MS],
+      ['server', async () => ({ ok: false, status: 503, headers: new Map(), text: async () => 'unavailable' }), TRANSIENT_BACKOFF_MS],
+      ['rate limit', async () => ({ ok: false, status: 429, headers: new Map([['retry-after', '120']]),
+        text: async () => '{"error":{"message":"rate limit"}}' }), 120_000],
+    ]) {
+      clearLlmBackoff();
+      calls = 0;
+      globalThis.fetch = async (...args) => { calls += 1; return respond(...args); };
+      const before = Date.now();
+      const first = await chatCompletion(`backoff ${name}`);
+      assert.equal(first.ok, false, name + JSON.stringify(first));
+      const pause = getQuotaBackoffUntil() - before;
+      assert.ok(pause >= expectedMs - 50 && pause <= expectedMs + 1000, `${name} paused ${pause}ms`);
+      const second = await chatCompletion(`backoff ${name} again`);
+      assert.equal(second.error.code, 'quota_backoff', name);
+      assert.equal(calls, 1, `${name} must not retry during the pause`);
+    }
+  } finally {
+    restore();
+    clearLlmBackoff();
+    storageData.llmProviderConfig = previousConfig;
+  }
+});
+
+test('an opt-out that aborts a request is not logged as a provider failure', async () => {
+  const { clearLlmBackoff, isLlmBackedOff } = await import('../llm-backoff.js');
+  clearLlmBackoff();
+  storageData.errorLog = [];
+  const restore = useStorageData();
+  globalThis.fetch = async () => {
+    storageData.trackingEnabled = false;
+    const error = new Error('aborted');
+    error.name = 'AbortError';
+    throw error;
+  };
+  try {
+    const result = await chatCompletion('opt-out during request');
+    assert.equal(result.error.code, 'tracking_disabled');
+    assert.equal(storageData.errorLog.length, 0);
+    assert.equal(isLlmBackedOff(), false);
+  } finally {
+    restore();
+    delete storageData.trackingEnabled;
+    clearLlmBackoff();
+  }
+});
