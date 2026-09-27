@@ -157,7 +157,7 @@ test('built-in provider keys never enter request URLs', async () => {
   }
 });
 
-test('getLlmConfig uses local llmApiKey fallback when session storage is empty', async () => {
+test('getLlmConfig never uses a local key alias as a request credential', async () => {
   const previousConfig = storageData.llmProviderConfig;
   const previousKey = storageData.llmApiKey;
   const previousSessionGet = globalThis.chrome.storage.session.get;
@@ -166,7 +166,8 @@ test('getLlmConfig uses local llmApiKey fallback when session storage is empty',
   globalThis.chrome.storage.session.get = (_keys, callback) => callback({});
   try {
     const config = await getLlmConfig();
-    assert.equal(config.apiKey, 'local-llm-key');
+    assert.equal(config.apiKey, null);
+    assert.equal(isLlmConfigured(config), false);
   } finally {
     storageData.llmProviderConfig = previousConfig;
     if (previousKey === undefined) delete storageData.llmApiKey;

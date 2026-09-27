@@ -318,7 +318,7 @@ export async function getLlmConfig() {
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(['llmProviderConfig', 'llmApiKey', 'openaiApiKey'], (localRes) => {
+    chrome.storage.local.get(['llmProviderConfig'], (localRes) => {
       const stored = localRes?.llmProviderConfig || {};
       const providerId = stored.providerId;
       const provider = getProvider(providerId);
@@ -344,17 +344,14 @@ export async function getLlmConfig() {
         });
       };
 
+      // The only request credential is the canonical session key. Legacy
+      // aliases are migration sources, never credentials.
       if (chrome.storage.session) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionRes) => {
-          const apiKey = sessionRes?.llmApiKey
-            || sessionRes?.openaiApiKey
-            || localRes?.llmApiKey
-            || localRes?.openaiApiKey
-            || null;
-          finish(apiKey);
+        chrome.storage.session.get(['llmApiKey'], (sessionRes) => {
+          finish(typeof sessionRes?.llmApiKey === 'string' && sessionRes.llmApiKey ? sessionRes.llmApiKey : null);
         });
       } else {
-        finish(localRes?.llmApiKey || localRes?.openaiApiKey || null);
+        finish(null);
       }
     });
   });

@@ -253,15 +253,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const settingsRevision = privacyRevision;
   if (clientReady) chrome.storage.local.get([
-    'llmProviderConfig', 'llmApiKey', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
+    'llmProviderConfig', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
     if (deletionInProgress || settingsRevision !== privacyRevision) return;
-    const localApiKey = localResult.llmApiKey || localResult.openaiApiKey || null;
     const processSettings = (sessionApiKey) => {
       if (deletionInProgress || settingsRevision !== privacyRevision) return;
-      const migratedKey = sessionApiKey || localApiKey;
-
-      hasSavedApiKey = Boolean(migratedKey);
+      // Only report presence of the canonical session key; never display it.
+      hasSavedApiKey = Boolean(sessionApiKey);
       applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
 
       if (localResult.trackingEnabled !== undefined) {
@@ -291,11 +289,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     if (chrome.storage.session) {
-      chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionResult) => {
-        processSettings(sessionResult.llmApiKey || sessionResult.openaiApiKey);
+      chrome.storage.session.get(['llmApiKey'], (sessionResult) => {
+        processSettings(sessionResult?.llmApiKey);
       });
     } else {
-      processSettings(localApiKey);
+      processSettings(null);
     }
   });
 

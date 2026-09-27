@@ -3,6 +3,8 @@ import { buildDefaultPolicy } from './heuristic-policy.js';
 import { validateProviderConfig } from './providers.js';
 import { ERROR_LOG_RETENTION_MS, MAX_ERROR_LOG_ENTRIES, pruneByRetention, redactSecrets } from './privacy-utils.js';
 
+export const SESSION_UNAVAILABLE = 'Session storage is unavailable, so an AI key cannot be saved. The local lock still works.';
+
 export function isExtensionPage(sender) {
   if (sender?.id && sender.id !== chrome.runtime.id) return false;
   const base = chrome.runtime.getURL('');
@@ -43,13 +45,16 @@ export function applyStorageCommand(command, payload, epoch) {
         if (error || (payload.key !== undefined && (typeof payload.key !== 'string' || payload.key.length > 8192))) {
           throw new Error(error || 'Invalid API key.');
         }
+        // Keys live only in trusted-context session memory. Local storage is
+        // readable by content scripts, so it is never a credential fallback.
+        if (payload.key && !chrome.storage.session) throw new Error(SESSION_UNAVAILABLE);
         await write('local', 'set', { llmProviderConfig: payload.config });
-        if (payload.key) await write(chrome.storage.session ? 'session' : 'local', 'set', { llmApiKey: payload.key });
+        if (payload.key) await write('session', 'set', { llmApiKey: payload.key });
         return;
       }
       case 'clearKey':
         fields(payload, []);
-        await write(chrome.storage.session ? 'session' : 'local', 'remove', ['llmApiKey']);
+        await removeAllKeyAliases();
         return;
       case 'saveSites': {
         policyFields(payload);
@@ -95,13 +100,30 @@ export function applyStorageCommand(command, payload, epoch) {
   }, epoch);
 }
 
+async function removeAllKeyAliases() {
+  if (chrome.storage.session) await write('session', 'remove', ['llmApiKey', 'openaiApiKey']);
+  await write('local', 'remove', ['llmApiKey', 'openaiApiKey']);
+}
+
 export function migrateKeys(epoch) {
   return runStorageMutation(async () => {
-    if (!chrome.storage.session) return;
     const local = await storageCall('local', 'get', ['llmApiKey', 'openaiApiKey']);
+    if (!chrome.storage.session) {
+      // Without trusted session memory a legacy key cannot be kept safely;
+      // keyed AI stays off and offline enforcement continues.
+      if (local.llmApiKey !== undefined || local.openaiApiKey !== undefined) {
+        await write('local', 'remove', ['llmApiKey', 'openaiApiKey']);
+      }
+      return;
+    }
     const session = await storageCall('session', 'get', ['llmApiKey', 'openaiApiKey']);
     const key = session.llmApiKey || session.openaiApiKey || local.llmApiKey || local.openaiApiKey;
-    if (key && !session.llmApiKey) await write('session', 'set', { llmApiKey: key });
+    if (key && !session.llmApiKey) {
+      await write('session', 'set', { llmApiKey: key });
+      // Remove sources only after the canonical copy is confirmed readable.
+      const verified = await storageCall('session', 'get', ['llmApiKey']);
+      if (verified.llmApiKey !== key) throw new Error('API key migration could not be verified.');
+    }
     await write('session', 'remove', ['openaiApiKey']);
     await write('local', 'remove', ['llmApiKey', 'openaiApiKey']);
   }, epoch);
