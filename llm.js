@@ -52,7 +52,7 @@ async function checkDriftLLM(intent, url, history) {
 
   const recentHistory = Array.isArray(history) ? history.slice(-5) : [];
   const historySummary = recentHistory
-    .map((event) => `${event.actionType || 'EVENT'}: ${sanitizeUrl(event.url) || 'unknown-origin'}`)
+    .map((event) => `${event?.actionType || 'EVENT'}: ${sanitizeUrl(event?.url) || 'unknown-origin'}`)
     .join('; ');
   const currentOrigin = sanitizeUrl(url) || 'unknown-origin';
 

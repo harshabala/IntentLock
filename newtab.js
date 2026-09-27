@@ -334,7 +334,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       startTime: session.startTime,
       endTime: session.endTime,
       timeBudget: session.timeBudget,
-      driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
+      driftCount: events.filter(e => e?.actionType === 'OVERRIDE').length,
       totalEvents: events.length
     };
   }
@@ -412,7 +412,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const events = Array.isArray(session.events) ? session.events : [];
     const overrides = typeof session.overrideCount === 'number'
       ? session.overrideCount
-      : events.filter(e => e.actionType === 'OVERRIDE').length;
+      : events.filter(e => e?.actionType === 'OVERRIDE').length;
     p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
 
     const actions = document.createElement('div');
@@ -473,7 +473,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const events = Array.isArray(session.events) ? session.events : [];
     const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
-    const eventOverrides = events.filter(e => e.actionType === 'OVERRIDE');
+    const eventOverrides = events.filter(e => e?.actionType === 'OVERRIDE');
     const overrideRecords = storedOverrides.length > 0 ? storedOverrides : eventOverrides;
     const durationMin = Math.max(
       0,

@@ -117,3 +117,15 @@ test('provider endpoint policy rejects unsafe overrides', () => {
     providerId: 'custom', customLabel: 'unsafe', model: 'x', baseUrl: 'http://cloud.example/api',
   }), /HTTPS/i);
 });
+
+test('history sanitization drops corrupted override and domain records instead of throwing', () => {
+  const now = Date.now();
+  const [entry] = sanitizeSessionHistory([
+    { id: 'corrupt-a', endTime: now, overrides: [null, 'x', { hostname: 'ok.example', reflection: 'fine' }], topDomains: [null, 3, { hostname: 'ok.example', activeMs: 5 }] },
+  ], { now });
+  assert.deepEqual(entry.overrides.map(o => o.hostname), ['ok.example']);
+  assert.deepEqual(entry.topDomains.map(d => d.hostname), ['ok.example']);
+  const [shapeless] = sanitizeSessionHistory([{ id: 'corrupt-b', endTime: now, overrides: 'x', topDomains: { a: 1 } }], { now });
+  assert.equal('overrides' in shapeless, false);
+  assert.equal('topDomains' in shapeless, false);
+});

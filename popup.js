@@ -122,7 +122,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       ? session.overrideCount
       : storedOverrides.length > 0
         ? storedOverrides.length
-        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+        : events.filter((e) => e?.actionType === 'OVERRIDE').length;
     p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
 
     const actions = document.createElement('div');

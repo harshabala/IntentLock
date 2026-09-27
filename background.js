@@ -244,8 +244,15 @@ function relatedHostnamesList() {
   return Object.keys(relatedDomainMarks || {});
 }
 
+// Stored events may predate validation or be corrupted; only objects count.
+function sessionEvents(session) {
+  return Array.isArray(session?.events)
+    ? session.events.filter(event => event && typeof event === 'object' && !Array.isArray(event))
+    : [];
+}
+
 function createHistoryEntry(session) {
-  const events = Array.isArray(session.events) ? session.events : [];
+  const events = sessionEvents(session);
   const metrics = ensureMetrics(session);
   const overrides = events
     .filter(e => e.actionType === 'OVERRIDE')
@@ -382,7 +389,7 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     session.endTime = Date.now();
     ensureMetrics(session);
     if (reflection) {
-      session.events = Array.isArray(session.events) ? session.events : [];
+      session.events = sessionEvents(session);
       session.events.push({
         timestamp: Date.now(),
         actionType: 'OVERRIDE',
@@ -567,7 +574,7 @@ async function handleInterventionTransition(message, sender) {
     ensureMetrics(session);
     const originalUrl = state.originalUrl || null;
     session.metrics.overrideCount = (session.metrics.overrideCount || 0) + 1;
-    session.events = Array.isArray(session.events) ? session.events : [];
+    session.events = sessionEvents(session);
     session.events.push({
       timestamp: Date.now(),
       actionType: 'OVERRIDE',
@@ -838,8 +845,10 @@ function loadConfig() {
         currentSession = data.activeSession;
         ensureMetrics(currentSession);
 
-        // Restore time budget alarm if session has a time budget
-        if (currentSession.timeBudget) {
+        // Restore time budget alarm if session has a valid time budget. A
+        // corrupted value must not read as "already exceeded" and lock a tab.
+        if (Number.isFinite(currentSession.timeBudget) && currentSession.timeBudget > 0 &&
+            Number.isFinite(currentSession.startTime)) {
           const elapsedMinutes = (Date.now() - currentSession.startTime) / 60000;
           const remainingMinutes = currentSession.timeBudget - elapsedMinutes;
           if (remainingMinutes > 0) {
@@ -1145,7 +1154,7 @@ function logEvent(actionType, url, extras = {}) {
       actionType,
       ...extras,
     };
-    session.events = Array.isArray(session.events) ? session.events : [];
+    session.events = sessionEvents(session);
     session.events.push(event);
 
     if (session.events.length > 50) {
@@ -1289,7 +1298,7 @@ function evaluateDrift(url, tabId) {
     const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
-      events: session.events,
+      events: sessionEvents(session),
       policy: activePolicy,
       now: Date.now(),
       relatedHostnames: relatedHostnamesList(),
@@ -1303,7 +1312,7 @@ function evaluateDrift(url, tabId) {
     // or a session-related correction.
     if (policyDrift.explicit) return;
 
-    checkDriftLLM(session.intent, url, session.events).then(res => {
+    checkDriftLLM(session.intent, url, sessionEvents(session)).then(res => {
       if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
       if (!res.isAligned && res.confidence >= DRIFT_CONFIDENCE_THRESHOLD) {
         chrome.storage.local.get(['activeSession', 'overrideCooldowns'], (storageResult) => {
@@ -1475,7 +1484,7 @@ function handleOverride(sessionData, epoch = getStorageGeneration()) {
     currentSession = sessionData;
 
     // Set per-domain override cooldown from the most recent override event
-    const events = Array.isArray(sessionData?.events) ? sessionData.events : [];
+    const events = sessionEvents(sessionData);
     const lastOverride = events
       .filter(e => e.actionType === 'OVERRIDE' && e.url)
       .at(-1);

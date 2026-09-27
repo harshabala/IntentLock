@@ -87,25 +87,32 @@ function normalizedHostname(value) {
   }
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function sanitizeHistoryEntry(entry) {
-  if (!entry || typeof entry !== 'object') return null;
+  if (!isPlainObject(entry)) return null;
   const copy = redactSecrets({ ...entry });
   delete copy.events;
   if (Array.isArray(entry.overrides)) {
-    copy.overrides = entry.overrides.map((override) => ({
+    copy.overrides = entry.overrides.filter(isPlainObject).map((override) => ({
       timestamp: override.timestamp || 0,
       hostname: normalizedHostname(override.hostname) || hostnameFromUrl(override.url),
       reflection: typeof override.reflection === 'string' ? redactSecrets(override.reflection) : null,
     }));
   }
   if (Array.isArray(entry.topDomains)) {
-    copy.topDomains = entry.topDomains.map((domain = {}) => ({
+    copy.topDomains = entry.topDomains.filter(isPlainObject).map((domain) => ({
       hostname: normalizedHostname(domain.hostname || domain.domain),
       activeMs: Number.isFinite(domain.activeMs) ? Math.max(0, domain.activeMs) : 0,
       aligned: domain.aligned === true,
       alignedMs: Number.isFinite(domain.alignedMs) ? Math.max(0, domain.alignedMs) : 0,
     }));
   }
+  // Screens iterate these; a corrupted non-array value must not break them.
+  if (!Array.isArray(copy.overrides)) delete copy.overrides;
+  if (!Array.isArray(copy.topDomains)) delete copy.topDomains;
   return copy;
 }
 

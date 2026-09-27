@@ -8,7 +8,7 @@ const cache = new Map();
 export function buildDriftCacheKey(intent, url, history = []) {
   const recent = (Array.isArray(history) ? history : [])
     .slice(-5)
-    .map((event) => `${event.actionType || 'unknown'}:${event.url || 'n/a'}`)
+    .map((event) => `${event?.actionType || 'unknown'}:${event?.url || 'n/a'}`)
     .join('|');
   return `${String(intent || '').trim()}::${String(url || '').trim()}::${recent}`;
 }
