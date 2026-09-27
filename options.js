@@ -417,8 +417,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   const HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/;
+  // Accept pasted URLs and www. forms, but never drop a line silently: an
+  // unparseable line blocks the save so the user knows it was not applied.
   function parseCustomDomains(text) {
-    return text.split('\n').map(s => s.trim().toLowerCase()).filter(s => s && HOSTNAME_RE.test(s));
+    const domains = [];
+    const invalid = [];
+    for (const line of text.split('\n')) {
+      const raw = line.trim().toLowerCase();
+      if (!raw) continue;
+      const host = raw
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+        .replace(/[/?#].*$/, '')
+        .replace(/^www\./, '')
+        .replace(/\.$/, '');
+      if (HOSTNAME_RE.test(host)) {
+        if (!domains.includes(host)) domains.push(host);
+      } else {
+        invalid.push(line.trim());
+      }
+    }
+    return { domains, invalid };
+  }
+
+  function domainListOrError(id) {
+    const field = document.getElementById(id);
+    const parsed = parseCustomDomains(field?.value || '');
+    if (!field) return parsed.domains;
+    clearFieldError(field);
+    if (parsed.invalid.length) {
+      const shown = parsed.invalid.slice(0, 3).join(', ');
+      setFieldError(field, `Not a domain: ${shown}${parsed.invalid.length > 3 ? ', …' : ''}. Use one domain per line, like example.com.`);
+      return null;
+    }
+    if (parsed.domains.length > 200) {
+      setFieldError(field, 'Use at most 200 domains per list.');
+      return null;
+    }
+    return parsed.domains;
   }
 
   saveSitesBtn.addEventListener('click', () => {
@@ -431,12 +466,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       categoryPolicies[catId] = radio.value;
     });
 
-    const customBlockDomains = parseCustomDomains(
-      (document.getElementById('custom-block-domains')?.value || '')
-    );
-    const customAllowDomains = parseCustomDomains(
-      (document.getElementById('custom-allow-domains')?.value || '')
-    );
+    const customBlockDomains = domainListOrError('custom-block-domains');
+    const customAllowDomains = domainListOrError('custom-allow-domains');
+    if (!customBlockDomains || !customAllowDomains) {
+      showStatus(sitesStatus, 'Site policies not saved. Fix the highlighted domain list.');
+      return;
+    }
 
     saveSitesBtn.disabled = true;
     mutateStorage('saveSites', { categoryPolicies, customBlockDomains, customAllowDomains }, epoch).then(guardStorageContinuation(() => {

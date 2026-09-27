@@ -103,3 +103,27 @@ test('Settings success queued before deletion cannot restore saved-key UI afterw
   assert.deepEqual(Object.keys(h.local), ['privacyMutationState']);
   assert.equal(h.session.llmApiKey, undefined);
 });
+
+test('Settings rejects unparseable domain lines without a partial save and accepts pasted URLs', async () => {
+  const document = await loadSettings(client);
+  await until(() => document.getElementById('provider-select').value !== '');
+  const block = document.getElementById('custom-block-domains');
+  const allow = document.getElementById('custom-allow-domains');
+  const save = document.getElementById('save-sites-btn');
+  block.value = 'synthetic-block.example\nnot a domain\nlocalhost:3000';
+  allow.value = '';
+  save.click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.local.heuristicPolicy?.customBlockDomains?.includes('synthetic-block.example') || false, false);
+  assert.equal(block.getAttribute('aria-invalid'), 'true');
+  assert.match(block._errorEl.textContent, /not a domain.*localhost:3000/);
+
+  block.value = 'https://www.Synthetic-Block.example/path?q=1\nsynthetic-block.example\n';
+  allow.value = 'http://work.synthetic-block.example';
+  save.click();
+  await until(() => h.local.heuristicPolicy?.customBlockDomains);
+  assert.deepEqual(h.local.heuristicPolicy.customBlockDomains, ['synthetic-block.example']);
+  assert.deepEqual(h.local.heuristicPolicy.customAllowDomains, ['work.synthetic-block.example']);
+  assert.notEqual(block.getAttribute('aria-invalid'), 'true');
+  await h.send({ type: 'DELETE_ALL_DATA' });
+});
