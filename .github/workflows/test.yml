@@ -10,12 +10,15 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         node-version: [18.x, 20.x, 22.x]
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -24,3 +27,33 @@ jobs:
         run: npm test
       - name: Run static verification
         run: npm run verify:static
+      - name: Validate manifest version
+        run: npm run validate:version -- "v$(node -p "require('./manifest.json').version")"
+      - name: Build release package
+        run: npm run package -- --output "$RUNNER_TEMP/IntentLock-ci.zip"
+
+  # Real Chromium journeys load the unpacked MV3 extension against synthetic
+  # localhost fixtures only; no secrets, no network beyond installation.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+      - name: Install pinned Playwright
+        run: npm ci
+      - name: Install pinned Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Allow the Chromium sandbox on Ubuntu 24.04
+        # Ubuntu 24.04 blocks the unprivileged user namespaces the Chromium
+        # sandbox needs. Re-enable them for this ephemeral runner instead of
+        # disabling the browser sandbox.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Run browser journeys
+        run: npm run test:browser

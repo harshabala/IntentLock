@@ -371,3 +371,16 @@ test('GitHub Actions workflows use minimal permissions and immutable action refe
   assert.ok(testBeforePackage < packageStep, 'release tests must run before packaging');
   assert.ok(testBeforePackage < releaseStep, 'release tests must run before publication');
 });
+
+test('CI runs every Node suite, release checks and the real Chromium journeys', async () => {
+  const workflow = await readRoot('.github/workflows/test.yml');
+  const pkg = JSON.parse(await readRoot('package.json'));
+  assert.equal(pkg.scripts.test, 'node --test tests/*.test.mjs', 'npm test must discover every Node test file');
+  for (const step of ['run: npm test', 'run: npm run verify:static', 'run: npm run validate:version',
+    'run: npm run package', 'run: npm ci', 'npx playwright install --with-deps chromium', 'run: npm run test:browser']) {
+    assert.ok(workflow.includes(step), `test workflow must include ${step}`);
+  }
+  assert.match(workflow, /node-version: \[18\.x, 20\.x, 22\.x\]/);
+  assert.doesNotMatch(workflow, /secrets\./, 'test workflow must not read secrets');
+  assert.doesNotMatch(workflow, /chromiumSandbox:\s*false|--no-sandbox/);
+});

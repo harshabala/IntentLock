@@ -66,8 +66,11 @@ npm run package
 ```
 
 The Node suites use built-in `node:test` + `assert/strict`; `npm test` needs no
-dependency install and does not discover browser tests. Run the opt-in real
-browser suite separately:
+dependency install and does not discover browser tests. CI (`.github/workflows/test.yml`)
+runs `npm test`, `npm run verify:static`, version validation and a package build on
+Node 18/20/22, plus a separate `browser` job that installs the pinned Playwright and
+Chromium and runs the real journeys with the browser sandbox enabled. Locally, run the
+real browser suite separately:
 
 ```bash
 npm ci

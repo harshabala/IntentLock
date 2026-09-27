@@ -6,7 +6,9 @@ The existing `npm test` remains the dependency-free Node suite. It does not impo
 Playwright or discover `tests/browser/*.spec.mjs`; existing Node 18/20/22 CI can
 continue running it without `npm install` or a browser.
 
-Browser testing is a separate, opt-in development step:
+Browser testing is a separate step. CI runs it in its own `browser` job (Node 22,
+`npm ci`, `npx playwright install --with-deps chromium`, sandbox kept on; the job
+re-enables unprivileged user namespaces that Ubuntu 24.04 restricts). Locally:
 
 ```sh
 npm ci
