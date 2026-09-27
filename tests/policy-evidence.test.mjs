@@ -47,3 +47,32 @@ test('future-dated, malformed and null evidence is ignored', () => {
     assert.doesNotThrow(() => evaluatePolicyDrift({ intent, url, policy, now, events: bad }));
   }
 });
+
+test('explicit allow stays permitted after two minutes of dwell', () => {
+  const allowPolicy = { ...policy, customAllowDomains: ['unknown-site.example'] };
+  const result = evaluatePolicyDrift({ intent, url, policy: allowPolicy, now, events: dwellReports(6) });
+  assert.equal(result.shouldIntervene, false, JSON.stringify(result));
+  assert.equal(result.reason, 'explicit_allow');
+  assert.equal(result.explicit, true);
+});
+
+test('related correction covers host and descendants but not parent or sibling', () => {
+  const related = ['docs.unknown-site.example'];
+  const events = [];
+  const child = evaluatePolicyDrift({ intent, policy, now, events, relatedHostnames: related,
+    url: 'https://api.docs.unknown-site.example/page' });
+  assert.equal(child.reason, 'related_correction');
+  assert.equal(child.explicit, true);
+  for (const other of ['https://unknown-site.example/', 'https://blog.unknown-site.example/',
+    'https://docs.unknown-site.example.evil.test/']) {
+    const result = evaluatePolicyDrift({ intent, policy, now, events, relatedHostnames: related, url: other });
+    assert.notEqual(result.reason, 'related_correction', other);
+    assert.notEqual(result.explicit, true, other);
+  }
+});
+
+test('inferred category allow is not treated as an explicit permission', () => {
+  const result = evaluatePolicyDrift({ intent, policy, now, events: [],
+    url: 'https://docs.google.com/document/d/example' });
+  assert.notEqual(result.explicit, true);
+});

@@ -1237,6 +1237,9 @@ function evaluateDrift(url, tabId) {
       triggerIntervention(policyDrift.reasonLabel || 'Your recent browsing no longer matches your declared intent.', tabId);
       return;
     }
+    // Optional AI is a second opinion; it never overrules an explicit allow
+    // or a session-related correction.
+    if (policyDrift.explicit) return;
 
     checkDriftLLM(session.intent, url, session.events).then(res => {
       if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;

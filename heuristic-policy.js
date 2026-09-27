@@ -683,6 +683,23 @@ function isCategoryAligned(hostname, intentCategoryId) {
   return aligned.includes(siteCat.categoryId);
 }
 
+// Related corrections cover the marked host and its subdomains, never a
+// parent or sibling domain.
+function matchesRelatedHostname(hostname, relatedHostnames) {
+  const host = normalizeHostname(hostname);
+  if (!host || !Array.isArray(relatedHostnames)) return false;
+  return relatedHostnames.some((raw) => {
+    const related = normalizeHostname(raw);
+    return Boolean(related) && (host === related || host.endsWith(`.${related}`));
+  });
+}
+
+function isCustomAllowed(hostname, policy) {
+  const host = normalizeHostname(hostname);
+  const allowList = Array.isArray(policy?.customAllowDomains) ? policy.customAllowDomains : [];
+  return allowList.some(domain => normalizeHostname(domain) === host);
+}
+
 /**
  * Same alignment rules as evaluatePolicyDrift, plus optional "mark related" hostnames (IL-3).
  * relatedHostnames: bare hostnames the user marked as work-related during override.
@@ -694,13 +711,8 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
     ? policy
     : buildDefaultPolicy('deep_work', 'balanced');
   // A user correction is explicit authority, unlike inferred category/keyword matches.
-  const related = Array.isArray(relatedHostnames) ? relatedHostnames : [];
   const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
-  for (const raw of related) {
-    const r = String(raw || '').replace(/^www\./, '').toLowerCase();
-    if (!r) continue;
-    if (host === r || host.endsWith(`.${r}`)) return true;
-  }
+  if (matchesRelatedHostname(host, relatedHostnames)) return true;
   const customBlocks = Array.isArray(safePolicy.customBlockDomains) ? safePolicy.customBlockDomains : [];
   if (resolveDomainPolicy(host, safePolicy) === 'block'
     && customBlocks.some(domain => normalizeHostname(domain) === host)) return false;
@@ -754,6 +766,16 @@ export function evaluatePolicyDrift({
 
   const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
   const isAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames);
+
+  // Explicit user rules are authority: a session-related correction or a
+  // custom allow suppresses drift enforcement (not the separate time budget),
+  // and neither dwell, inferred scoring nor optional AI may overrule them.
+  if (matchesRelatedHostname(parsed.hostname, relatedHostnames)) {
+    return { shouldIntervene: false, score: 0, reason: 'related_correction', reasonLabel: '', signals, explicit: true };
+  }
+  if (domainDecision === 'allow' && isCustomAllowed(parsed.hostname, safePolicy)) {
+    return { shouldIntervene: false, score: 0, reason: 'explicit_allow', reasonLabel: '', signals, explicit: true };
+  }
 
   // Explicit custom blocks beat automatic alignment; user-related corrections still win.
   if (domainDecision === 'block' && !isAligned) {
