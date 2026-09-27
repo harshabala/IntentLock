@@ -95,3 +95,47 @@ test('without session storage a key cannot be saved and legacy local keys are dr
   assert.equal(JSON.stringify(result.local).includes('sk-synthetic'), false);
   assert.equal(result.apiKey, null);
 });
+
+const custom = (baseUrl, extra = {}) => ({
+  providerId: 'custom', customLabel: 'Synthetic', model: 'synthetic-model', baseUrl,
+  authType: 'bearer', apiStyle: 'openai', ...extra,
+});
+
+test('changing a custom endpoint without a new key removes the saved key', async () => {
+  await client.mutateStorage('saveProvider', { config: custom('https://one.example/v1/chat'), key: 'sk-synthetic-one' });
+  const result = await client.mutateStorage('saveProvider', { config: custom('https://two.example/v1/chat') });
+  assert.equal(result.keyCleared, true);
+  assert.equal(h.session.llmApiKey, undefined);
+  const { getLlmConfig, isLlmConfigured } = await import('../providers.js');
+  const config = await getLlmConfig();
+  assert.equal(config.baseUrl, 'https://two.example/v1/chat');
+  assert.equal(config.apiKey, null);
+  assert.equal(isLlmConfigured(config), false);
+});
+
+test('changing custom auth placement without a new key removes the saved key', async () => {
+  await client.mutateStorage('saveProvider', { config: custom('https://one.example/v1/chat'), key: 'sk-synthetic-one' });
+  const result = await client.mutateStorage('saveProvider', { config: custom('https://one.example/v1/chat', { authType: 'query' }) });
+  assert.equal(result.keyCleared, true);
+  assert.equal(h.session.llmApiKey, undefined);
+});
+
+test('saving the same destination or a deliberate replacement keeps the key', async () => {
+  await client.mutateStorage('saveProvider', { config: custom('https://one.example/v1/chat'), key: 'sk-synthetic-one' });
+  let result = await client.mutateStorage('saveProvider', { config: custom('https://one.example/v1/chat', { model: 'other-model' }) });
+  assert.equal(result.keyCleared, false);
+  assert.equal(h.session.llmApiKey, 'sk-synthetic-one');
+  result = await client.mutateStorage('saveProvider', { config: custom('https://two.example/v1/chat'), key: 'sk-synthetic-two' });
+  assert.equal(result.keyCleared, false);
+  assert.equal(h.session.llmApiKey, 'sk-synthetic-two');
+  await client.mutateStorage('clearKey', {});
+});
+
+test('switching built-in providers without a new key never forwards the old key', async () => {
+  await client.mutateStorage('saveProvider', { config: openai, key: 'sk-synthetic-openai' });
+  const result = await client.mutateStorage('saveProvider', {
+    config: { providerId: 'grok', model: 'grok-2-latest', baseUrl: 'https://api.x.ai/v1/chat/completions' },
+  });
+  assert.equal(result.keyCleared, true);
+  assert.equal(h.session.llmApiKey, undefined);
+});

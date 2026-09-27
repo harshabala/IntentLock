@@ -402,11 +402,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (deletionInProgress) return;
     saveProviderBtn.disabled = true;
-    mutateStorage('saveProvider', { config, ...(key ? { key } : {}) }, epoch).then(guardStorageContinuation(() => {
-      hasSavedApiKey = hasSavedApiKey || Boolean(key);
+    mutateStorage('saveProvider', { config, ...(key ? { key } : {}) }, epoch).then(guardStorageContinuation((result) => {
+      hasSavedApiKey = !result?.keyCleared && (hasSavedApiKey || Boolean(key));
       apiKeyInput.value = '';
       updateProviderUI(config.providerId);
-      showStatus(providerStatus, `${(getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label} settings saved.`);
+      const label = (getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label;
+      showStatus(providerStatus, result?.keyCleared && providerRequiresApiKey(config.providerId, config)
+        ? `${label} settings saved. The endpoint changed, so the saved key was removed — enter the key again.`
+        : `${label} settings saved.`);
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
     }), error => {
       showStatus(providerStatus, error.message);

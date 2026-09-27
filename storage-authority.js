@@ -1,6 +1,6 @@
 import { assertStorageCommit, runStorageMutation, storageCall } from './storage-queue.js';
 import { buildDefaultPolicy } from './heuristic-policy.js';
-import { validateProviderConfig } from './providers.js';
+import { DEFAULT_PROVIDER_ID, PROVIDERS, validateProviderConfig } from './providers.js';
 import { ERROR_LOG_RETENTION_MS, MAX_ERROR_LOG_ENTRIES, pruneByRetention, redactSecrets } from './privacy-utils.js';
 
 export const SESSION_UNAVAILABLE = 'Session storage is unavailable, so an AI key cannot be saved. The local lock still works.';
@@ -48,9 +48,15 @@ export function applyStorageCommand(command, payload, epoch) {
         // Keys live only in trusted-context session memory. Local storage is
         // readable by content scripts, so it is never a credential fallback.
         if (payload.key && !chrome.storage.session) throw new Error(SESSION_UNAVAILABLE);
+        const previous = await storageCall('local', 'get', ['llmProviderConfig']);
+        // A saved key is bound to where it was sent. Changing the destination
+        // without deliberately entering a key must not forward the old one.
+        const keyCleared = !payload.key &&
+          providerDestination(previous.llmProviderConfig) !== providerDestination(payload.config);
+        if (keyCleared) await removeAllKeyAliases();
         await write('local', 'set', { llmProviderConfig: payload.config });
         if (payload.key) await write('session', 'set', { llmApiKey: payload.key });
-        return;
+        return { keyCleared };
       }
       case 'clearKey':
         fields(payload, []);
@@ -98,6 +104,14 @@ export function applyStorageCommand(command, payload, epoch) {
       default: throw new Error('Unknown storage mutation.');
     }
   }, epoch);
+}
+
+function providerDestination(config) {
+  const stored = config && typeof config === 'object' ? config : {};
+  const provider = PROVIDERS[stored.providerId] ? stored.providerId : DEFAULT_PROVIDER_ID;
+  if (provider !== 'custom') return provider; // Built-in endpoints are fixed.
+  return JSON.stringify([provider, String(stored.baseUrl || '').trim(),
+    stored.authType || PROVIDERS.custom.authType, stored.apiStyle || PROVIDERS.custom.apiStyle]);
 }
 
 async function removeAllKeyAliases() {
