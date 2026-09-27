@@ -480,10 +480,15 @@ for (const cat of SITE_CATEGORIES) {
   }
 }
 
+// Mobile hosts follow their base site (m.youtube.com is youtube.com). Other
+// subdomains are not inherited: docs.aws.amazon.com is not shopping.
+const MOBILE_HOST_PREFIX = /^(?:m|mobile)\./;
+
 export function getSiteCategory(hostname) {
   if (!hostname) return null;
   const normalized = String(hostname).replace(/^www\./, '').toLowerCase();
-  const categoryId = DOMAIN_TO_CATEGORY.get(normalized);
+  const categoryId = DOMAIN_TO_CATEGORY.get(normalized)
+    || DOMAIN_TO_CATEGORY.get(normalized.replace(MOBILE_HOST_PREFIX, ''));
   if (!categoryId) return null;
   const cat = SITE_CATEGORIES.find(c => c.id === categoryId);
   return cat ? { categoryId, label: cat.label } : null;
@@ -589,17 +594,35 @@ function normalizeHostname(h) {
   return String(h || '').replace(/^www\./, '').toLowerCase();
 }
 
+// Custom rules cover a domain and its subdomains at label boundaries
+// (reddit.com covers old.reddit.com, never reddit.com.evil.test). The most
+// specific rule wins; an allow wins a tie with a block of the same scope.
+function customRuleDecision(hostname, policy) {
+  const host = normalizeHostname(hostname);
+  if (!host) return null;
+  let best = null;
+  const consider = (list, decision) => {
+    for (const raw of Array.isArray(list) ? list : []) {
+      const domain = normalizeHostname(raw);
+      if (!domain || (host !== domain && !host.endsWith(`.${domain}`))) continue;
+      if (!best || domain.length > best.length || (domain.length === best.length && decision === 'allow')) {
+        best = { length: domain.length, decision };
+      }
+    }
+  };
+  consider(policy?.customBlockDomains, 'block');
+  consider(policy?.customAllowDomains, 'allow');
+  return best?.decision || null;
+}
+
 export function resolveDomainPolicy(hostname, policy) {
   try {
     if (!policy || typeof policy !== 'object') return 'neutral';
     const normalized = normalizeHostname(hostname);
     if (!normalized) return 'neutral';
 
-    const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
-    const blockList = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [];
-
-    if (allowList.some(d => normalizeHostname(d) === normalized)) return 'allow';
-    if (blockList.some(d => normalizeHostname(d) === normalized)) return 'block';
+    const custom = customRuleDecision(normalized, policy);
+    if (custom) return custom;
 
     const lookup = getSiteCategory(normalized);
     if (!lookup) return 'neutral';
@@ -695,9 +718,7 @@ function matchesRelatedHostname(hostname, relatedHostnames) {
 }
 
 function isCustomAllowed(hostname, policy) {
-  const host = normalizeHostname(hostname);
-  const allowList = Array.isArray(policy?.customAllowDomains) ? policy.customAllowDomains : [];
-  return allowList.some(domain => normalizeHostname(domain) === host);
+  return customRuleDecision(hostname, policy) === 'allow';
 }
 
 /**
@@ -713,9 +734,7 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
   // A user correction is explicit authority, unlike inferred category/keyword matches.
   const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
   if (matchesRelatedHostname(host, relatedHostnames)) return true;
-  const customBlocks = Array.isArray(safePolicy.customBlockDomains) ? safePolicy.customBlockDomains : [];
-  if (resolveDomainPolicy(host, safePolicy) === 'block'
-    && customBlocks.some(domain => normalizeHostname(domain) === host)) return false;
+  if (customRuleDecision(host, safePolicy) === 'block') return false;
 
   return isKeywordAligned(url, intentTerms(intent))
     || isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);

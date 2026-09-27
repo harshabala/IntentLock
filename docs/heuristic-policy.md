@@ -141,9 +141,9 @@ Stored in `chrome.storage.local` under the key `heuristicPolicy`, version 1:
 
 ### Precedence (highest to lowest)
 
-1. `customAllowDomains` match → **allow** (category block ignored)
-2. `customBlockDomains` match → **block** (category allow ignored)
-3. `categoryPolicies[DOMAIN_TO_CATEGORY[hostname]]`
+1. Session-related correction (marked host or its subdomains, never a parent or sibling) → **no drift enforcement**; optional AI is not consulted
+2. Custom rule → the most specific matching `customAllowDomains` / `customBlockDomains` entry wins. A rule covers its domain and subdomains at label boundaries (`reddit.com` covers `old.reddit.com`, never `reddit.com.evil.test`). An allow wins a tie with a block of the same scope. A custom allow suppresses drift enforcement (dwell, scoring and optional AI), not the separate time budget.
+3. `categoryPolicies[DOMAIN_TO_CATEGORY[hostname]]` — exact listed host, or its `m.` / `mobile.` host (`m.youtube.com` follows `youtube.com`). Other subdomains do not inherit a parent's category.
 4. Domain not in any category → **neutral** (behavioral signals still score)
 
 ### `resolveDomainPolicy(hostname, policy)`

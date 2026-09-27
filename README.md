@@ -178,7 +178,8 @@ flowchart TD
 |--------|--------|
 | Domain policy = `block` + not aligned with intent | Immediate intervene, score 0.95, reason `blocked_category` |
 | Domain policy = `allow` + intent aligned | Never block on category alone |
-| `customAllowDomains` match | Category block never fires |
+| `customAllowDomains` match (domain or subdomain, most specific rule wins) | No drift lock; optional AI not consulted |
+| Session-related correction (marked host or subdomain) | No drift lock; optional AI not consulted |
 | 3+ unrelated events in last 2 min | +0.35 |
 | 4+ tab switches in last 2 min | +0.25 |
 | 2+ loads of same unaligned domain | +0.20 |
