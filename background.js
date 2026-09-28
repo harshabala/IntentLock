@@ -256,10 +256,10 @@ function createHistoryEntry(session) {
   const metrics = ensureMetrics(session);
   const overrides = events
     .filter(e => e.actionType === 'OVERRIDE')
+    // Summaries outlive the session; free-text reflections do not.
     .map(e => ({
       timestamp: e.timestamp || 0,
       hostname: e.hostname || extractDomain(e.url) || null,
-      reflection: e.reflection || null,
     }));
   return {
     id: session.id,

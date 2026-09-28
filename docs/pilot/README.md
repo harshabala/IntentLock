@@ -51,8 +51,8 @@ permissions, not access limited to a participant's chosen task.
 Local extension data is separate from study notes. IntentLock stores active
 session events and lock state locally, which can include URLs, plus intent,
 reflections, completed-session history, domain summaries and diagnostics.
-History sanitization removes event arrays but retains intent/reflection text and
-hostnames. Retention helpers use 30 days/100 completed sessions and 14 days/200
+History summaries drop event arrays and reflection text; they retain intent text
+and hostnames. Retention helpers use 30 days/100 completed sessions and 14 days/200
 diagnostic entries; these are not a promise of continuous background erasure or
 zero local history. Browser-owned history is separate again. The study-note
 30-day deadline does not control either kind of local/browser history.

@@ -26,7 +26,7 @@ The currently running session. Absent when no session is active.
     dwellMs?: number,      // PAGE_DWELL / SPA_NAVIGATION — cumulative active milliseconds on page
     dwellDeltaMs?: number, // active milliseconds since the previous report (counted once)
     previousUrl?: string, navigationUrl?: string, // SPA_NAVIGATION only
-    reflection?: string,   // OVERRIDE only — user's written reflection
+    reflection?: string,   // OVERRIDE only — kept only while the session is active; never copied into history
   }>,
   metrics?: {
     activeMs: number,
@@ -93,11 +93,11 @@ Array<{
   overrideCount?: number,
   topDomains?: Array<{ hostname: string, activeMs: number, aligned: boolean, alignedMs: number }>,
   reportViewed?: boolean,
-  overrides?: Array<{ timestamp: number, url?: string, hostname?: string, reflection?: string }>,
+  overrides?: Array<{ timestamp: number, hostname: string | null }>,
 }>
 ```
 
-Exportable as JSON via Settings → Export session history. Full event arrays and legacy override URLs are not retained in the sanitized history summary; overrides retain only hostnames and reflections.
+Exportable as JSON via Settings → Export session history. Full event arrays, legacy override URLs and reflection text are not retained in the history summary; overrides keep only a timestamp and hostname. Older stored summaries are rewritten to this shape by the startup/hourly retention pass.
 Note: `overrides[].hostname` replaces `overrides[].url` per privacy rules (only hostname is stored).
 
 ---

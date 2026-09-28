@@ -228,7 +228,7 @@ test('migrateLlmStorage migrates legacy key to llmApiKey in session storage on l
   assert.equal(storageData.openaiApiKey, undefined);
 });
 
-test('createHistoryEntry includes overrides array with reflection text', () => {
+test('createHistoryEntry keeps override hostnames but never reflection text', () => {
   const session = {
     id: 'abc123',
     intent: 'write report',
@@ -247,9 +247,9 @@ test('createHistoryEntry includes overrides array with reflection text', () => {
   assert.equal(entry.overrides.length, 2);
   // Privacy: history stores hostname only (not full URL)
   assert.equal(entry.overrides[0].hostname, 'reddit.com');
-  assert.equal(entry.overrides[0].reflection, 'needed a break');
+  assert.equal('reflection' in entry.overrides[0], false);
   assert.equal(entry.overrides[1].hostname, 'twitter.com');
-  assert.equal(entry.overrides[1].reflection, null);
+  assert.equal(JSON.stringify(entry).includes('needed a break'), false);
   assert.equal(entry.reportViewed, false);
   assert.ok('onIntentRatio' in entry);
 });

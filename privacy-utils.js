@@ -96,10 +96,10 @@ export function sanitizeHistoryEntry(entry) {
   const copy = redactSecrets({ ...entry });
   delete copy.events;
   if (Array.isArray(entry.overrides)) {
+    // Reflection text is never kept in a summary; older entries lose it here.
     copy.overrides = entry.overrides.filter(isPlainObject).map((override) => ({
-      timestamp: override.timestamp || 0,
+      timestamp: Number.isFinite(override.timestamp) ? override.timestamp : 0,
       hostname: normalizedHostname(override.hostname) || hostnameFromUrl(override.url),
-      reflection: typeof override.reflection === 'string' ? redactSecrets(override.reflection) : null,
     }));
   }
   if (Array.isArray(entry.topDomains)) {

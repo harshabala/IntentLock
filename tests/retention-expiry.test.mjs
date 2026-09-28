@@ -92,3 +92,19 @@ test('no retention alarm is kept when nothing personal remains', () => {
   assert.deepEqual(result.local.sessionHistory, []);
   assert.equal(result.alarms.includes('intentlock-retention'), false);
 });
+
+test('startup migration strips reflection text from stored summaries', () => {
+  const now = Date.now();
+  const result = startWorker({ sessionHistory: [{ id: 'legacy', startTime: now - HOUR, endTime: now,
+    overrides: [{ timestamp: now - 1000, hostname: 'example.com', reflection: 'synthetic private reflection' }] }] });
+  assert.deepEqual(result.local.sessionHistory[0].overrides, [{ timestamp: now - 1000, hostname: 'example.com' }]);
+  assert.equal(JSON.stringify(result.local).includes('synthetic private reflection'), false);
+});
+
+test('an abandoned session summary keeps no reflection text', () => {
+  const result = startWorker({ activeSession: session(25 * HOUR, { events: [
+    { actionType: 'OVERRIDE', url: 'https://example.com/', timestamp: Date.now() - 24 * HOUR, reflection: 'synthetic private reflection' },
+  ] }) });
+  assert.deepEqual(result.local.sessionHistory[0].overrides.map(o => o.hostname), ['example.com']);
+  assert.equal(JSON.stringify(result.local).includes('synthetic private reflection'), false);
+});

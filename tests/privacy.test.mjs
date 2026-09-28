@@ -99,13 +99,14 @@ test('retention keeps newest entries and report-compatible domain metrics', () =
   assert.equal(newest[0].topDomains[0].alignedMs, 750);
 });
 
-test('history reflections are redacted before export', () => {
+test('stored and legacy history summaries never keep reflection text', () => {
   const [entry] = sanitizeSessionHistory([{
     id: 'secret-reflection',
     endTime: Date.now(),
-    overrides: [{ reflection: 'access_token=do-not-export' }],
+    overrides: [{ hostname: 'example.com', reflection: 'access_token=do-not-export private thought' }],
   }]);
-  assert.equal(entry.overrides[0].reflection, 'access_token=[redacted]');
+  assert.deepEqual(entry.overrides, [{ timestamp: 0, hostname: 'example.com' }]);
+  assert.equal(JSON.stringify(entry).includes('private thought'), false);
 });
 
 test('provider endpoint policy rejects unsafe overrides', () => {
