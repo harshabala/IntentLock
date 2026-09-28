@@ -1311,10 +1311,13 @@ function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
     // Dwell checks are paced by the tracker (one per 30 s report) and never
     // reach the provider; the debounce guards navigation checks.
     if (!dwellCheck) {
-      if (url === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
+      // Debounce per tab: the same URL opened in another tab or window is a
+      // separate page and must get its own check.
+      const debounceKey = `${tabId ?? ''}|${url}`;
+      if (debounceKey === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
         return;
       }
-      lastEvaluatedUrl = url;
+      lastEvaluatedUrl = debounceKey;
       lastEvaluatedTime = now;
     }
 

@@ -76,3 +76,10 @@ test('an unlisted site still gets the AI second opinion', async () => {
   assert.equal(fetchCalls, 1);
   assert.deepEqual(shown, [3]);
 });
+
+test('the same URL in a second tab is checked instead of debounced', async () => {
+  shown.length = 0;
+  await visit(10, 'https://same-url.example/page');
+  await visit(11, 'https://same-url.example/page');
+  assert.deepEqual(shown.sort(), [10, 11]);
+});
