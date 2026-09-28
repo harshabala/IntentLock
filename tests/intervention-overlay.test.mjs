@@ -157,3 +157,21 @@ test('classic overlay refuses a pre-existing global API property', async () => {
     /IntentLock\.interventionOverlay is already defined/,
   );
 });
+
+test('the lock explains what each way out does, including budget expiry', async () => {
+  const { document, MutationObserver, matchMedia } = createOverlayDocument();
+  const runtime = await loadClassicScript(new URL('../intervention-overlay.js', import.meta.url), {
+    chrome, document, MutationObserver, matchMedia,
+  });
+  const overlay = runtime.IntentLock.interventionOverlay.createInterventionOverlay({
+    onOverride() {}, onCloseTab() {}, onEndSession() {},
+  });
+  overlay.show({ reason: "You've spent a long time on an unrelated site.", intent: 'Write the tests' });
+  const shadow = document.getElementById('intentlock-intervention-host').__shadow;
+  const explanation = shadow.querySelector('[data-role="explanation"]');
+  assert.match(explanation.textContent, /5 minutes/);
+  assert.match(explanation.textContent, /rest of this session/);
+  assert.match(explanation.textContent, /time budget runs separately/);
+  overlay.show({ reason: 'Time budget exceeded.', intent: 'Write the tests' });
+  assert.match(explanation.textContent, /budget has run out/);
+});

@@ -1,11 +1,12 @@
 // providers.js — Multi-provider LLM adapter for IntentLock
 
-import { classifyApiError, logError, ERROR_TYPES } from './error-log.js';
+import { classifyApiError, logError, ERROR_TYPES, captureErrorEpoch, isErrorEpochCurrent } from './error-log.js';
 import {
   isLlmBackedOff,
   parseRetryAfterMs,
   setQuotaBackoff,
   shouldLogQuotaError,
+  TRANSIENT_BACKOFF_MS,
 } from './llm-backoff.js';
 import { redactSecrets } from './privacy-utils.js';
 import { isStorageDeletionActive } from './storage-queue.js';
@@ -260,6 +261,7 @@ async function throwApiFailure(response, providerId) {
   err.apiError = apiError;
   err.bodyText = bodyText;
   err.status = response.status;
+  err.retryAfterHeader = response.headers?.get?.('retry-after') || null;
   throw err;
 }
 
@@ -318,7 +320,7 @@ export async function getLlmConfig() {
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(['llmProviderConfig', 'llmApiKey', 'openaiApiKey'], (localRes) => {
+    chrome.storage.local.get(['llmProviderConfig'], (localRes) => {
       const stored = localRes?.llmProviderConfig || {};
       const providerId = stored.providerId;
       const provider = getProvider(providerId);
@@ -344,17 +346,14 @@ export async function getLlmConfig() {
         });
       };
 
+      // The only request credential is the canonical session key. Legacy
+      // aliases are migration sources, never credentials.
       if (chrome.storage.session) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionRes) => {
-          const apiKey = sessionRes?.llmApiKey
-            || sessionRes?.openaiApiKey
-            || localRes?.llmApiKey
-            || localRes?.openaiApiKey
-            || null;
-          finish(apiKey);
+        chrome.storage.session.get(['llmApiKey'], (sessionRes) => {
+          finish(typeof sessionRes?.llmApiKey === 'string' && sessionRes.llmApiKey ? sessionRes.llmApiKey : null);
         });
       } else {
-        finish(localRes?.llmApiKey || localRes?.openaiApiKey || null);
+        finish(null);
       }
     });
   });
@@ -479,7 +478,7 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
 }
 
 async function chatCompletionInternal(prompt, options = {}) {
-  const { jsonMode = true, maxTokens = 100, temperature = 0.1 } = options;
+  const { jsonMode = true, maxTokens = 100, temperature = 0.1, storageEpoch } = options;
   if (isStorageDeletionActive()) {
     return {
       ok: false,
@@ -503,7 +502,7 @@ async function chatCompletionInternal(prompt, options = {}) {
   const configError = validateProviderConfig(config);
   if (configError) {
     const error = { code: 'invalid_provider_config', message: configError, providerId: config.providerId };
-    await logError({ type: ERROR_TYPES.CONFIG, message: configError, details: redactSecrets(error), source: 'chatCompletion' });
+    await logError({ type: ERROR_TYPES.CONFIG, message: configError, details: redactSecrets(error), source: 'chatCompletion' }, storageEpoch);
     return { ok: false, error };
   }
 
@@ -516,7 +515,7 @@ async function chatCompletionInternal(prompt, options = {}) {
       ok: false,
       error: {
         code: 'quota_backoff',
-        message: 'AI check paused after a quota error. Local lock still active. Retry later or switch models in Settings.',
+        message: 'AI check paused after a provider error. Local lock still active. Retry later or switch models in Settings.',
         providerId: config.providerId,
       },
     };
@@ -569,6 +568,7 @@ async function chatCompletionInternal(prompt, options = {}) {
         return { ok: false, error: { code: 'unsupported_provider', message: 'Unsupported API format.', providerId: config.providerId } };
     }
 
+    if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
     if (!text) {
       const emptyError = { code: 'empty_response', message: 'API returned an empty response.', providerId: config.providerId };
       await logError({
@@ -576,20 +576,25 @@ async function chatCompletionInternal(prompt, options = {}) {
         message: emptyError.message,
         details: emptyError,
         source: 'chatCompletion',
-      });
+      }, storageEpoch);
       return { ok: false, error: emptyError };
     }
 
     return { ok: true, text };
   } catch (error) {
-    if (error?.code === 'tracking_disabled') {
+    if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
+    // An opt-out aborts in-flight requests; that is not a provider failure.
+    if (error?.code === 'tracking_disabled' || await trackingIsDisabled()) {
       return trackingDisabledResult(error.providerId || config.providerId);
     }
     const bodyText = error.bodyText || error.message || '';
     const apiError = error.apiError || classifyApiError(error.status || 0, bodyText, config.providerId);
 
+    if (apiError.code === 'network_error' || (apiError.status || 0) >= 500) {
+      setQuotaBackoff({ retryAfterMs: TRANSIENT_BACKOFF_MS });
+    }
     if (apiError.code === 'quota_exceeded') {
-      setQuotaBackoff({ retryAfterMs: parseRetryAfterMs(bodyText) });
+      setQuotaBackoff({ retryAfterMs: parseRetryAfterMs(bodyText, Date.now(), error.retryAfterHeader) });
       if (shouldLogQuotaError()) {
         const modelHint = config.providerId === 'gemini'
           ? ' Try model gemini-2.0-flash-lite in Advanced settings, or wait for quota reset.'
@@ -599,7 +604,7 @@ async function chatCompletionInternal(prompt, options = {}) {
           message: `${apiError.message}${modelHint}`,
           details: { ...apiError, model: config.model },
           source: 'chatCompletion',
-        });
+        }, storageEpoch);
       }
     } else {
       await logError({
@@ -607,7 +612,7 @@ async function chatCompletionInternal(prompt, options = {}) {
         message: apiError.message,
         details: apiError,
         source: 'chatCompletion',
-      });
+      }, storageEpoch);
     }
 
     return { ok: false, error: apiError };
@@ -615,10 +620,12 @@ async function chatCompletionInternal(prompt, options = {}) {
 }
 
 export async function chatCompletion(prompt, options = {}) {
+  const storageEpoch = options.storageEpoch ?? captureErrorEpoch();
   if (typeof prompt !== 'string' || prompt.length > MAX_PROMPT_LENGTH) {
     return { ok: false, error: { code: 'prompt_too_large', message: 'Provider prompt exceeds the safety limit.' } };
   }
-  const key = JSON.stringify([prompt, options]);
+  if (!await isErrorEpochCurrent(storageEpoch)) return { ok: false, error: { code: 'data_deletion', message: 'Data changed during this request.' } };
+  const key = JSON.stringify([prompt, options, await storageEpoch]);
   const existing = inFlightRequests.get(key);
   if (existing) return existing;
   if (inFlightRequests.size >= MAX_PROVIDER_CONCURRENCY) {
@@ -626,6 +633,7 @@ export async function chatCompletion(prompt, options = {}) {
   }
   const request = chatCompletionInternal(prompt, {
     ...options,
+    storageEpoch,
     maxTokens: Math.max(1, Math.min(Number.isFinite(options.maxTokens) ? options.maxTokens : 100, 500)),
   });
   inFlightRequests.set(key, request);

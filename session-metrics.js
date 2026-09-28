@@ -11,6 +11,32 @@ export const ON_INTENT_METHOD_COPY =
   "On-intent % is time on sites that matched your intent policy vs total active browsing in this session. " +
   'It is an estimate from active-tab time and does not need an API key.';
 
+// ── Session timer (pause-aware) ─────────────────────────────────────────
+// A paused session stores pausedAt; resumed pauses accumulate in pausedMs.
+// Paused time never counts toward elapsed time, the budget, or dwell.
+
+export function isSessionPaused(session) {
+  return Number.isFinite(session?.pausedAt);
+}
+
+export function sessionPausedMs(session) {
+  return Number.isFinite(session?.pausedMs) && session.pausedMs > 0 ? session.pausedMs : 0;
+}
+
+export function activeElapsedMs(session, now = Date.now()) {
+  if (!Number.isFinite(session?.startTime)) return 0;
+  const end = isSessionPaused(session) ? session.pausedAt : now;
+  return Math.max(0, end - session.startTime - sessionPausedMs(session));
+}
+
+/** When the time budget runs out if the timer keeps running, or null. */
+export function budgetEndsAt(session) {
+  if (!Number.isFinite(session?.startTime) || !Number.isFinite(session?.timeBudget) || session.timeBudget <= 0) {
+    return null;
+  }
+  return session.startTime + session.timeBudget * 60000 + sessionPausedMs(session);
+}
+
 export function createSessionMetrics() {
   return {
     activeMs: 0,

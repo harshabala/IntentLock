@@ -5,10 +5,11 @@ import {
   buildDefaultPolicy,
   migrateLegacyDistractionSites,
   isUrlAligned,
+  minimizeSessionEvent,
 } from './heuristic-policy.js';
 import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
-import { logError, ERROR_TYPES } from './error-log.js';
+import { logError, registerErrorLogAuthority } from './error-log.js';
 import { getEffectiveDistractionSites, DEFAULT_DISTRACTION_SITES } from './distraction-sites.js';
 import { clearLlmBackoff, getQuotaBackoffUntil, registerBackoffCallback, setQuotaBackoff } from './llm-backoff.js';
 import {
@@ -18,24 +19,35 @@ import {
   ensureMetrics,
   qualifiesForActivation,
   topDomains,
+  isSessionPaused,
+  sessionPausedMs,
+  budgetEndsAt,
 } from './session-metrics.js';
 import {
   sanitizeSessionHistory,
   sanitizeUrl,
+  pruneByRetention,
+  redactSecrets,
   SESSION_RETENTION_MS,
   MAX_SESSION_HISTORY,
+  ERROR_LOG_RETENTION_MS,
+  MAX_ERROR_LOG_ENTRIES,
+  ACTIVE_SESSION_MAX_MS,
 } from './privacy-utils.js';
 import {
-  beginStorageDeletion,
-  endStorageDeletion,
-  enqueueStorageMutation,
+  initializeStorageAuthority,
+  deleteStorageData,
+  assertStorageEpoch,
+  assertStorageCommit,
+  runStorageMutation,
   getStorageGeneration,
   isStorageDeletionActive,
 } from './storage-queue.js';
+import { applyStorageCommand, isExtensionPage, migrateKeys } from './storage-authority.js';
 
 registerBackoffCallback((until) => {
   const generation = getStorageGeneration();
-  void enqueueStorageMutation(() => {
+  void enqueueSessionMutation(() => {
     if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
     return storageSet({ llmBackoffUntil: until });
   });
@@ -68,6 +80,7 @@ function storageGet(keys) {
 }
 
 function storageSet(values) {
+  assertStorageCommit();
   return new Promise((resolve, reject) => {
     chrome.storage.local.set(values, () => {
       if (chrome.runtime.lastError) {
@@ -80,6 +93,7 @@ function storageSet(values) {
 }
 
 function storageRemove(keys) {
+  assertStorageCommit();
   return new Promise((resolve, reject) => {
     chrome.storage.local.remove(keys, () => {
       if (chrome.runtime.lastError) {
@@ -91,61 +105,12 @@ function storageRemove(keys) {
   });
 }
 
-function storageClear() {
-  if (typeof chrome.storage.local.clear !== 'function') {
-    return storageRemove([
-      'activeSession',
-      'sessionHistory',
-      'trackingEnabled',
-      'customDistractionSites',
-      'sessionTabGroupId',
-      'isCurrentlyIdle',
-      'lastIdleTime',
-      'overrideCooldowns',
-      'interventionStates',
-      'interventionState',
-      'completedInterventionTransitions',
-      'errorLog',
-      'activationState',
-      'llmProviderConfig',
-      'llmApiKey',
-      'openaiApiKey',
-      'llmBackoffUntil',
-      'heuristicPolicy',
-      'relatedDomainMarks',
-      'theme',
-    ]);
-  }
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.clear(() => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-function storageSessionClear() {
-  if (typeof chrome.storage.session?.clear !== 'function') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    chrome.storage.session.clear(() => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-function enqueueSessionMutation(operation) {
-  const generation = getStorageGeneration();
-  return enqueueStorageMutation(() => {
-    if (generation !== getStorageGeneration() || isStorageDeletionActive()) return null;
-    return operation();
-  });
+function enqueueSessionMutation(operation, epoch = getStorageGeneration()) {
+  const pending = runStorageMutation(operation, epoch);
+  // Event listeners may intentionally ignore results; request handlers still
+  // receive the original rejection and must not announce success.
+  pending.catch(() => {});
+  return pending;
 }
 
 function interventionKey(sessionId, tabId) {
@@ -283,15 +248,22 @@ function relatedHostnamesList() {
   return Object.keys(relatedDomainMarks || {});
 }
 
+// Stored events may predate validation or be corrupted; only objects count.
+function sessionEvents(session) {
+  return Array.isArray(session?.events)
+    ? session.events.filter(event => event && typeof event === 'object' && !Array.isArray(event))
+    : [];
+}
+
 function createHistoryEntry(session) {
-  const events = Array.isArray(session.events) ? session.events : [];
+  const events = sessionEvents(session);
   const metrics = ensureMetrics(session);
   const overrides = events
     .filter(e => e.actionType === 'OVERRIDE')
+    // Summaries outlive the session; free-text reflections do not.
     .map(e => ({
       timestamp: e.timestamp || 0,
       hostname: e.hostname || extractDomain(e.url) || null,
-      reflection: e.reflection || null,
     }));
   return {
     id: session.id,
@@ -318,9 +290,11 @@ let isCurrentlyIdle = false;
 chrome.idle.setDetectionInterval(180); // 3 minutes
 
 function broadcastIdleState(isIdle) {
+  const epoch = getStorageGeneration();
   if (typeof chrome.tabs?.query === 'function') {
     chrome.tabs.query({}, (tabs) => {
       (tabs || []).forEach((tab) => {
+        if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
         if (!Number.isInteger(tab.id)) return;
         chrome.tabs.sendMessage?.(tab.id, { type: 'IDLE_STATE', idle: isIdle }, () => {
           void chrome.runtime.lastError;
@@ -331,8 +305,10 @@ function broadcastIdleState(isIdle) {
 }
 
 chrome.idle.onStateChanged.addListener((newState) => {
+  const epoch = getStorageGeneration();
   const isIdle = (newState === 'idle' || newState === 'locked');
   chrome.storage.local.get(['trackingEnabled'], (result) => {
+    if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
     if (result.trackingEnabled === false) {
       isCurrentlyIdle = false;
       lastIdleTime = 0;
@@ -417,7 +393,7 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     session.endTime = Date.now();
     ensureMetrics(session);
     if (reflection) {
-      session.events = Array.isArray(session.events) ? session.events : [];
+      session.events = sessionEvents(session);
       session.events.push({
         timestamp: Date.now(),
         actionType: 'OVERRIDE',
@@ -440,24 +416,89 @@ async function finalizeActiveSession(reflection = null, expectedSessionId = null
     session.topDomains = entry.topDomains;
 
     await storageSet({ sessionHistory: history });
-    await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns']);
+    await storageRemove(['activeSession', INTERVENTION_STATE_KEY, 'interventionState', 'overrideCooldowns', 'relatedDomainMarks', 'sessionTabGroupId']);
     hideInterventionsFromTabs();
     ungroupTabs();
     currentSession = null;
     overrideCooldowns.clear();
+    relatedDomainMarks = {};
     chrome.alarms.clear(timeBudgetAlarmName);
     return session;
 }
 
-function endActiveSession(reflection = null, callback = null, expectedSessionId = null) {
-  const operation = enqueueSessionMutation(() => finalizeActiveSession(reflection, expectedSessionId));
-  if (callback) operation.then(callback, () => callback(null));
+const RETENTION_ALARM = 'intentlock-retention';
+
+function isSessionExpired(session, now = Date.now()) {
+  return Boolean(session?.isActive) &&
+    (!Number.isFinite(session.startTime) || now - session.startTime >= ACTIVE_SESSION_MAX_MS);
+}
+
+function sameJson(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Must run inside a storage mutation. Ends an abandoned session, then prunes
+// summaries and diagnostics to their stated bounds in storage.
+async function applyRetention(now = Date.now()) {
+  const session = (await storageGet(['activeSession'])).activeSession;
+  if (isSessionExpired(session, now)) {
+    await finalizeActiveSession(null, session.id || null);
+  } else if (session?.isActive && Array.isArray(session.events)) {
+    // Older versions stored full URLs (paths, queries) in live events.
+    const events = sessionEvents(session).map(event => minimizeSessionEvent(event, session.intent)).filter(Boolean);
+    if (!sameJson(events, session.events)) {
+      session.events = events;
+      await storageSet({ activeSession: session });
+      currentSession = session;
+    }
+  }
+
+  const data = await storageGet(['activeSession', 'sessionHistory', 'errorLog']);
+  const values = {};
+  if (data.sessionHistory !== undefined) {
+    const history = sanitizeSessionHistory(Array.isArray(data.sessionHistory) ? data.sessionHistory : [], {
+      now, retentionMs: SESSION_RETENTION_MS, maxEntries: MAX_SESSION_HISTORY,
+    });
+    if (!sameJson(history, data.sessionHistory)) values.sessionHistory = history;
+  }
+  if (data.errorLog !== undefined) {
+    const log = pruneByRetention(Array.isArray(data.errorLog) ? data.errorLog : [], {
+      now, retentionMs: ERROR_LOG_RETENTION_MS, maxEntries: MAX_ERROR_LOG_ENTRIES, newestFirst: true,
+    }).map(entry => redactSecrets(entry));
+    if (!sameJson(log, data.errorLog)) values.errorLog = log;
+  }
+  if (Object.keys(values).length) await storageSet(values);
+
+  const retained = data.activeSession?.isActive ||
+    (values.sessionHistory || data.sessionHistory || []).length > 0 ||
+    (values.errorLog || data.errorLog || []).length > 0;
+  scheduleRetention(Boolean(retained));
+}
+
+function scheduleRetention(needed) {
+  if (!needed) {
+    chrome.alarms.clear(RETENTION_ALARM);
+    return;
+  }
+  const create = () => chrome.alarms.create(RETENTION_ALARM, { periodInMinutes: 60 });
+  // Recreating on every worker start would keep resetting the period.
+  if (typeof chrome.alarms.get === 'function') {
+    chrome.alarms.get(RETENTION_ALARM, (alarm) => { if (!alarm) create(); });
+  } else {
+    create();
+  }
+}
+
+function endActiveSession(reflection = null, callback = null, expectedSessionId = null, epoch = getStorageGeneration()) {
+  const operation = enqueueSessionMutation(() => finalizeActiveSession(reflection, expectedSessionId), epoch);
+  if (callback) operation.then(callback, error => callback(null, error));
   return operation;
 }
 
-async function getInterventionStateForTab(tabId) {
+async function getInterventionStateForTab(tabId, epoch = getStorageGeneration()) {
   if (!Number.isInteger(tabId)) return null;
   const result = await storageGet(['activeSession', INTERVENTION_STATE_KEY, 'trackingEnabled']);
+  assertStorageEpoch(epoch);
   if (result.trackingEnabled === false) return null;
   if (!result.activeSession?.isActive) return null;
   return stateForTab(
@@ -547,15 +588,15 @@ async function handleInterventionTransition(message, sender) {
     ensureMetrics(session);
     const originalUrl = state.originalUrl || null;
     session.metrics.overrideCount = (session.metrics.overrideCount || 0) + 1;
-    session.events = Array.isArray(session.events) ? session.events : [];
-    session.events.push({
+    session.events = sessionEvents(session);
+    session.events.push(minimizeSessionEvent({
       timestamp: Date.now(),
       actionType: 'OVERRIDE',
       url: originalUrl,
       hostname: extractDomain(originalUrl),
       reflection: reflection || null,
       source: 'intervention',
-    });
+    }, session.intent));
 
     const values = { activeSession: session };
     if (message.markRelated || transition === 'mark-related') {
@@ -589,57 +630,51 @@ async function handleInterventionTransition(message, sender) {
   });
 }
 
-function handleSessionCleared(sendResponse) {
-  // Advance the generation before entering the queue so already-created
-  // logging/finalization operations cannot write after this deletion.
-  beginStorageDeletion();
-  chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED' }, () => {
-    void chrome.runtime.lastError;
-  });
+function fencePrivateState() {
   hideInterventionsFromTabs();
-  enqueueStorageMutation(async () => {
-    try {
-      await storageClear();
-      await storageSessionClear();
-      currentSession = null;
-      trackingEnabled = true;
-      customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
-      sessionTabGroupId = null;
-      heuristicPolicy = null;
-      isCurrentlyIdle = false;
-      lastIdleTime = 0;
-      relatedDomainMarks = {};
-      overrideCooldowns.clear();
-      contentEventBuckets.clear();
-      clearDriftCache();
-      clearLlmBackoff();
-      ungroupTabs();
-      chrome.alarms.clear(timeBudgetAlarmName);
-      configPromise = null;
-      endStorageDeletion();
-      await loadConfig();
-      chrome.runtime.sendMessage?.({ type: 'DATA_DELETED' }, () => {
-        void chrome.runtime.lastError;
-      });
-      sendResponse({ status: 'ok' });
-    } catch (error) {
-      endStorageDeletion();
-      sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
-    }
+  currentSession = null;
+  trackingEnabled = false;
+  customDistractionSites = [...DEFAULT_DISTRACTION_SITES];
+  sessionTabGroupId = null;
+  heuristicPolicy = null;
+  isCurrentlyIdle = false;
+  lastIdleTime = 0;
+  relatedDomainMarks = {};
+  overrideCooldowns.clear();
+  contentEventBuckets.clear();
+  clearDriftCache();
+  clearLlmBackoff();
+  lastEvaluatedUrl = null;
+  lastEvaluatedTime = 0;
+  chrome.alarms.clear(timeBudgetAlarmName);
+  configPromise = null;
+}
+
+function handleSessionCleared(sendResponse) {
+  chrome.runtime.sendMessage?.({ type: 'DATA_DELETION_STARTED' }, () => { void chrome.runtime.lastError; });
+  deleteStorageData(fencePrivateState).then(async () => {
+    fencePrivateState();
+    authorityReady = Promise.resolve();
+    await reloadConfig();
+    chrome.runtime.sendMessage?.({ type: 'DATA_DELETED', epoch: getStorageGeneration() }, () => { void chrome.runtime.lastError; });
+    sendResponse({ status: 'ok' });
+  }, error => {
+    sendResponse({ status: 'error', message: error.message || 'Unable to delete IntentLock data.' });
   });
 }
 
 // ── Keyboard shortcut ──────────────────────────────────────────────────
 
 chrome.commands.onCommand.addListener((command) => {
+  const epoch = getStorageGeneration();
   if (command === 'toggle-session') {
     chrome.storage.local.get(['activeSession'], (result) => {
+      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
       const session = result.activeSession;
       if (session && session.isActive) {
-        endActiveSession(null, () => {
-          chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-          openSessionReportTab();
-        });
+        endActiveSession(null, (ended, error) => {
+          if (ended && !error) openSessionReportTab();
+        }, session.id, epoch);
       } else {
         chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') });
       }
@@ -654,9 +689,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
     'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
-    'TEST_INTERVENTION', 'REPORT_VIEWED'
+    'TEST_INTERVENTION', 'REPORT_VIEWED', 'STORAGE_MUTATION', 'PAUSE_SESSION'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
+    return false;
+  }
+
+  const page = isExtensionPage(sender);
+  const contentMessages = ['CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION', 'LOG_ERROR'];
+  if ((sender?.id && sender.id !== chrome.runtime.id) || (!page && !(sender?.tab && contentMessages.includes(message.type)))) {
+    sendResponse({ status: 'error', message: 'This operation requires an extension page.' });
+    return false;
+  }
+  // Capture on receipt, before config reads or other callbacks. Page payloads
+  // carry their original epoch; classic content events are bound on receipt.
+  const epoch = message.epoch === undefined ? getStorageGeneration() : message.epoch;
+  if (['STORAGE_MUTATION', 'SESSION_STARTED', 'END_ACTIVE_SESSION', 'SESSION_CLEARED', 'OVERRIDE_INTERVENTION', 'PAUSE_SESSION'].includes(message.type) && !Number.isSafeInteger(message.epoch)) {
+    sendResponse({ status: 'error', message: 'A mutation epoch is required.' });
     return false;
   }
 
@@ -665,15 +714,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  loadConfig().then(() => {
-    if (message.type === 'SESSION_STARTED') {
-      handleSessionStart(message.session).then(() => {
+  authorityReady.then(() => {
+    assertStorageEpoch(epoch);
+    return loadConfig();
+  }).then(() => {
+    assertStorageEpoch(epoch);
+    if (message.type === 'STORAGE_MUTATION') {
+      applyStorageCommand(message.command, message.payload, epoch).then(
+        value => sendResponse({ status: 'ok', value }),
+        error => sendResponse({ status: 'error', message: error.message }),
+      );
+    } else if (message.type === 'SESSION_STARTED') {
+      handleSessionStart(message.session, epoch).then(() => {
         sendResponse({ status: 'ok' });
       }, (error) => {
         sendResponse({ status: 'error', message: error.message || 'Unable to start the session.' });
       });
     } else if (message.type === 'OVERRIDE_INTERVENTION') {
-      handleOverride(message.sessionData).then(() => {
+      handleOverride(message.sessionData, epoch).then(() => {
         sendResponse({ status: 'ok' });
       }, (error) => {
         sendResponse({ status: 'error', message: error.message || 'Unable to apply the override.' });
@@ -684,14 +742,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ session: currentSession });
       } else {
         chrome.storage.local.get(['activeSession'], (result) => {
+          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) {
+            sendResponse({ status: 'error', session: null, message: 'Data changed while reading the session.' });
+            return;
+          }
           sendResponse({ session: result.activeSession || null });
         });
       }
     } else if (message.type === 'GET_INTERVENTION_STATE') {
       const requestedTabId = Number.isInteger(sender.tab?.id) ? sender.tab.id : message.tabId;
-      getInterventionStateForTab(requestedTabId).then((state) => {
+      getInterventionStateForTab(requestedTabId, epoch).then((state) => {
+        assertStorageEpoch(epoch);
         sendResponse({ ok: true, state });
-      }, (error) => {
+      }).catch((error) => {
         sendResponse({ ok: false, error: error.message || 'Unable to read intervention state.' });
       });
     } else if (message.type === 'CONFIG_UPDATED') {
@@ -713,6 +776,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           'interventionState',
           'overrideCooldowns',
           COMPLETED_TRANSITION_KEY,
+          'sessionTabGroupId',
         ]);
         configPromise = null;
         await loadConfig();
@@ -721,9 +785,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'error', message: 'Unable to clear the completed session state.' });
       });
     } else if (message.type === 'END_ACTIVE_SESSION') {
-      endActiveSession(message.reflection, (endedSession) => {
-        sendResponse({ status: 'ok', session: endedSession });
-      }, message.sessionId || null);
+      endActiveSession(message.reflection, (endedSession, error) => {
+        sendResponse(error ? { status: 'error', message: error.message } : { status: 'ok', session: endedSession });
+      }, message.sessionId || null, epoch);
+    } else if (message.type === 'PAUSE_SESSION') {
+      handleSessionPause(message, epoch).then(session => sendResponse({ status: 'ok', session }), (error) => {
+        sendResponse({ status: 'error', message: error.message || 'Unable to change the session timer.' });
+      });
     } else if (message.type === 'REPORT_VIEWED') {
       handleReportViewed(message.sessionId, sendResponse);
     } else if (message.type === 'LOG_ERROR') {
@@ -761,13 +829,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       });
     }
-  });
+  }).catch(error => sendResponse({ status: 'error', message: error.message }));
   return true; // Keep channel open for async response
 });
 
 // ── Config loading ─────────────────────────────────────────────────────
 
 function loadConfig() {
+  if (isStorageDeletionActive()) return Promise.resolve();
   if (configPromise) return configPromise;
   const generation = getStorageGeneration();
   const pending = new Promise((resolve) => {
@@ -783,34 +852,21 @@ function loadConfig() {
         resolve();
         return;
       }
-      if (Array.isArray(data.sessionHistory)) {
-        void enqueueStorageMutation(async () => {
-          if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
-          const latest = await storageGet(['sessionHistory']);
-          if (!Array.isArray(latest.sessionHistory)) return;
-          return storageSet({
-            sessionHistory: sanitizeSessionHistory(latest.sessionHistory, {
-              retentionMs: SESSION_RETENTION_MS,
-              maxEntries: MAX_SESSION_HISTORY,
-            }),
-          });
-        });
-      }
-      if (data.activeSession && data.activeSession.isActive) {
+      // Startup enforces retention in storage, not only when a page displays it.
+      void enqueueSessionMutation(async () => {
+        if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
+        await applyRetention();
+      });
+      if (isSessionExpired(data.activeSession)) {
+        currentSession = null;
+      } else if (data.activeSession && data.activeSession.isActive) {
         currentSession = data.activeSession;
         ensureMetrics(currentSession);
 
-        // Restore time budget alarm if session has a time budget
-        if (currentSession.timeBudget) {
-          const elapsedMinutes = (Date.now() - currentSession.startTime) / 60000;
-          const remainingMinutes = currentSession.timeBudget - elapsedMinutes;
-          if (remainingMinutes > 0) {
-            chrome.alarms.create(timeBudgetAlarmName, { 
-              when: currentSession.startTime + (currentSession.timeBudget * 60000) 
-            });
-          } else {
-            triggerIntervention("Time budget exceeded.");
-          }
+        // Restore the budget alarm from persisted state. A corrupted budget
+        // is ignored and a paused timer has no alarm.
+        if (scheduleBudgetAlarm(currentSession)) {
+          triggerIntervention("Time budget exceeded.");
         }
       } else {
         currentSession = null;
@@ -825,7 +881,7 @@ function loadConfig() {
         heuristicPolicy = data.heuristicPolicy;
       } else if (data.customDistractionSites) {
         heuristicPolicy = migrateLegacyDistractionSites(data.customDistractionSites);
-        void enqueueStorageMutation(() => {
+        void enqueueSessionMutation(() => {
           if (generation !== getStorageGeneration() || isStorageDeletionActive()) return;
           return storageSet({ heuristicPolicy });
         });
@@ -876,7 +932,6 @@ function reloadConfig() {
   configPromise = null;
   return loadConfig();
 }
-loadConfig();
 
 function hideInterventionsFromTabs() {
   chrome.runtime.sendMessage?.({ type: 'HIDE_INTERVENTION' }, () => {
@@ -914,97 +969,76 @@ chrome.storage.onChanged?.addListener((changes, areaName) => {
   }
 });
 
-function migrateLlmStorage() {
-  if (typeof chrome === 'undefined' || !chrome.storage?.session || !chrome.storage?.local) {
-    return;
-  }
-
-  const generation = getStorageGeneration();
-  const migrationStillCurrent = () => (
-    generation === getStorageGeneration() && !isStorageDeletionActive()
-  );
-
-  chrome.storage.local.get(['llmApiKey', 'openaiApiKey', 'llmProviderConfig'], (localRes) => {
-    if (!migrationStillCurrent()) return;
-    chrome.storage.session.get(['openaiApiKey', 'llmApiKey'], (sessionRes) => {
-      if (!migrationStillCurrent()) return;
-      const existingSessionKey = sessionRes?.llmApiKey || null;
-      const legacyKey = existingSessionKey
-        || sessionRes?.openaiApiKey
-        || localRes?.llmApiKey
-        || localRes?.openaiApiKey;
-      const sessionUpdates = {};
-      const sessionRemovals = [];
-      const localRemovals = [];
-
-      if (legacyKey && !existingSessionKey) {
-        sessionUpdates.llmApiKey = legacyKey;
-      }
-      if (sessionRes?.openaiApiKey) {
-        sessionRemovals.push('openaiApiKey');
-      }
-      if (localRes?.llmApiKey) localRemovals.push('llmApiKey');
-      if (localRes?.openaiApiKey) localRemovals.push('openaiApiKey');
-
-      const applySessionMigration = () => {
-        if (!migrationStillCurrent()) return;
-        if (localRemovals.length > 0) {
-          chrome.storage.local.remove(localRemovals);
-        }
-      };
-
-      if (Object.keys(sessionUpdates).length > 0) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (latestSession) => {
-          if (!migrationStillCurrent()) return;
-          const hasNewerKey = latestSession?.llmApiKey || latestSession?.openaiApiKey;
-          const persistMigration = () => {
-            if (sessionRemovals.length > 0) {
-              chrome.storage.session.remove(sessionRemovals, applySessionMigration);
-            } else {
-              applySessionMigration();
-            }
-          };
-          if (hasNewerKey) {
-            persistMigration();
-            return;
-          }
-          chrome.storage.session.set(sessionUpdates, persistMigration);
-        });
-      } else {
-        applySessionMigration();
-      }
-    });
-  });
-}
-migrateLlmStorage();
-
 // ── Session start ──────────────────────────────────────────────────────
 
-function handleSessionStart(session) {
+function handleSessionStart(session, epoch = getStorageGeneration()) {
+  if (!session || typeof session.intent !== 'string' || !session.intent.trim() || session.intent.length > 4000 ||
+      typeof session.id !== 'string' || session.id.length > 200 || !Number.isFinite(session.startTime) || session.isActive !== true ||
+      (session.timeBudget != null && (!Number.isFinite(session.timeBudget) || session.timeBudget < 1 || session.timeBudget > 480))) {
+    return Promise.reject(new Error('Invalid session fields.'));
+  }
   return enqueueSessionMutation(async () => {
     ensureMetrics(session);
     if (!session.metrics || session.metrics.activeMs == null) {
       session.metrics = createSessionMetrics();
     }
-    currentSession = session;
     clearDriftCache();
     clearLlmBackoff();
+    // A new session must evaluate even a URL checked in the previous session.
+    lastEvaluatedUrl = null;
+    lastEvaluatedTime = 0;
     await storageRemove(['llmBackoffUntil']);
     overrideCooldowns.clear(); // clear cooldowns on new session
-    await storageRemove(['overrideCooldowns']);
+    relatedDomainMarks = {}; // related exceptions belong only to this session
+    await storageRemove(['overrideCooldowns', 'relatedDomainMarks']);
     await storageSet({ activeSession: session });
+    assertStorageCommit();
+    currentSession = session;
 
-    chrome.alarms.clear(timeBudgetAlarmName);
-
-    if (session.timeBudget) {
-      chrome.alarms.create(timeBudgetAlarmName, {
-        when: session.startTime + (session.timeBudget * 60000)
-      });
-    }
+    scheduleBudgetAlarm(session);
 
     await createTabGroup(session.intent);
     return session;
-  });
+  }, epoch);
+}
+
+// Returns true when the running budget is already exhausted. Alarms, not
+// in-memory timers, carry the deadline across service-worker restarts.
+function scheduleBudgetAlarm(session) {
+  chrome.alarms.clear(timeBudgetAlarmName);
+  if (!session?.isActive || isSessionPaused(session)) return false;
+  const endsAt = budgetEndsAt(session);
+  if (endsAt === null) return false;
+  if (endsAt <= Date.now()) return true;
+  chrome.alarms.create(timeBudgetAlarmName, { when: endsAt });
+  return false;
+}
+
+// ── Session pause ──────────────────────────────────────────────────────
+
+function handleSessionPause(message, epoch) {
+  if (typeof message.paused !== 'boolean') return Promise.reject(new Error('Invalid pause request.'));
+  return enqueueSessionMutation(async () => {
+    const { activeSession: session } = await storageGet(['activeSession']);
+    if (!session?.isActive || (message.sessionId && session.id !== message.sessionId)) {
+      throw new Error('There is no active session to pause.');
+    }
+    const now = Date.now();
+    const paused = isSessionPaused(session);
+    if (message.paused === paused) return session; // Repeated clicks are harmless.
+    if (message.paused) {
+      session.pausedAt = now;
+      session.pausedMs = sessionPausedMs(session);
+    } else {
+      session.pausedMs = sessionPausedMs(session) + Math.max(0, now - session.pausedAt);
+      session.pausedAt = null;
+    }
+    await storageSet({ activeSession: session });
+    assertStorageCommit();
+    currentSession = session;
+    if (scheduleBudgetAlarm(session)) triggerIntervention("Time budget exceeded.");
+    return session;
+  }, epoch);
 }
 
 // ── Tab context grouping ───────────────────────────────────────────────
@@ -1050,19 +1084,36 @@ async function addTabToGroup(tabId) {
 
 function ungroupTabs() {
   sessionTabGroupId = null;
-  chrome.storage.local.remove('sessionTabGroupId');
+  // The caller owns the mutation, including cleanup of this storage key.
 }
 
 // ── Time budget alarm ──────────────────────────────────────────────────
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  const epoch = getStorageGeneration();
+  if (alarm.name === RETENTION_ALARM) {
+    authorityReady.then(() => {
+      void enqueueSessionMutation(async () => {
+        await applyRetention();
+        if (!(await storageGet(['activeSession'])).activeSession?.isActive) currentSession = null;
+      }, epoch);
+    }, () => {});
+    return;
+  }
   if (alarm.name === timeBudgetAlarmName) {
     loadConfig().then(() => {
       chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+        if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
-        if (session && session.isActive) {
-          triggerIntervention("Time budget exceeded.");
+        // A paused timer cannot expire; resuming reschedules the alarm.
+        if (session && session.isActive && !isSessionPaused(session)) {
+          const endsAt = budgetEndsAt(session);
+          if (endsAt !== null && endsAt <= Date.now() + 1000) {
+            triggerIntervention("Time budget exceeded.");
+          } else {
+            scheduleBudgetAlarm(session);
+          }
         }
       });
     });
@@ -1072,9 +1123,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // ── Tab monitoring ─────────────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const epoch = getStorageGeneration();
   if (changeInfo.status === 'complete' && isTrackableUrl(tab.url)) {
     loadConfig().then(() => {
       chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+        if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
@@ -1088,12 +1141,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
+  const epoch = getStorageGeneration();
   loadConfig().then(() => {
     chrome.storage.local.get(['trackingEnabled', 'activeSession', 'isCurrentlyIdle', 'lastIdleTime'], (result) => {
+      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
       if (result.trackingEnabled === false) return;
       const session = result.activeSession;
       if (session && session.isActive) {
         chrome.tabs.get(activeInfo.tabId, (tab) => {
+          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
           if (chrome.runtime.lastError) return;
           if (tab && isTrackableUrl(tab.url)) {
             logEvent('TAB_SWITCH', tab.url);
@@ -1101,9 +1157,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
             const isCurrentlyIdleVal = result.isCurrentlyIdle || false;
             const lastIdleTimeVal = result.lastIdleTime || 0;
             if (!isCurrentlyIdleVal && lastIdleTimeVal > 0 && (Date.now() - lastIdleTimeVal < 10000)) {
-              chrome.storage.local.set({ lastIdleTime: 0 }, () => {
+              enqueueSessionMutation(() => storageSet({ lastIdleTime: 0 }), epoch).then(() => {
                 triggerIntervention("You switched context after being idle.", activeInfo.tabId);
-              });
+              }).catch(() => {});
               return;
             }
 
@@ -1139,14 +1195,16 @@ function logEvent(actionType, url, extras = {}) {
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
+    // Paused time is not dwell: drop dwell reports while the timer is paused.
+    if (actionType === 'PAGE_DWELL' && isSessionPaused(session)) return;
 
-    const event = {
+    const event = minimizeSessionEvent({
       timestamp: Date.now(),
       url,
       actionType,
       ...extras,
-    };
-    session.events = Array.isArray(session.events) ? session.events : [];
+    }, session.intent);
+    session.events = sessionEvents(session);
     session.events.push(event);
 
     if (session.events.length > 50) {
@@ -1182,8 +1240,9 @@ function handleContentEvent(payload, tabId) {
   bucket.count += 1;
   contentEventBuckets.set(tabId, bucket);
 
+  // Page titles can carry private text (mail subjects, document names) and no
+  // decision uses them, so they are never persisted.
   const extras = {};
-  if (payload.pageTitle) extras.pageTitle = payload.pageTitle;
   if (typeof payload.dwellMs === 'number') extras.dwellMs = payload.dwellMs;
   if (typeof payload.dwellDeltaMs === 'number') extras.dwellDeltaMs = payload.dwellDeltaMs;
   if (payload.previousUrl) extras.previousUrl = payload.previousUrl;
@@ -1199,7 +1258,7 @@ function handleContentEvent(payload, tabId) {
       const result = await storageGet(['activeSession', 'trackingEnabled']);
       if (result.trackingEnabled === false) return;
       const session = result.activeSession;
-      if (!session?.isActive) return;
+      if (!session?.isActive || isSessionPaused(session)) return;
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
         ? (payload.previousUrl || payload.url)
@@ -1221,10 +1280,14 @@ function handleContentEvent(payload, tabId) {
     });
   }
 
-  logEvent(payload.actionType, payload.url, extras);
+  const logged = logEvent(payload.actionType, payload.url, extras);
 
   if (payload.actionType === 'SPA_NAVIGATION') {
     evaluateDrift(payload.navigationUrl || payload.url, tabId);
+  } else if (payload.actionType === 'PAGE_DWELL' && payload.dwellDeltaMs > 0) {
+    // Dwell limits apply while the user stays on the page, once the report is
+    // recorded. Local rules only: optional AI is not re-asked every 30 s.
+    logged.then(() => evaluateDrift(payload.url, tabId, { dwellCheck: true }), () => {});
   }
 }
 
@@ -1234,18 +1297,29 @@ let lastEvaluatedUrl = null;
 let lastEvaluatedTime = 0;
 const DRIFT_DEBOUNCE_MS = 5000;
 
-function evaluateDrift(url, tabId) {
+function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
+  const epoch = getStorageGeneration();
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
+    if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
+    // A paused timer fires no dwell-based lock.
+    if (dwellCheck && isSessionPaused(session)) return;
 
     const now = Date.now();
-    if (url === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
-      return;
+    // Dwell checks are paced by the tracker (one per 30 s report) and never
+    // reach the provider; the debounce guards navigation checks.
+    if (!dwellCheck) {
+      // Debounce per tab: the same URL opened in another tab or window is a
+      // separate page and must get its own check.
+      const debounceKey = `${tabId ?? ''}|${url}`;
+      if (debounceKey === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
+        return;
+      }
+      lastEvaluatedUrl = debounceKey;
+      lastEvaluatedTime = now;
     }
-    lastEvaluatedUrl = url;
-    lastEvaluatedTime = now;
 
     // Check per-domain override cooldown
     const evaluatedDomain = extractDomain(url);
@@ -1269,7 +1343,7 @@ function evaluateDrift(url, tabId) {
         expiredDomains.forEach(domain => overrideCooldowns.delete(domain));
       }
       if (mapChanged) {
-        chrome.storage.local.set({ overrideCooldowns: Array.from(overrideCooldowns.entries()) });
+        void enqueueSessionMutation(() => storageSet({ overrideCooldowns: Array.from(overrideCooldowns.entries()) }), epoch);
       }
       if (hasCooldown) {
         return; // Still in cooldown — skip intervention
@@ -1287,7 +1361,7 @@ function evaluateDrift(url, tabId) {
     const policyDrift = evaluatePolicyDrift({
       intent: session.intent,
       url,
-      events: session.events,
+      events: sessionEvents(session),
       policy: activePolicy,
       now: Date.now(),
       relatedHostnames: relatedHostnamesList(),
@@ -1297,10 +1371,15 @@ function evaluateDrift(url, tabId) {
       triggerIntervention(policyDrift.reasonLabel || 'Your recent browsing no longer matches your declared intent.', tabId);
       return;
     }
+    // Optional AI is a second opinion; it never overrules an explicit allow
+    // or a session-related correction.
+    if (policyDrift.explicit || dwellCheck) return;
 
-    checkDriftLLM(session.intent, url, session.events).then(res => {
+    checkDriftLLM(session.intent, url, sessionEvents(session)).then(res => {
+      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
       if (!res.isAligned && res.confidence >= DRIFT_CONFIDENCE_THRESHOLD) {
         chrome.storage.local.get(['activeSession', 'overrideCooldowns'], (storageResult) => {
+          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
           const current = storageResult.activeSession;
           if (current && current.isActive && current.id === session.id) {
             // Check if domain is currently on cooldown
@@ -1325,6 +1404,7 @@ function evaluateDrift(url, tabId) {
             // Verify the tab is still on the evaluated URL
             if (tabId) {
               chrome.tabs.get(tabId, (tab) => {
+                if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
                 if (chrome.runtime.lastError || !tab) return;
                 if (tab.url === url) {
                   triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
@@ -1349,6 +1429,7 @@ function shouldRetryInterventionDisplay(state) {
 }
 
 async function presentIntervention(state, session, states, key) {
+  assertStorageCommit();
   const targetTabId = Number.isInteger(state.originalTabId) ? state.originalTabId : null;
   if (targetTabId) {
     const shown = await sendTabMessage(targetTabId, {
@@ -1359,6 +1440,7 @@ async function presentIntervention(state, session, states, key) {
       nonce: state.nonce,
       state,
     });
+    assertStorageCommit();
     if (!shown.error && shown.response?.shown) {
       state.mode = 'overlay';
       state.displayed = true;
@@ -1457,14 +1539,19 @@ function triggerIntervention(reason, tabId = null) {
   });
 }
 
-function handleOverride(sessionData) {
+function handleOverride(sessionData, epoch = getStorageGeneration()) {
   if (!sessionData) return Promise.resolve();
+  if (typeof sessionData === 'object') {
+    sessionData.events = sessionEvents(sessionData)
+      .map(event => minimizeSessionEvent(event, sessionData.intent)).filter(Boolean);
+  }
   return enqueueSessionMutation(async () => {
+    await storageSet({ activeSession: sessionData });
+    assertStorageCommit();
     currentSession = sessionData;
-    await storageSet({ activeSession: currentSession });
 
     // Set per-domain override cooldown from the most recent override event
-    const events = Array.isArray(sessionData?.events) ? sessionData.events : [];
+    const events = sessionEvents(sessionData);
     const lastOverride = events
       .filter(e => e.actionType === 'OVERRIDE' && e.url)
       .at(-1);
@@ -1475,7 +1562,7 @@ function handleOverride(sessionData) {
         await storageSet({ overrideCooldowns: Array.from(overrideCooldowns.entries()) });
       }
     }
-  });
+  }, epoch);
 }
 
 export function getInMemoryState() {
@@ -1492,3 +1579,12 @@ export function getInMemoryState() {
 }
 
 export { reloadConfig, loadConfig, createHistoryEntry, triggerIntervention, isTrackableUrl };
+
+// Revival must finish an interrupted deletion before configuration or migration
+// can collect, restore an alarm, or write anything personal.
+registerErrorLogAuthority(applyStorageCommand);
+let authorityReady = initializeStorageAuthority(fencePrivateState);
+authorityReady.then(async () => {
+  await migrateKeys(getStorageGeneration());
+  await loadConfig();
+}).catch(() => { fencePrivateState(); });

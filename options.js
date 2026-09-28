@@ -10,9 +10,19 @@ import {
 import { logError, ERROR_TYPES } from './error-log.js';
 import { SITE_CATEGORIES, buildDefaultPolicy, migrateLegacyDistractionSites } from './heuristic-policy.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import { initializeStorageClient, captureStorageEpoch, mutateStorage, guardStorageContinuation } from './storage-client.js';
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  let clientReady = false;
+  try { await initializeStorageClient(); clientReady = true; }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    // Retry deletion remains available even when the durable barrier blocks
+    // initialization. No stored settings are loaded in this state.
+  }
   const providerSelect = document.getElementById('provider-select');
   const providerDescription = document.getElementById('provider-description');
   const customProviderFields = document.getElementById('custom-provider-fields');
@@ -45,18 +55,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const testInterventionStatus = document.getElementById('test-intervention-status');
   let deleteArmed = false;
   let deleteArmTimer = null;
-  let deletionInProgress = false;
+  let deletionInProgress = !clientReady;
+  let privacyRevision = 0;
   let hasSavedApiKey = false;
   let providerAdvancedOpen = false;
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'DATA_DELETION_STARTED') {
       deletionInProgress = true;
-      beginStorageDeletion();
+      privacyRevision++;
     }
     if (message?.type === 'DATA_DELETED') {
       deletionInProgress = false;
-      endStorageDeletion();
+      privacyRevision++;
+      resetDeletedSettings();
     }
   });
 
@@ -144,16 +156,17 @@ document.addEventListener('DOMContentLoaded', () => {
     modelInput.value = provider.defaultModel;
     baseUrlInput.value = provider.defaultBaseUrl;
     providerAdvancedOpen = false;
-    hasSavedApiKey = false;
-    apiKeyInput.value = '';
     clearFieldError(apiKeyInput, 'api-key-hint');
 
     const finishProviderSwitch = () => {
+      hasSavedApiKey = false;
+      apiKeyInput.value = '';
       updateProviderUI(providerSelect.value);
     };
 
     if (chrome.storage.session) {
-      chrome.storage.session.remove(['llmApiKey'], finishProviderSwitch);
+      const epoch = captureStorageEpoch();
+      mutateStorage('clearKey', {}, epoch).then(guardStorageContinuation(finishProviderSwitch), error => showStatus(providerStatus, error.message));
     } else {
       finishProviderSwitch();
     }
@@ -238,32 +251,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  chrome.storage.local.get([
-    'llmProviderConfig', 'llmApiKey', 'openaiApiKey', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
+  const settingsRevision = privacyRevision;
+  if (clientReady) chrome.storage.local.get([
+    'llmProviderConfig', 'trackingEnabled', 'customDistractionSites', 'theme', 'heuristicPolicy'
   ], (localResult) => {
-    const localApiKey = localResult.llmApiKey || localResult.openaiApiKey || null;
+    if (deletionInProgress || settingsRevision !== privacyRevision) return;
     const processSettings = (sessionApiKey) => {
-      const migratedKey = sessionApiKey || localApiKey;
-
-      if (!sessionApiKey && localApiKey && chrome.storage.session) {
-        chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (latestSession) => {
-          if (deletionInProgress) return;
-          const persistMigration = () => {
-            if (deletionInProgress) return;
-            chrome.storage.local.remove(['llmApiKey', 'openaiApiKey'], () => {
-              if (deletionInProgress) return;
-            showStatus(providerStatus, 'Legacy API key migrated to secure session storage.');
-            });
-          };
-          if (latestSession?.llmApiKey || latestSession?.openaiApiKey) {
-            persistMigration();
-            return;
-          }
-          chrome.storage.session.set({ llmApiKey: localApiKey }, persistMigration);
-        });
-      }
-
-      hasSavedApiKey = Boolean(migratedKey);
+      if (deletionInProgress || settingsRevision !== privacyRevision) return;
+      // Only report presence of the canonical session key; never display it.
+      hasSavedApiKey = Boolean(sessionApiKey);
       applyStoredConfig(localResult.llmProviderConfig || getDefaultProviderConfig());
 
       if (localResult.trackingEnabled !== undefined) {
@@ -293,11 +289,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (chrome.storage.session) {
-      chrome.storage.session.get(['llmApiKey', 'openaiApiKey'], (sessionResult) => {
-        processSettings(sessionResult.llmApiKey || sessionResult.openaiApiKey);
+      chrome.storage.session.get(['llmApiKey'], (sessionResult) => {
+        processSettings(sessionResult?.llmApiKey);
       });
     } else {
-      processSettings(localApiKey);
+      processSettings(null);
     }
   });
 
@@ -361,6 +357,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   saveProviderBtn.addEventListener('click', () => {
+    const epoch = captureStorageEpoch();
+    epoch.catch(() => {});
     const config = getFormConfig();
     const configError = validateProviderConfig(config);
     if (configError) {
@@ -403,57 +401,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (deletionInProgress) return;
-    chrome.storage.local.set({ llmProviderConfig: config }, () => {
-      if (deletionInProgress) return;
-      if (chrome.runtime.lastError) {
-        const msg = 'Could not save provider settings.';
-        showStatus(providerStatus, `${msg} See Diagnostics below.`);
-        logError({
-          type: ERROR_TYPES.STORAGE,
-          message: msg,
-          details: { error: chrome.runtime.lastError.message },
-          source: 'options',
-        });
-        return;
-      }
-
-      const finish = () => {
-        hasSavedApiKey = hasSavedApiKey || Boolean(key);
-        apiKeyInput.value = '';
-        updateProviderUI(config.providerId);
-        showStatus(providerStatus, `${(getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label} settings saved.`);
-        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-      };
-
-      if (key) {
-        const storageArea = chrome.storage.session || chrome.storage.local;
-        storageArea.set({ llmApiKey: key }, () => {
-          if (deletionInProgress) return;
-          if (chrome.runtime.lastError) {
-            const msg = 'Could not save API key to session storage.';
-            setFieldError(apiKeyInput, `${msg} See Diagnostics below.`, 'api-key-hint');
-            logError({
-              type: ERROR_TYPES.STORAGE,
-              message: msg,
-              details: { error: chrome.runtime.lastError.message, providerId: config.providerId },
-              source: 'options',
-            });
-            return;
-          }
-          finish();
-        });
-      } else {
-        finish();
-      }
-    });
+    saveProviderBtn.disabled = true;
+    mutateStorage('saveProvider', { config, ...(key ? { key } : {}) }, epoch).then(guardStorageContinuation((result) => {
+      hasSavedApiKey = !result?.keyCleared && (hasSavedApiKey || Boolean(key));
+      apiKeyInput.value = '';
+      updateProviderUI(config.providerId);
+      const label = (getProvider(config.providerId) || getProvider(DEFAULT_PROVIDER_ID)).label;
+      showStatus(providerStatus, result?.keyCleared && providerRequiresApiKey(config.providerId, config)
+        ? `${label} settings saved. The endpoint changed, so the saved key was removed — enter the key again.`
+        : `${label} settings saved.`);
+      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+    }), error => {
+      showStatus(providerStatus, error.message);
+    }).finally(() => { saveProviderBtn.disabled = false; });
   });
 
   const HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/;
+  // Accept pasted URLs and www. forms, but never drop a line silently: an
+  // unparseable line blocks the save so the user knows it was not applied.
   function parseCustomDomains(text) {
-    return text.split('\n').map(s => s.trim().toLowerCase()).filter(s => s && HOSTNAME_RE.test(s));
+    const domains = [];
+    const invalid = [];
+    for (const line of text.split('\n')) {
+      const raw = line.trim().toLowerCase();
+      if (!raw) continue;
+      const host = raw
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+        .replace(/[/?#].*$/, '')
+        .replace(/^www\./, '')
+        .replace(/\.$/, '');
+      if (HOSTNAME_RE.test(host)) {
+        if (!domains.includes(host)) domains.push(host);
+      } else {
+        invalid.push(line.trim());
+      }
+    }
+    return { domains, invalid };
+  }
+
+  function domainListOrError(id) {
+    const field = document.getElementById(id);
+    const parsed = parseCustomDomains(field?.value || '');
+    if (!field) return parsed.domains;
+    clearFieldError(field);
+    if (parsed.invalid.length) {
+      const shown = parsed.invalid.slice(0, 3).join(', ');
+      setFieldError(field, `Not a domain: ${shown}${parsed.invalid.length > 3 ? ', …' : ''}. Use one domain per line, like example.com.`);
+      return null;
+    }
+    if (parsed.domains.length > 200) {
+      setFieldError(field, 'Use at most 200 domains per list.');
+      return null;
+    }
+    return parsed.domains;
   }
 
   saveSitesBtn.addEventListener('click', () => {
+    const epoch = captureStorageEpoch();
+    epoch.catch(() => {});
     if (deletionInProgress) return;
     const categoryPolicies = {};
     document.querySelectorAll('#category-grid input[type="radio"]:checked').forEach(radio => {
@@ -461,25 +466,19 @@ document.addEventListener('DOMContentLoaded', () => {
       categoryPolicies[catId] = radio.value;
     });
 
-    const customBlockDomains = parseCustomDomains(
-      (document.getElementById('custom-block-domains')?.value || '')
-    );
-    const customAllowDomains = parseCustomDomains(
-      (document.getElementById('custom-allow-domains')?.value || '')
-    );
+    const customBlockDomains = domainListOrError('custom-block-domains');
+    const customAllowDomains = domainListOrError('custom-allow-domains');
+    if (!customBlockDomains || !customAllowDomains) {
+      showStatus(sitesStatus, 'Site policies not saved. Fix the highlighted domain list.');
+      return;
+    }
 
-    chrome.storage.local.get(['heuristicPolicy'], (result) => {
-      if (deletionInProgress) return;
-      const current = (result.heuristicPolicy?.version === 1)
-        ? result.heuristicPolicy
-        : buildDefaultPolicy('deep_work', 'balanced');
-      const updated = { ...current, categoryPolicies, customBlockDomains, customAllowDomains, setupCompleted: true };
-      chrome.storage.local.set({ heuristicPolicy: updated }, () => {
-        if (deletionInProgress) return;
-        showStatus(sitesStatus, 'Site policies saved.');
-        chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-      });
-    });
+    saveSitesBtn.disabled = true;
+    mutateStorage('saveSites', { categoryPolicies, customBlockDomains, customAllowDomains }, epoch).then(guardStorageContinuation(() => {
+      showStatus(sitesStatus, 'Site policies saved.');
+      chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
+    }), error => showStatus(sitesStatus, error.message))
+      .finally(() => { saveSitesBtn.disabled = false; });
   });
 
   trackingToggle.addEventListener('change', (e) => {
@@ -488,20 +487,21 @@ document.addEventListener('DOMContentLoaded', () => {
       trackingToggle.checked = !enabled;
       return;
     }
-    chrome.storage.local.set({ trackingEnabled: enabled }, () => {
-      if (deletionInProgress) return;
-      if (chrome.runtime.lastError) {
-        trackingToggle.checked = !enabled;
-        showStatus(dataStatus, `Could not change tracking: ${chrome.runtime.lastError.message}`);
-        return;
-      }
+    trackingToggle.disabled = true;
+    mutateStorage('tracking', { enabled }).then(guardStorageContinuation(() => {
       showStatus(dataStatus, enabled ? 'Tracking enabled.' : 'Tracking disabled.');
       chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-    });
+    }), error => {
+      trackingToggle.checked = !enabled;
+      showStatus(dataStatus, error.message);
+    }).finally(() => { trackingToggle.disabled = false; });
   });
 
   exportBtn.addEventListener('click', () => {
+    const revision = privacyRevision;
+    if (deletionInProgress) return;
     chrome.storage.local.get(['sessionHistory'], (result) => {
+      if (deletionInProgress || revision !== privacyRevision) return;
       const data = {
         exportedAt: new Date().toISOString(),
         sessions: sanitizeSessionHistory(result.sessionHistory || [])
@@ -518,6 +518,29 @@ document.addEventListener('DOMContentLoaded', () => {
       showStatus(dataStatus, 'History exported.');
     });
   });
+
+  function resetDeletedSettings() {
+    deletionInProgress = false;
+    hasSavedApiKey = false;
+    applyStoredConfig(getDefaultProviderConfig());
+    const freshPolicy = buildDefaultPolicy('deep_work', 'balanced');
+    buildCategoryGrid(freshPolicy);
+    const blockInput = document.getElementById('custom-block-domains');
+    const allowInput = document.getElementById('custom-allow-domains');
+    if (blockInput) blockInput.value = '';
+    if (allowInput) allowInput.value = '';
+    apiKeyInput.value = '';
+    trackingToggle.checked = true;
+    showStatus(dataStatus, 'All data deleted.');
+    document.querySelectorAll('.theme-btn').forEach((btn) => {
+      const on = btn.dataset.theme === 'auto';
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    applyTheme('auto');
+    deleteDataBtn.disabled = false;
+    deleteDataBtn.textContent = 'Delete all data';
+  }
 
   deleteDataBtn.addEventListener('click', () => {
     if (!deleteArmed) {
@@ -538,42 +561,17 @@ document.addEventListener('DOMContentLoaded', () => {
     deleteDataBtn.textContent = 'Deleting...';
     deletionInProgress = true;
 
-    const finishDelete = () => {
-        deletionInProgress = false;
-        endStorageDeletion();
-        hasSavedApiKey = false;
-        applyStoredConfig(getDefaultProviderConfig());
-        const freshPolicy = buildDefaultPolicy('deep_work', 'balanced');
-        buildCategoryGrid(freshPolicy);
-        const blockInput = document.getElementById('custom-block-domains');
-        const allowInput = document.getElementById('custom-allow-domains');
-        if (blockInput) blockInput.value = '';
-        if (allowInput) allowInput.value = '';
-        apiKeyInput.value = '';
-        trackingToggle.checked = true;
-        chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' });
-        showStatus(dataStatus, 'All data deleted.');
-        document.querySelectorAll('.theme-btn').forEach((btn) => {
-          const on = btn.dataset.theme === 'auto';
-          btn.classList.toggle('active', on);
-          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
-        applyTheme('auto');
-        deleteDataBtn.disabled = false;
-        deleteDataBtn.textContent = 'Delete all data';
-    };
-
     // The service worker owns deletion so queued logging/session writes are
     // serialized behind the deletion barrier and cannot resurrect data.
     chrome.runtime.sendMessage({ type: 'DELETE_ALL_DATA' }, (response) => {
       if (chrome.runtime.lastError || response?.status !== 'ok') {
-        deletionInProgress = false;
+        deletionInProgress = true;
         deleteDataBtn.disabled = false;
         deleteDataBtn.textContent = 'Delete all data';
         showStatus(dataStatus, response?.message || 'Could not delete all data.');
         return;
       }
-      finishDelete();
+      resetDeletedSettings();
     });
   });
 
@@ -625,17 +623,17 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
       if (deletionInProgress) return;
       const theme = btn.dataset.theme;
-      document.querySelectorAll('.theme-btn').forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      });
-      chrome.storage.local.set({ theme }, () => {
+      mutateStorage('theme', { theme }).then(guardStorageContinuation(() => {
+        document.querySelectorAll('.theme-btn').forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
         if (deletionInProgress) return;
         applyTheme(theme);
         showStatus(themeStatus, 'Theme updated.');
         chrome.runtime.sendMessage({ type: 'CONFIG_UPDATED' });
-      });
+      }), error => showStatus(themeStatus, error.message));
     });
   });
 });

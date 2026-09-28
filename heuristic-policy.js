@@ -480,10 +480,15 @@ for (const cat of SITE_CATEGORIES) {
   }
 }
 
+// Mobile hosts follow their base site (m.youtube.com is youtube.com). Other
+// subdomains are not inherited: docs.aws.amazon.com is not shopping.
+const MOBILE_HOST_PREFIX = /^(?:m|mobile)\./;
+
 export function getSiteCategory(hostname) {
   if (!hostname) return null;
   const normalized = String(hostname).replace(/^www\./, '').toLowerCase();
-  const categoryId = DOMAIN_TO_CATEGORY.get(normalized);
+  const categoryId = DOMAIN_TO_CATEGORY.get(normalized)
+    || DOMAIN_TO_CATEGORY.get(normalized.replace(MOBILE_HOST_PREFIX, ''));
   if (!categoryId) return null;
   const cat = SITE_CATEGORIES.find(c => c.id === categoryId);
   return cat ? { categoryId, label: cat.label } : null;
@@ -589,17 +594,35 @@ function normalizeHostname(h) {
   return String(h || '').replace(/^www\./, '').toLowerCase();
 }
 
+// Custom rules cover a domain and its subdomains at label boundaries
+// (reddit.com covers old.reddit.com, never reddit.com.evil.test). The most
+// specific rule wins; an allow wins a tie with a block of the same scope.
+function customRuleDecision(hostname, policy) {
+  const host = normalizeHostname(hostname);
+  if (!host) return null;
+  let best = null;
+  const consider = (list, decision) => {
+    for (const raw of Array.isArray(list) ? list : []) {
+      const domain = normalizeHostname(raw);
+      if (!domain || (host !== domain && !host.endsWith(`.${domain}`))) continue;
+      if (!best || domain.length > best.length || (domain.length === best.length && decision === 'allow')) {
+        best = { length: domain.length, decision };
+      }
+    }
+  };
+  consider(policy?.customBlockDomains, 'block');
+  consider(policy?.customAllowDomains, 'allow');
+  return best?.decision || null;
+}
+
 export function resolveDomainPolicy(hostname, policy) {
   try {
     if (!policy || typeof policy !== 'object') return 'neutral';
     const normalized = normalizeHostname(hostname);
     if (!normalized) return 'neutral';
 
-    const allowList = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains : [];
-    const blockList = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains : [];
-
-    if (allowList.some(d => normalizeHostname(d) === normalized)) return 'allow';
-    if (blockList.some(d => normalizeHostname(d) === normalized)) return 'block';
+    const custom = customRuleDecision(normalized, policy);
+    if (custom) return custom;
 
     const lookup = getSiteCategory(normalized);
     if (!lookup) return 'neutral';
@@ -653,6 +676,38 @@ export function intentTerms(intent) {
   )];
 }
 
+function originOf(url) {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a full URL (host, path, query) mentions an intent term. */
+export function urlMatchesIntent(url, intent) {
+  return isKeywordAligned(url, intentTerms(intent));
+}
+
+/**
+ * Stored session events keep only origins. The keyword verdict that needed the
+ * full path is computed once, before the path is dropped, as `intentMatch`.
+ */
+export function minimizeSessionEvent(event, intent) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+  const copy = { ...event };
+  delete copy.pageTitle;
+  if (typeof copy.url === 'string') {
+    if (typeof copy.intentMatch !== 'boolean') copy.intentMatch = urlMatchesIntent(copy.url, intent);
+    copy.url = originOf(copy.url);
+  }
+  for (const key of ['previousUrl', 'navigationUrl']) {
+    if (typeof copy[key] === 'string') copy[key] = originOf(copy[key]);
+  }
+  return copy;
+}
+
 function isKeywordAligned(url, terms) {
   const parsed = parseUrl(url);
   if (!parsed || terms.length === 0) return false;
@@ -662,9 +717,12 @@ function isKeywordAligned(url, terms) {
 // Category-aware alignment: some intent categories have a natural set of site
 // categories that are aligned even without keyword overlap (e.g. job_search + job_boards)
 const CATEGORY_ALIGNMENT = {
+  deep_work:           ['productivity'],
   job_search:          ['job_boards', 'professional_network'],
   coding:              ['code_forge', 'documentation', 'ai_tools'],
-  research:            ['documentation', 'news', 'forums'],
+  // Forums are not research by default: reddit or Hacker News must earn
+  // alignment through intent keywords or an explicit rule.
+  research:            ['documentation', 'news'],
   learning:            ['documentation', 'code_forge', 'ai_tools'],
   admin:               ['email', 'messaging', 'productivity'],
   communication:       ['messaging', 'email'],
@@ -674,12 +732,40 @@ const CATEGORY_ALIGNMENT = {
   entertainment_allowed: ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
 };
 
+// Technical Q&A sites are catalogued as forums, but for coding and learning
+// they are working references. This is deliberately narrow: other forums
+// (reddit, Hacker News) stay subject to the forum policy.
+const TECHNICAL_QA_HOSTS = ['stackoverflow.com', 'stackexchange.com', 'superuser.com',
+  'serverfault.com', 'askubuntu.com', 'mathoverflow.net'];
+const TECHNICAL_QA_INTENTS = new Set(['coding', 'learning']);
+
+function isTechnicalQaHost(hostname) {
+  const host = normalizeHostname(hostname);
+  return TECHNICAL_QA_HOSTS.some(domain => host === domain || host.endsWith(`.${domain}`));
+}
+
 function isCategoryAligned(hostname, intentCategoryId) {
   if (!intentCategoryId || !hostname) return false;
+  if (TECHNICAL_QA_INTENTS.has(intentCategoryId) && isTechnicalQaHost(hostname)) return true;
   const siteCat = getSiteCategory(hostname);
   if (!siteCat) return false;
   const aligned = CATEGORY_ALIGNMENT[intentCategoryId] || [];
   return aligned.includes(siteCat.categoryId);
+}
+
+// Related corrections cover the marked host and its subdomains, never a
+// parent or sibling domain.
+function matchesRelatedHostname(hostname, relatedHostnames) {
+  const host = normalizeHostname(hostname);
+  if (!host || !Array.isArray(relatedHostnames)) return false;
+  return relatedHostnames.some((raw) => {
+    const related = normalizeHostname(raw);
+    return Boolean(related) && (host === related || host.endsWith(`.${related}`));
+  });
+}
+
+function isCustomAllowed(hostname, policy) {
+  return customRuleDecision(hostname, policy) === 'allow';
 }
 
 /**
@@ -692,19 +778,13 @@ export function isUrlAligned(intent, url, policy, relatedHostnames = []) {
   const safePolicy = (policy && typeof policy === 'object' && policy.version === 1)
     ? policy
     : buildDefaultPolicy('deep_work', 'balanced');
-  const terms = intentTerms(intent);
-  const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
-  if (keywordAligned || categoryAligned) return true;
-
-  const related = Array.isArray(relatedHostnames) ? relatedHostnames : [];
+  // A user correction is explicit authority, unlike inferred category/keyword matches.
   const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
-  for (const raw of related) {
-    const r = String(raw || '').replace(/^www\./, '').toLowerCase();
-    if (!r) continue;
-    if (host === r || host.endsWith(`.${r}`)) return true;
-  }
-  return false;
+  if (matchesRelatedHostname(host, relatedHostnames)) return true;
+  if (customRuleDecision(host, safePolicy) === 'block') return false;
+
+  return isKeywordAligned(url, intentTerms(intent))
+    || isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
 }
 
 const REASON_LABELS = {
@@ -715,6 +795,22 @@ const REASON_LABELS = {
   warn_category_dwell:       "You've been on a watched site past your time limit.",
   low_confidence:            'Browsing pattern is drifting from your declared intent.',
 };
+
+// page-tracker reports cumulative dwellMs plus the dwellDeltaMs since its last
+// report. Sum deltas so each active second counts once; events without a delta
+// (older sessions) contribute only their largest cumulative value.
+// Events store origins, so dwell is counted per site (origin), not per path.
+function recentDwellMs(recentEvents, url) {
+  const origin = originOf(url);
+  let deltaTotal = 0;
+  let legacyMax = 0;
+  for (const e of recentEvents) {
+    if (e.actionType !== 'PAGE_DWELL' || !origin || originOf(e.url) !== origin) continue;
+    if (Number.isFinite(e.dwellDeltaMs)) deltaTotal += Math.max(0, e.dwellDeltaMs);
+    else if (Number.isFinite(e.dwellMs)) legacyMax = Math.max(legacyMax, e.dwellMs);
+  }
+  return deltaTotal + legacyMax;
+}
 
 export function evaluatePolicyDrift({
   intent,
@@ -737,13 +833,19 @@ export function evaluatePolicyDrift({
   const signals = [];
 
   const domainDecision = resolveDomainPolicy(parsed.hostname, safePolicy);
-  const keywordAligned = isKeywordAligned(url, terms);
-  const categoryAligned = isCategoryAligned(parsed.hostname, safePolicy.intentCategoryId);
-  const relatedAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames)
-    && !keywordAligned && !categoryAligned;
-  const isAligned = keywordAligned || categoryAligned || relatedAligned;
+  const isAligned = isUrlAligned(intent, url, safePolicy, relatedHostnames);
 
-  // Immediate block: domain is in a blocked category and not aligned with intent
+  // Explicit user rules are authority: a session-related correction or a
+  // custom allow suppresses drift enforcement (not the separate time budget),
+  // and neither dwell, inferred scoring nor optional AI may overrule them.
+  if (matchesRelatedHostname(parsed.hostname, relatedHostnames)) {
+    return { shouldIntervene: false, score: 0, reason: 'related_correction', reasonLabel: '', signals, explicit: true };
+  }
+  if (domainDecision === 'allow' && isCustomAllowed(parsed.hostname, safePolicy)) {
+    return { shouldIntervene: false, score: 0, reason: 'explicit_allow', reasonLabel: '', signals, explicit: true };
+  }
+
+  // Explicit custom blocks beat automatic alignment; user-related corrections still win.
   if (domainDecision === 'block' && !isAligned) {
     const siteCat = getSiteCategory(parsed.hostname);
     signals.push(siteCat ? `blocked_category:${siteCat.categoryId}` : 'blocked_category');
@@ -769,20 +871,23 @@ export function evaluatePolicyDrift({
     return { shouldIntervene: false, score: 0, reason: 'empty_terms', reasonLabel: '', signals };
   }
 
-  const recentEvents = events.filter(e => now - e.timestamp <= 2 * 60 * 1000);
+  // Malformed, future-dated or stale evidence never counts toward drift.
+  const recentEvents = (Array.isArray(events) ? events : []).filter(e => (
+    e && typeof e === 'object' && Number.isFinite(e.timestamp) &&
+    e.timestamp <= now && now - e.timestamp <= 2 * 60 * 1000
+  ));
   const unrelated = recentEvents.filter(e => {
     if (!e.url) return false;
     const ep = parseUrl(e.url);
-    return ep && !isKeywordAligned(e.url, terms) && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
+    const keywordMatch = typeof e.intentMatch === 'boolean' ? e.intentMatch : isKeywordAligned(e.url, terms);
+    return ep && !keywordMatch && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
   });
   const tabSwitches = recentEvents.filter(e => e.actionType === 'TAB_SWITCH').length;
   const sameDomainLoads = recentEvents.filter(e => {
     const ep = parseUrl(e.url);
     return ep && ep.hostname === parsed.hostname;
   }).length;
-  const dwellForUrl = recentEvents
-    .filter(e => e.actionType === 'PAGE_DWELL' && e.url === url)
-    .reduce((t, e) => t + (e.dwellMs || 0), 0);
+  const dwellForUrl = recentDwellMs(recentEvents, url);
 
   // +0.1 base for being on an unaligned domain
   let score = isAligned ? 0 : 0.1;
@@ -875,6 +980,8 @@ const DEFAULT_LEGACY_DOMAINS = new Set([
   'instagram.com', 'youtube.com', 'netflix.com', 'tiktok.com',
 ]);
 
+const LEGACY_HOSTNAME_RE = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
+
 export function migrateLegacyDistractionSites(customDistractionSites) {
   const list = Array.isArray(customDistractionSites) ? customDistractionSites : [];
   const base = buildDefaultPolicy('deep_work', 'balanced');
@@ -886,10 +993,17 @@ export function migrateLegacyDistractionSites(customDistractionSites) {
 
   if (isDefaultList) return base;
 
-  const customBlocks = list.filter(d => {
-    const n = String(d).replace(/^www\./, '').toLowerCase();
-    return !DOMAIN_TO_CATEGORY.has(n);
-  });
-  base.customBlockDomains = customBlocks;
+  // Every legacy entry was an always-block site. Keep it unless the default
+  // category policy already blocks it (github.com is allowed by default, so a
+  // legacy GitHub block must survive). Drop malformed entries.
+  const customBlocks = new Set();
+  for (const entry of list) {
+    const n = normalizeHostname(String(entry ?? '').trim());
+    if (!LEGACY_HOSTNAME_RE.test(n)) continue;
+    const category = DOMAIN_TO_CATEGORY.get(n);
+    if (category && base.categoryPolicies[category] === 'block') continue;
+    customBlocks.add(n);
+  }
+  base.customBlockDomains = [...customBlocks].slice(0, 200);
   return base;
 }

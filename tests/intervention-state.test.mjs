@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { getStorageGeneration } from '../storage-queue.js';
 
 const root = new URL('../', import.meta.url);
 
@@ -134,10 +135,10 @@ async function loadBackground(initialStorage = {}, initialTabs = {}) {
   const module = await import(`../background.js?intervention-state=${Date.now()}-${Math.random()}`);
   await module.reloadConfig();
 
-  async function send(message, sender = {}) {
+  async function send(message, sender = { url: 'chrome-extension://mock/intervention.html' }) {
     let response;
     await Promise.all(listenersFor(harness).map((listener) => new Promise((resolve) => {
-      const result = listener(message, sender, (value) => {
+      const result = listener({ epoch: getStorageGeneration(), ...message }, sender, (value) => {
         response = value;
         resolve();
       });
@@ -159,7 +160,7 @@ async function readText(path) {
 
 test('interventions are scoped per session/tab and carry a nonce', async () => {
   const harness = await loadBackground(
-    { activeSession: { id: 'session-1', intent: 'write', isActive: true, startTime: 1, events: [] } },
+    { activeSession: { id: 'session-1', intent: 'write', isActive: true, startTime: Date.now(), events: [] } },
     {
       1: { url: 'https://example.test/one' },
       2: { url: 'https://example.test/two' },
@@ -192,7 +193,7 @@ test('restart-safe state can be rehydrated for the requesting tab only', async (
   };
   const harness = await loadBackground(
     {
-      activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+      activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
       interventionStates: { 'session-1:7': state },
     },
     { 7: { url: state.originalUrl }, 8: { url: 'https://example.test/other' } },
@@ -205,7 +206,7 @@ test('restart-safe state can be rehydrated for the requesting tab only', async (
 });
 
 test('stale or wrong-tab transitions are rejected without changing the session', async () => {
-  const session = { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] };
+  const session = { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] };
   const state = {
     sessionId: 'session-1',
     nonce: 'nonce-1',
@@ -244,7 +245,7 @@ test('stale or wrong-tab transitions are rejected without changing the session',
 
 test('end-session transition and repeated end are idempotent', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -262,7 +263,7 @@ test('end-session transition and repeated end are idempotent', async () => {
   }, { tab: { id: 7 } });
   const second = await harness.send({
     type: 'END_ACTIVE_SESSION',
-  }, { tab: { id: 7 } });
+  }, { url: 'chrome-extension://mock/newtab.html' });
 
   assert.equal(first.ok, true);
   assert.equal(second.status, 'ok');
@@ -279,7 +280,7 @@ test('repeating the same nonce-bound end-session transition is an idempotent suc
     nonce: 'nonce-1',
   };
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -303,7 +304,7 @@ test('repeating the same nonce-bound end-session transition is an idempotent suc
 
 test('close-tab keeps the intervention state when Chrome cannot close the tab', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,
@@ -332,7 +333,7 @@ test('close-tab keeps the intervention state when Chrome cannot close the tab', 
 
 test('removing a tab cleans only its intervention state', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
     interventionStates: {
       'session-1:7': { sessionId: 'session-1', nonce: 'a', originalTabId: 7, originalUrl: 'https://a.test', mode: 'overlay', timestamp: 1 },
       'session-1:8': { sessionId: 'session-1', nonce: 'b', originalTabId: 8, originalUrl: 'https://b.test', mode: 'overlay', timestamp: 1 },
@@ -348,7 +349,7 @@ test('removing a tab cleans only its intervention state', async () => {
 
 test('triggerIntervention state includes intent matching the session', async () => {
   const harness = await loadBackground(
-    { activeSession: { id: 'session-1', intent: 'write the report', isActive: true, startTime: 1, events: [] } },
+    { activeSession: { id: 'session-1', intent: 'write the report', isActive: true, startTime: Date.now(), events: [] } },
     { 1: { url: 'https://example.test/one' } },
   );
 
@@ -365,7 +366,7 @@ test('failed fallback navigation stays pending so triggerIntervention can retry'
         id: 'session-1',
         intent: 'write',
         isActive: true,
-        startTime: 1,
+        startTime: Date.now(),
         events: [],
         metrics: { interventionCount: 1, overrideCount: 0 },
       },
@@ -424,7 +425,7 @@ test('second triggerIntervention for a pending tab retries display', async () =>
         id: 'session-1',
         intent: 'write',
         isActive: true,
-        startTime: 1,
+        startTime: Date.now(),
         events: [],
         metrics: { interventionCount: 2, overrideCount: 0 },
       },
@@ -454,7 +455,7 @@ test('second triggerIntervention for a pending tab retries display', async () =>
 
 test('override reflection longer than 2000 is stored truncated', async () => {
   const harness = await loadBackground({
-    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: 1, events: [] },
+    activeSession: { id: 'session-1', intent: 'work', isActive: true, startTime: Date.now(), events: [] },
     interventionStates: {
       'session-1:7': {
         sessionId: 'session-1', nonce: 'nonce-1', reason: 'drift', originalTabId: 7,

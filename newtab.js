@@ -19,27 +19,33 @@ chrome.storage.local.get(['theme'], (result) => {
   }
 });
 
-import { mergePolicyWithIntent } from './heuristic-policy.js';
+import { mergePolicyWithIntent, INTENT_CATEGORIES } from './heuristic-policy.js';
+import { getProvider, providerRequiresApiKey } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
+  activeElapsedMs,
+  isSessionPaused,
 } from './session-metrics.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { showOnboardingWizard } from './onboarding.js';
 
 let dataDeletionInProgress = false;
+let privacyRevision = 0;
 let cachedHeuristicPolicy = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'DATA_DELETION_STARTED') {
     dataDeletionInProgress = true;
-    beginStorageDeletion();
+    privacyRevision++;
+    cachedHeuristicPolicy = null;
   }
   if (message?.type === 'DATA_DELETED') {
     dataDeletionInProgress = false;
-    endStorageDeletion();
+    privacyRevision++;
+    cachedHeuristicPolicy = null;
   }
 });
 
@@ -49,7 +55,15 @@ function sanitizeStoredHistory(rawHistory) {
   return sanitized;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function setFieldError(field, message, hintId) {
@@ -184,7 +198,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const wantReport = new URLSearchParams(location.search).get('report') === 'last';
 
+  const initialRevision = privacyRevision;
   chrome.storage.local.get(['activeSession', 'hasSeenOnboarding', 'sessionHistory', 'heuristicPolicy'], (result) => {
+    if (dataDeletionInProgress || initialRevision !== privacyRevision) return;
     cachedHeuristicPolicy = result.heuristicPolicy || null;
     const container = document.querySelector('.lock-container');
     if (result.activeSession && result.activeSession.isActive) {
@@ -209,7 +225,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = null;
+      document.querySelectorAll('.confirm-overlay').forEach(el => el.remove());
+      showNewSessionForm(document.querySelector('.lock-container'));
+    }
+  });
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (dataDeletionInProgress) return;
     if (areaName === 'local' && Object.prototype.hasOwnProperty.call(changes, 'heuristicPolicy')) {
       cachedHeuristicPolicy = changes.heuristicPolicy.newValue || null;
     }
@@ -226,7 +252,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const oldSession = changes.activeSession.oldValue;
         if (oldSession && oldSession.isActive) {
+          const revision = privacyRevision;
           chrome.storage.local.get(['sessionHistory'], (result) => {
+            if (dataDeletionInProgress || revision !== privacyRevision) return;
             const history = sanitizeStoredHistory(result.sessionHistory);
             const lastSession = history.find(h => h.id === oldSession.id);
             if (lastSession) {
@@ -273,11 +301,19 @@ document.addEventListener('DOMContentLoaded', () => {
     parent.appendChild(timerEl);
 
     function getElapsed() {
-      return Date.now() - session.startTime;
+      return activeElapsedMs(session);
     }
 
     function tick() {
       const elapsed = getElapsed();
+      timerEl.classList.toggle('timer-paused', isSessionPaused(session));
+      if (isSessionPaused(session)) {
+        timeLabel.textContent = 'Paused';
+        timeValue.textContent = formatTime(session.timeBudget
+          ? Math.abs(session.timeBudget * 60000 - elapsed)
+          : elapsed);
+        return;
+      }
       if (session.timeBudget) {
         const budgetMs = session.timeBudget * 60000;
         const remaining = budgetMs - elapsed;
@@ -309,7 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
       startTime: session.startTime,
       endTime: session.endTime,
       timeBudget: session.timeBudget,
-      driftCount: events.filter(e => e.actionType === 'OVERRIDE').length,
+      driftCount: events.filter(e => e?.actionType === 'OVERRIDE').length,
       totalEvents: events.length
     };
   }
@@ -361,13 +397,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const actions = document.createElement('div');
     actions.className = 'session-actions';
 
+    // Pausing stops the timer, the budget and dwell-based locks until resumed.
+    const pauseBtn = document.createElement('button');
+    pauseBtn.type = 'button';
+    pauseBtn.className = 'btn--ghost pause-btn';
+    const paused = isSessionPaused(session);
+    pauseBtn.textContent = paused ? 'Resume timer' : 'Pause timer';
+    pauseBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    const pauseStatus = document.createElement('p');
+    pauseStatus.className = 'pause-status';
+    pauseStatus.setAttribute('role', 'status');
+    pauseStatus.textContent = paused ? 'Timer paused. Dwell locks and the time budget wait until you resume.' : '';
+    pauseBtn.addEventListener('click', () => {
+      if (dataDeletionInProgress || pauseBtn.disabled) return;
+      const epoch = captureStorageEpoch();
+      pauseBtn.disabled = true;
+      sendStorageAction({ type: 'PAUSE_SESSION', sessionId: session.id, paused: !paused }, epoch)
+        .then(guardStorageContinuation(response => {
+          if (response.session?.isActive) showActiveState(response.session);
+        }))
+        .catch(error => {
+          pauseBtn.disabled = false;
+          pauseStatus.setAttribute('role', 'alert');
+          pauseStatus.textContent = error.message;
+        });
+    });
+
     const btn = document.createElement('button');
     btn.className = 'complete-btn';
     btn.textContent = 'End session';
     btn.addEventListener('click', (e) => showConfirmEndDialog(container, session, e.currentTarget));
-    actions.appendChild(btn);
+    actions.append(pauseBtn, btn);
 
-    container.appendChild(actions);
+    container.append(actions, pauseStatus);
   }
 
   // ── Confirmation dialog ─────────────────────────────────────────────
@@ -383,11 +445,11 @@ document.addEventListener('DOMContentLoaded', () => {
     h3.textContent = 'End session?';
 
     const p = document.createElement('p');
-    const elapsed = Math.round((Date.now() - session.startTime) / 60000);
+    const elapsed = Math.round(activeElapsedMs(session) / 60000);
     const events = Array.isArray(session.events) ? session.events : [];
     const overrides = typeof session.overrideCount === 'number'
       ? session.overrideCount
-      : events.filter(e => e.actionType === 'OVERRIDE').length;
+      : events.filter(e => e?.actionType === 'OVERRIDE').length;
     p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
 
     const actions = document.createElement('div');
@@ -414,13 +476,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Session summary ─────────────────────────────────────────────────
 
   function endSession(container, session) {
-    if (timerInterval) clearInterval(timerInterval);
-
-    chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, (response) => {
-      chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-        const endedSession = (response && response.session) ? response.session : session;
-        showSummary(container, endedSession);
-      });
+    const epoch = captureStorageEpoch();
+    sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(guardStorageContinuation(response => {
+      if (!response.session) throw new Error('The session could not be ended.');
+      if (timerInterval) clearInterval(timerInterval);
+      showSummary(container, response.session);
+    })).catch(error => {
+      const status = document.createElement('p');
+      status.setAttribute('role', 'alert');
+      status.textContent = error.message;
+      container.appendChild(status);
     });
   }
 
@@ -445,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const events = Array.isArray(session.events) ? session.events : [];
     const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
-    const eventOverrides = events.filter(e => e.actionType === 'OVERRIDE');
+    const eventOverrides = events.filter(e => e?.actionType === 'OVERRIDE');
     const overrideRecords = storedOverrides.length > 0 ? storedOverrides : eventOverrides;
     const durationMin = Math.max(
       0,
@@ -652,7 +717,46 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    form.append(intentGroup, timeGroup, btn);
+    // Show the rules this session will actually use before it starts: the
+    // same merged policy the worker enforces, the budget, and AI status.
+    const rulesSummary = document.createElement('p');
+    rulesSummary.id = 'effective-rules';
+    rulesSummary.className = 'field-hint effective-rules';
+    rulesSummary.setAttribute('aria-live', 'polite');
+    let aiStatus = 'AI second opinion: off (local rules only).';
+    const renderRules = () => {
+      const policy = mergePolicyWithIntent(intentInput.value.trim(), cachedHeuristicPolicy);
+      const category = INTENT_CATEGORIES.find(c => c.id === policy.intentCategoryId)?.label || 'General';
+      const blocks = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains.length : 0;
+      const allows = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains.length : 0;
+      const rawBudget = timeInput.value.trim();
+      const budget = /^[0-9]+$/.test(rawBudget) && Number(rawBudget) >= 1 && Number(rawBudget) <= 480
+        ? `${Number(rawBudget)}-minute budget`
+        : 'no time budget';
+      rulesSummary.textContent = `Rules: ${category}, ${policy.strictness || 'balanced'} strictness; `
+        + `${blocks} custom block${blocks === 1 ? '' : 's'}, ${allows} custom allow${allows === 1 ? '' : 's'}; `
+        + `${budget}. ${aiStatus}`;
+    };
+    intentInput.addEventListener('input', renderRules);
+    timeInput.addEventListener('input', renderRules);
+    renderRules();
+    const aiRevision = privacyRevision;
+    chrome.storage.local.get(['llmProviderConfig'], (local) => {
+      const provider = getProvider(local?.llmProviderConfig?.providerId);
+      const finish = (hasKey) => {
+        if (aiRevision !== privacyRevision || !provider) return;
+        const needsKey = providerRequiresApiKey(provider.id, local.llmProviderConfig);
+        aiStatus = needsKey && !hasKey
+          ? `AI second opinion: off (${provider.label} key not saved in this browser session).`
+          : `AI second opinion: ${provider.label}. Local rules still decide first.`;
+        renderRules();
+      };
+      if (!provider) return;
+      if (chrome.storage.session) chrome.storage.session.get(['llmApiKey'], (s) => finish(Boolean(s?.llmApiKey)));
+      else finish(false);
+    });
+
+    form.append(intentGroup, timeGroup, rulesSummary, btn);
     container.appendChild(form);
 
     const statusMsg = document.createElement('div');
@@ -743,11 +847,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      const epoch = captureStorageEpoch();
+      epoch.catch(() => {});
       const intentInput = document.getElementById('intent-input');
       const timeBudgetInput = document.getElementById('time-budget');
       const startBtn = document.getElementById('start-btn');
       const intent = intentInput.value.trim();
-      const timeBudget = parseInt(timeBudgetInput.value, 10);
+      // Whole minutes only: parseInt would silently read "12abc" as 12 and
+      // "abc" as no budget at all.
+      const rawBudget = timeBudgetInput.value.trim();
+      const timeBudget = rawBudget === '' ? null : (/^[0-9]+$/.test(rawBudget) ? Number(rawBudget) : NaN);
 
       if (!intent) {
         setFieldError(intentInput, 'Please declare your intent.');
@@ -756,9 +865,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       clearFieldError(timeBudgetInput);
 
-      if (!isNaN(timeBudget) && timeBudgetInput.value.trim() && (timeBudget < 1 || timeBudget > 480)) {
-        const budgetError = 'Time budget must be between 1 and 480 minutes.';
+      if (timeBudget !== null && !(Number.isInteger(timeBudget) && timeBudget >= 1 && timeBudget <= 480)) {
+        const budgetError = 'Time budget must be whole minutes between 1 and 480, or blank.';
         setFieldError(timeBudgetInput, budgetError);
+        timeBudgetInput.focus?.();
         logError({
           type: ERROR_TYPES.VALIDATION,
           message: budgetError,
@@ -775,7 +885,7 @@ document.addEventListener('DOMContentLoaded', () => {
         id: crypto.randomUUID(),
         intent: intent,
         startTime: Date.now(),
-        timeBudget: isNaN(timeBudget) ? null : timeBudget,
+        timeBudget,
         isActive: true,
         events: [],
         plan: []
@@ -792,20 +902,12 @@ document.addEventListener('DOMContentLoaded', () => {
           startBtn.textContent = 'Lock in';
           return;
         }
-        chrome.runtime.sendMessage({ type: 'SESSION_STARTED', session: sessionData }, (response) => {
-          if (chrome.runtime.lastError || response?.status !== 'ok') {
-            logError({
-              type: ERROR_TYPES.RUNTIME,
-              message: response?.message || 'Could not start session.',
-              details: { error: chrome.runtime.lastError?.message },
-              source: 'session_start',
-            });
-            setFieldError(intentInput, 'Could not start session. See Diagnostics in Settings.');
-            startBtn.disabled = false;
-            startBtn.textContent = 'Lock in';
-            return;
-          }
+        sendStorageAction({ type: 'SESSION_STARTED', session: sessionData }, epoch).then(guardStorageContinuation(() => {
           showActiveState(sessionData);
+        }), error => {
+          setFieldError(intentInput, error.message);
+          startBtn.disabled = false;
+          startBtn.textContent = 'Lock in';
         });
       };
 

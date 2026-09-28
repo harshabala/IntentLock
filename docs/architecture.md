@@ -43,6 +43,7 @@ All messages are plain objects `{ type: string, ...payload }`. The service worke
 |-------------|--------|-------------|
 | `SESSION_STARTED` | newtab.js | Persists new session to storage, starts time-budget alarm, clears drift cache |
 | `END_ACTIVE_SESSION` | newtab.js / popup.js | Finalises session, appends to `sessionHistory`, clears state |
+| `PAUSE_SESSION` | newtab.js | Pauses or resumes the session timer (`paused: boolean`); clears or reschedules the budget alarm |
 | `SESSION_CLEARED` | newtab.js / popup.js | Removes completed-session state, clears alarms and cooldowns while preserving history |
 | `DELETE_ALL_DATA` | options.js | Service worker clears local/session data behind a deletion barrier |
 | `GET_SESSION` | popup.js / newtab.js | Returns `activeSession` from storage |
@@ -100,7 +101,7 @@ A session object (`activeSession`) stored in `chrome.storage.local`:
 The service worker can be terminated and restarted at any time by Chrome. On every revival:
 
 1. `loadConfig()` reads `chrome.storage.local` — active session, heuristicPolicy, distractionSites, trackingEnabled, overrideCooldowns
-2. `migrateLlmStorage()` — moves API key from local to session storage if it was left behind
+2. `migrateKeys()` — moves legacy key aliases to the canonical session `llmApiKey` (sources removed only after the copy is verified; local copies are dropped when session storage is missing), then retention runs: sessions older than 24 hours are ended and history/diagnostics are pruned at rest, with an hourly `intentlock-retention` alarm while data remains
 3. Registers `chrome.tabs.onActivated`, `onUpdated`, `onRemoved`, `onCreated` listeners
 4. Registers `chrome.alarms.onAlarm` for time-budget enforcement
 5. Registers `chrome.commands.onCommand` for `toggle-session` shortcut

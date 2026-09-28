@@ -79,6 +79,7 @@ test('createPageTracker reports SPA navigation via history patch', () => {
   assert.equal(reports[0].previousUrl, 'https://app.example.com/start');
   assert.equal(reports[0].url, 'https://app.example.com/start');
   assert.equal(reports[0].navigationUrl, 'https://app.example.com/next');
+  assert.equal('pageTitle' in reports[0], false, 'page titles are never collected');
 
   tracker.stop();
 });

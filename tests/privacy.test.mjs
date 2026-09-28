@@ -99,13 +99,14 @@ test('retention keeps newest entries and report-compatible domain metrics', () =
   assert.equal(newest[0].topDomains[0].alignedMs, 750);
 });
 
-test('history reflections are redacted before export', () => {
+test('stored and legacy history summaries never keep reflection text', () => {
   const [entry] = sanitizeSessionHistory([{
     id: 'secret-reflection',
     endTime: Date.now(),
-    overrides: [{ reflection: 'access_token=do-not-export' }],
+    overrides: [{ hostname: 'example.com', reflection: 'access_token=do-not-export private thought' }],
   }]);
-  assert.equal(entry.overrides[0].reflection, 'access_token=[redacted]');
+  assert.deepEqual(entry.overrides, [{ timestamp: 0, hostname: 'example.com' }]);
+  assert.equal(JSON.stringify(entry).includes('private thought'), false);
 });
 
 test('provider endpoint policy rejects unsafe overrides', () => {
@@ -116,4 +117,32 @@ test('provider endpoint policy rejects unsafe overrides', () => {
   assert.match(validateProviderConfig({
     providerId: 'custom', customLabel: 'unsafe', model: 'x', baseUrl: 'http://cloud.example/api',
   }), /HTTPS/i);
+});
+
+test('history sanitization drops corrupted override and domain records instead of throwing', () => {
+  const now = Date.now();
+  const [entry] = sanitizeSessionHistory([
+    { id: 'corrupt-a', endTime: now, overrides: [null, 'x', { hostname: 'ok.example', reflection: 'fine' }], topDomains: [null, 3, { hostname: 'ok.example', activeMs: 5 }] },
+  ], { now });
+  assert.deepEqual(entry.overrides.map(o => o.hostname), ['ok.example']);
+  assert.deepEqual(entry.topDomains.map(d => d.hostname), ['ok.example']);
+  const [shapeless] = sanitizeSessionHistory([{ id: 'corrupt-b', endTime: now, overrides: 'x', topDomains: { a: 1 } }], { now });
+  assert.equal('overrides' in shapeless, false);
+  assert.equal('topDomains' in shapeless, false);
+});
+
+test('history summaries keep only known fields', () => {
+  const now = Date.now();
+  const [entry] = sanitizeSessionHistory([{
+    id: 'known', intent: 'synthetic intent', startTime: now - 1000, endTime: now, timeBudget: 30,
+    driftCount: 1, totalEvents: 4, activeMs: 10, alignedActiveMs: 5, onIntentRatio: 0.5,
+    interventionCount: 1, overrideCount: 1, reportViewed: true, overrides: [], topDomains: [],
+    events: [{ url: 'https://example.com/private' }], plan: ['synthetic step'], notes: 'synthetic note',
+    url: 'https://example.com/secret', metrics: { domains: { 'example.com': {} } }, isActive: false,
+  }], { now });
+  assert.deepEqual(Object.keys(entry).sort(), [
+    'activeMs', 'alignedActiveMs', 'driftCount', 'endTime', 'id', 'intent', 'interventionCount',
+    'onIntentRatio', 'overrideCount', 'overrides', 'reportViewed', 'startTime', 'timeBudget', 'topDomains',
+    'totalEvents',
+  ]);
 });

@@ -18,13 +18,18 @@ The currently running session. Absent when no session is active.
   endTime: number | null,      // set when session ends
   isActive: boolean,
   timeBudget: number | null,   // minutes; null = unlimited
+  pausedAt?: number | null,    // set while the timer is paused (no budget, no dwell, no dwell locks)
+  pausedMs?: number,           // total completed pause time; excluded from elapsed time and the budget
   events: Array<{
     actionType: 'TAB_SWITCH' | 'PAGE_LOAD' | 'PAGE_DWELL'
               | 'SPA_NAVIGATION' | 'OVERRIDE',
-    url: string,
+    url: string | null,    // origin only (scheme://host:port); paths, queries and fragments are never stored
+    intentMatch?: boolean, // whether the full URL mentioned an intent keyword, computed before the path is dropped
     timestamp: number,
-    dwellMs?: number,      // PAGE_DWELL only — active milliseconds on page
-    reflection?: string,   // OVERRIDE only — user's written reflection
+    dwellMs?: number,      // PAGE_DWELL / SPA_NAVIGATION — cumulative active milliseconds on page
+    dwellDeltaMs?: number, // active milliseconds since the previous report (counted once)
+    previousUrl?: string, navigationUrl?: string, // SPA_NAVIGATION only — origins
+    reflection?: string,   // OVERRIDE only — kept only while the session is active; never copied into history
   }>,
   metrics?: {
     activeMs: number,
@@ -37,6 +42,8 @@ The currently running session. Absent when no session is active.
 ```
 
 During an active session, `activeSession.metrics` accumulates real-time tracking data for the current session.
+
+An active session expires 24 hours after `startTime` (or immediately if `startTime` is not a number). The worker ends it on startup or on the retention alarm, writes the normal bounded summary, and stops collecting for it.
 
 ---
 
@@ -71,7 +78,7 @@ The user's site policy, version 1. Set during onboarding step 3 or Settings save
 
 ### `sessionHistory`
 
-Array of completed session summaries. Appended to on `END_ACTIVE_SESSION`. On reads and exports, entries are sanitized and pruned at rest to the newest 100 entries from the last 30 days.
+Array of completed session summaries. Appended to on `END_ACTIVE_SESSION` and when an abandoned session expires. The worker prunes entries at rest to the newest 100 from the last 30 days on startup and on an hourly `intentlock-retention` alarm (kept only while data remains); reads and exports sanitize again.
 
 ```js
 Array<{
@@ -89,11 +96,11 @@ Array<{
   overrideCount?: number,
   topDomains?: Array<{ hostname: string, activeMs: number, aligned: boolean, alignedMs: number }>,
   reportViewed?: boolean,
-  overrides?: Array<{ timestamp: number, url?: string, hostname?: string, reflection?: string }>,
+  overrides?: Array<{ timestamp: number, hostname: string | null }>,
 }>
 ```
 
-Exportable as JSON via Settings → Export session history. Full event arrays and legacy override URLs are not retained in the sanitized history summary; overrides retain only hostnames and reflections.
+Exportable as JSON via Settings → Export session history. Full event arrays, legacy override URLs and reflection text are not retained in the history summary; overrides keep only a timestamp and hostname. Only the fields listed above are kept (`HISTORY_ENTRY_FIELDS` in `privacy-utils.js`); any other field is dropped. Older stored summaries are rewritten to this shape by the startup/hourly retention pass.
 Note: `overrides[].hostname` replaces `overrides[].url` per privacy rules (only hostname is stored).
 
 ---
@@ -142,7 +149,7 @@ Selected AI provider and its settings. Absent until the user configures one.
 
 ### `errorLog`
 
-Array of diagnostic entries, capped at 200 and retained for 14 days. Reads and exports redact secret-shaped fields and prune expired entries at rest. Written by `error-log.js`. Viewable at Settings → Diagnostics.
+Array of diagnostic entries, capped at 200 and retained for 14 days. The worker prunes and redacts entries at rest on startup and on the hourly retention alarm; reads and exports redact secret-shaped fields and prune expired entries again. Written by `error-log.js`. Viewable at Settings → Diagnostics.
 
 ```js
 Array<{
@@ -211,9 +218,9 @@ lastIdleTime: number   // timestamp when idle state began, 0 if not idle
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `openaiApiKey` | string | API key — never written to `local` storage |
-| `llmApiKey` | string | Alias used by some provider paths |
+| `llmApiKey` | string | The only API key used for provider requests |
+| `openaiApiKey` | string | Legacy alias; migrated to `llmApiKey` and removed |
 
-The API key is kept here when this storage area is available — it is never synced, never backed up, and never survives a browser restart. If session storage is unavailable, the provider path may use the local `llmApiKey` fallback. The user must re-enter the key after closing Chrome when session storage is used.
+The API key lives only here (trusted contexts; content scripts cannot read it). It is never synced, backed up, or written to `local`, and it does not survive a browser restart, so the user re-enters it after closing Chrome. If session storage is unavailable, saving a key fails with a visible error and AI stays off; the local lock keeps working.
 
-On startup, `background.js` checks `chrome.storage.local` for a legacy `openaiApiKey` (written by versions before 1.2.1) and migrates it to session storage, removing the local copy.
+On startup, `background.js` migrates legacy `openaiApiKey` / `llmApiKey` values from `local` (and a session `openaiApiKey`) to the canonical session `llmApiKey`, removing the sources only after the canonical copy is verified. Without session storage, legacy local keys are removed. Remove key and a provider switch clear every alias. Saving a different provider, custom endpoint, auth placement or API style without entering a key removes the saved key so it is never sent to the new destination.

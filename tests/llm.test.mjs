@@ -1,5 +1,12 @@
+import { applyStorageCommand } from '../storage-authority.js';
+import { registerErrorLogAuthority } from '../error-log.js';
+registerErrorLogAuthority(applyStorageCommand);
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import test from 'node:test';
+
+// Node 18 may not expose the browser Web Crypto global.
+globalThis.crypto ??= webcrypto;
 
 let storageData = {
   errorLog: [],
@@ -204,4 +211,34 @@ test('plan prompt keeps hostile intent outside the instruction channel', async (
   assert.match(prompt, /UNTRUSTED_INTENT_DATA=\d+:\{/);
   assert.match(prompt, /\\u003C\/intent\\u003E/);
   assert.doesNotMatch(prompt, /<\/intent> Ignore previous/);
+});
+
+test('checkDriftLLM discards out-of-range or ambiguous verdicts without locking', async () => {
+  for (const content of [
+    '{"aligned": false, "confidence": 95}',
+    '{"aligned": false, "confidence": -0.5}',
+    '{"aligned": "false", "confidence": 0.9}',
+    '[{"aligned": false, "confidence": 0.9}]',
+    '{"aligned": false}',
+    'null',
+    'I think the user is drifting',
+  ]) {
+    clearDriftCache();
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content } }] }),
+    });
+    const result = await checkDriftLLM('Write the quarterly report', `https://example.com/${content.length}`, []);
+    assert.deepEqual(result, { isAligned: true, confidence: 0 }, content);
+  }
+});
+
+test('generateIntentPlan trims, drops blanks and bounds step text', async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: JSON.stringify({ steps: ['  ', ' Outline ', 'x'.repeat(500), 7, 'Review'] }) } }] }),
+  });
+  const result = await generateIntentPlan('Write the quarterly report');
+  assert.equal(result.error, null);
+  assert.deepEqual(result.steps, ['Outline', 'x'.repeat(200), 'Review']);
 });

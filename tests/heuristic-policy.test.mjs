@@ -11,6 +11,7 @@ import {
   resolveDomainPolicy,
   getEffectiveBlockList,
   evaluatePolicyDrift,
+  isUrlAligned,
   intentTerms,
 } from '../heuristic-policy.js';
 
@@ -326,6 +327,48 @@ test('invalid url returns shouldIntervene false without throwing', () => {
 
 // ── UI exports and migration ──────────────────────────────────────────
 
+test('custom Docs block takes precedence over automatic category and keyword alignment', () => {
+  const intent = 'Draft quarterly report';
+  const policy = mergePolicyWithIntent(intent, buildDefaultPolicy('deep_work', 'balanced'));
+  policy.customBlockDomains = ['docs.google.com'];
+  for (const url of ['https://docs.google.com/document/d/example',
+    'https://docs.google.com/document/d/quarterly-report']) {
+    const result = evaluatePolicyDrift({ intent, policy, url, events: [] });
+    assert.equal(result.shouldIntervene, true, url);
+    assert.equal(result.score, 0.95);
+    assert.equal(result.reason, 'blocked_category');
+    assert.equal(isUrlAligned(intent, url, policy), false);
+  }
+});
+
+test('explicit related correction overrides a custom block even when automatic alignment also matches', () => {
+  const intent = 'Draft quarterly report';
+  const policy = mergePolicyWithIntent(intent, buildDefaultPolicy('deep_work', 'balanced'));
+  policy.customBlockDomains = ['docs.google.com', 'distraction.localhost'];
+  for (const url of ['https://docs.google.com/document/d/example',
+    'https://docs.google.com/document/d/quarterly-report', 'http://distraction.localhost/feed']) {
+    const relatedHostnames = [new URL(url).hostname];
+    const result = evaluatePolicyDrift({ intent, policy, url, events: [], relatedHostnames });
+    assert.equal(result.shouldIntervene, false, url);
+    assert.equal(isUrlAligned(intent, url, policy, relatedHostnames), true);
+  }
+});
+
+test('quarterly report in Google Docs stays aligned after two minutes', () => {
+  const intent = 'Draft quarterly report';
+  const policy = mergePolicyWithIntent(intent, buildDefaultPolicy('deep_work', 'balanced'));
+  const url = 'https://docs.google.com/document/d/example';
+  const now = 180000;
+  assert.equal(policy.intentCategoryId, 'deep_work');
+  const result = evaluatePolicyDrift({ intent, policy, url, now,
+    events: [{ actionType: 'PAGE_DWELL', url, timestamp: now, dwellMs: 120000 }] });
+  assert.equal(result.shouldIntervene, false, JSON.stringify(result));
+  assert.equal(result.reason, 'aligned');
+  const distraction = evaluatePolicyDrift({ intent, policy, now,
+    url: 'https://www.youtube.com/watch?v=entertainment', events: [] });
+  assert.equal(distraction.shouldIntervene, true);
+});
+
 import {
   SETUP_WIZARD_STEPS,
   getCategoryPolicyOptions,
@@ -370,6 +413,16 @@ test('migrateLegacyDistractionSites preserves non-catalogued custom domains', ()
   const policy = migrateLegacyDistractionSites(['twitter.com', 'mycompany-internal.com']);
   assert.ok(policy.customBlockDomains.includes('mycompany-internal.com'));
   assert.ok(!policy.customBlockDomains.includes('twitter.com'));
+});
+
+test('migrateLegacyDistractionSites keeps a legacy block the default policy would allow', () => {
+  const policy = migrateLegacyDistractionSites(['www.GitHub.com', 'reddit.com', 'twitter.com', 'github.com',
+    '', null, 'not a host', 'javascript:alert(1)']);
+  assert.deepEqual(policy.customBlockDomains, ['github.com', 'reddit.com']);
+  assert.equal(resolveDomainPolicy('github.com', policy), 'block');
+  const coding = evaluatePolicyDrift({ intent: 'fix github actions workflow', policy, events: [],
+    url: 'https://github.com/synthetic/repo' });
+  assert.equal(coding.shouldIntervene, true);
 });
 
 test('migrateLegacyDistractionSites with empty list returns default policy without throwing', () => {

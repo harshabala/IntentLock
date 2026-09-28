@@ -6,7 +6,7 @@ import {
   getLlmConfig,
   isLlmConfigured,
 } from './providers.js';
-import { logError, ERROR_TYPES } from './error-log.js';
+import { logError, ERROR_TYPES, captureErrorEpoch, isErrorEpochCurrent } from './error-log.js';
 import { sanitizeUrl } from './privacy-utils.js';
 import {
   buildDriftCacheKey,
@@ -35,6 +35,7 @@ function serializeUntrustedPromptData(value) {
  * @returns {Promise<{ isAligned: boolean, confidence: number }>}
  */
 async function checkDriftLLM(intent, url, history) {
+  const storageEpoch = captureErrorEpoch();
   if (await trackingIsDisabled()) {
     return { isAligned: true, confidence: 0, llmSkipped: 'tracking_disabled' };
   }
@@ -51,7 +52,7 @@ async function checkDriftLLM(intent, url, history) {
 
   const recentHistory = Array.isArray(history) ? history.slice(-5) : [];
   const historySummary = recentHistory
-    .map((event) => `${event.actionType || 'EVENT'}: ${sanitizeUrl(event.url) || 'unknown-origin'}`)
+    .map((event) => `${event?.actionType || 'EVENT'}: ${sanitizeUrl(event?.url) || 'unknown-origin'}`)
     .join('; ');
   const currentOrigin = sanitizeUrl(url) || 'unknown-origin';
 
@@ -72,11 +73,13 @@ async function checkDriftLLM(intent, url, history) {
 
   try {
     const result = await chatCompletion(prompt, {
+      storageEpoch,
       jsonMode: true,
       maxTokens: 50,
       temperature: 0.1,
     });
 
+    if (!await isErrorEpochCurrent(storageEpoch)) return { isAligned: true, confidence: 0, llmSkipped: 'data_deletion' };
     if (!result.ok) {
       if (result.error?.code === 'quota_backoff' || result.error?.code === 'quota_exceeded') {
         return { isAligned: true, confidence: 0, llmSkipped: result.error.code };
@@ -86,13 +89,18 @@ async function checkDriftLLM(intent, url, history) {
 
     const parsed = JSON.parse(cleanJsonString(result.text));
 
-    if (!parsed || typeof parsed.aligned !== 'boolean' || typeof parsed.confidence !== 'number') {
+    // A hostile page or provider must not smuggle a decision through an
+    // ambiguous shape: anything but a plain object with a boolean verdict and a
+    // finite 0–1 confidence is discarded and cannot lock.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        typeof parsed.aligned !== 'boolean' || typeof parsed.confidence !== 'number' ||
+        !Number.isFinite(parsed.confidence) || parsed.confidence < 0 || parsed.confidence > 1) {
       await logError({
         type: ERROR_TYPES.API,
         message: 'LLM drift check returned an unexpected response shape.',
         details: { providerId: config.providerId },
         source: 'checkDriftLLM',
-      });
+      }, storageEpoch);
       return { isAligned: true, confidence: 0 };
     }
 
@@ -108,7 +116,7 @@ async function checkDriftLLM(intent, url, history) {
       message: 'LLM drift check failed to parse response.',
       details: { providerId: config.providerId, error: error.message },
       source: 'checkDriftLLM',
-    });
+    }, storageEpoch);
     return { isAligned: true, confidence: 0 };
   }
 }
@@ -119,6 +127,7 @@ async function checkDriftLLM(intent, url, history) {
  * @returns {Promise<{ steps: string[], error: object|null }>}
  */
 async function generateIntentPlan(intent) {
+  const storageEpoch = captureErrorEpoch();
   if (await trackingIsDisabled()) {
     return { steps: [], error: { code: 'tracking_disabled', message: 'LLM calls are disabled while tracking is off.' } };
   }
@@ -137,11 +146,13 @@ async function generateIntentPlan(intent) {
 
   try {
     const result = await chatCompletion(prompt, {
+      storageEpoch,
       jsonMode: true,
       maxTokens: 100,
       temperature: 0.3,
     });
 
+    if (!await isErrorEpochCurrent(storageEpoch)) return { steps: [], error: { code: 'data_deletion', message: 'Data changed during this request.' } };
     if (!result.ok) {
       return { steps: [], error: result.error };
     }
@@ -158,17 +169,23 @@ async function generateIntentPlan(intent) {
         message: 'Plan generation returned an unexpected response format.',
         details: { providerId: config.providerId },
         source: 'generateIntentPlan',
-      });
+      }, storageEpoch);
       return { steps: [], error: { code: 'invalid_response', message: 'Plan generation returned an unexpected format.' } };
     }
-    return { steps: steps.filter((step) => typeof step === 'string').slice(0, 3), error: null };
+    return {
+      steps: steps
+        .filter((step) => typeof step === 'string' && step.trim())
+        .slice(0, 3)
+        .map((step) => step.trim().slice(0, 200)),
+      error: null,
+    };
   } catch (err) {
     await logError({
       type: ERROR_TYPES.API,
       message: 'Plan generation failed to parse response.',
       details: { providerId: config.providerId, error: err.message },
       source: 'generateIntentPlan',
-    });
+    }, storageEpoch);
     return { steps: [], error: { code: 'parse_error', message: 'Plan generation failed to parse response.' } };
   }
 }

@@ -64,6 +64,8 @@ export const RUNTIME_FILES = Object.freeze([
   'privacy-utils.js',
   'session-metrics.js',
   'storage-queue.js',
+  'storage-client.js',
+  'storage-authority.js',
 ]);
 
 async function readManifest(repositoryRoot) {

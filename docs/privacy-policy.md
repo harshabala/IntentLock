@@ -2,7 +2,7 @@
 
 **Public URL:** https://harshabala.github.io/IntentLock/privacy.html
 
-**Effective Date:** August 24, 2026
+**Effective Date:** September 28, 2026
 
 IntentLock is a privacy-first browser extension designed to help you maintain focus and align your browsing actions with your stated intent. We believe your browsing history, intents, and keys are strictly your own. This Privacy Policy details how the extension handles data.
 
@@ -10,15 +10,16 @@ IntentLock is a privacy-first browser extension designed to help you maintain fo
 
 IntentLock stores session data, browsing metadata, settings, and diagnostic logs **locally by default** using the Chrome Extension Storage APIs (`chrome.storage.local` and, for API keys, `chrome.storage.session`). This includes:
 - **Intent Declarations:** The focus statements and goals you declare at the start of a session.
-- **Browsing History & Logs:** The metadata and URLs of active tabs monitored during a session.
+- **Browsing History & Logs:** During an active session, the origin (for example `https://example.com`) of tabs you visit, with timing and whether the full address matched your intent. Paths, queries, fragments and page titles are not stored. A locked tab's full address is kept only until that lock is resolved, so the page can be restored.
+- **Session summaries:** Intent text, times, counts, and the hostnames of sites you overrode or spent time on. Override reflections are kept only for the live session and are not saved in summaries; other fields are discarded.
 - **Alignment Events & Drift Logs:** Heuristic evaluations, tab-switch counts, and drift-intervention history.
 
-IntentLock does not use analytics, advertising, or telemetry services. You can view, export, or delete all local data through Settings (Options). Session history is automatically limited to the newest 100 entries from the last 30 days, and diagnostic logs to the newest 200 entries from the last 14 days.
+IntentLock does not use analytics, advertising, or telemetry services. You can view, export, or delete all local data through Settings (Options). Session history is automatically limited to the newest 100 entries from the last 30 days, and diagnostic logs to the newest 200 entries from the last 14 days; both are pruned in storage at startup and hourly. A session that is not ended within 24 hours is ended automatically and stops collecting.
 
 ## 2. API Key & LLM Drift Evaluation
 
 If you enable tracking and configure a cloud or custom remote provider for LLM-powered features (optional providers include OpenAI, Google Gemini, Grok, Ollama, and LM Studio):
-- **Key storage:** When `chrome.storage.session` is available, the API key is kept there and is **automatically cleared** when you close the browser. A local-storage fallback may be used when session storage is unavailable; the extension does not sync keys to a remote service.
+- **Key storage:** When `chrome.storage.session` is available, the API key is kept there and is **automatically cleared** when you close the browser. The key is never written to local storage; if session storage is unavailable, a key cannot be saved and AI checks stay off. Changing the provider or endpoint without re-entering the key removes it. The extension does not sync keys to a remote service.
 - **Direct API Communication:** IntentLock sends the declared intent and minimized browsing context directly to the provider you selected. Page context is reduced to origins and bounded recent events; full paths, query strings, and fragments are not sent.
 - **Provider choice matters:** The selected provider receives the request under its own privacy policy. Local providers such as Ollama and LM Studio keep the request on your machine. IntentLock does not operate an intermediary analytics or proxy service.
 - **Tracking control:** Turning tracking off suppresses provider requests and browsing-event collection.

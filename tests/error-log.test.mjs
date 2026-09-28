@@ -1,5 +1,12 @@
+import { applyStorageCommand } from '../storage-authority.js';
+import { registerErrorLogAuthority } from '../error-log.js';
+registerErrorLogAuthority(applyStorageCommand);
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import test from 'node:test';
+
+// Node 18 may not expose the browser Web Crypto global.
+globalThis.crypto ??= webcrypto;
 
 let storageData = { errorLog: [] };
 

@@ -178,13 +178,15 @@ flowchart TD
 |--------|--------|
 | Domain policy = `block` + not aligned with intent | Immediate intervene, score 0.95, reason `blocked_category` |
 | Domain policy = `allow` + intent aligned | Never block on category alone |
-| `customAllowDomains` match | Category block never fires |
+| `customAllowDomains` match (domain or subdomain, most specific rule wins) | No drift lock; optional AI not consulted |
+| Session-related correction (marked host or subdomain) | No drift lock; optional AI not consulted |
 | 3+ unrelated events in last 2 min | +0.35 |
 | 4+ tab switches in last 2 min | +0.25 |
 | 2+ loads of same unaligned domain | +0.20 |
 | Warn category + unaligned + dwell ≥ 60 s | +0.20 |
 | Warn category + unaligned + dwell ≥ 120 s | Floor score at 0.7 → intervene |
 | Any domain + unaligned + dwell ≥ 120 s | Floor score at 0.7 → intervene |
+| Dwell rules | Re-checked on every 30 s dwell report, so they lock the page in place; local rules only (no AI). Paused timers record no dwell and fire no dwell locks. Cooldowns and existing locks prevent repeats |
 | Threshold | `DRIFT_CONFIDENCE_THRESHOLD = 0.7` |
 
 ### Heuristic policy engine
@@ -207,7 +209,7 @@ See [`docs/heuristic-policy.md`](docs/heuristic-policy.md) for the full referenc
 
 ### LLM providers
 
-Configured in Settings → LLM provider. The API key is stored in `chrome.storage.session` when available (cleared on browser close), with a local fallback only when session storage is unavailable. Remote providers receive minimized intent and origin-only context.
+Configured in Settings → LLM provider. The API key is stored only in `chrome.storage.session` (cleared on browser close); without session storage a key cannot be saved and the local lock keeps working. Changing the provider destination without re-entering the key removes it. Remote providers receive minimized intent and origin-only context.
 
 | Provider | ID | API style | Local? |
 |----------|----|-----------|--------|
@@ -255,30 +257,23 @@ Key `chrome.storage.local` entries:
 
 | Key | Description |
 |-----|-------------|
-| `openaiApiKey` / `llmApiKey` | API key — never persisted to disk |
+| `llmApiKey` | API key — session memory only, never written to `chrome.storage.local`; cleared when its provider destination changes |
 
 ### Testing
 
 ```bash
-node --test tests/heuristic-policy.test.mjs   # 48 tests — policy engine
-node --test tests/background.test.mjs          # 2 tests  — service worker helpers
-node --test tests/drift.test.mjs               # heuristic drift scoring
-node --test tests/drift-cache.test.mjs         # TTL cache
-node --test tests/llm-backoff.test.mjs         # quota backoff
-node --test tests/providers.test.mjs           # provider config validation
-node --test tests/page-tracker.test.mjs        # dwell tracking + SPA detection
-node --test tests/error-log.test.mjs           # diagnostic log
-node --test tests/static-smoke.test.mjs        # manifest + asset integrity
-npm test                                        # all tests
-npm run verify:static                           # static/runtime/release checks
+npm test                                        # all unit tests (358)
+npm run verify:static                           # static/runtime/release checks (74)
+node --test tests/heuristic-policy.test.mjs     # one suite, e.g. the policy engine
+npx playwright test                             # real-Chromium journeys + lifecycle (5)
 ```
 
-Uses Node's built-in `node:test` + `assert/strict`. No dependencies or test runner to install.
+Unit tests use Node's built-in `node:test` + `assert/strict`, with no dependencies. The browser suite loads the unpacked extension in Chromium and covers two user journeys plus lifecycle cases: a real service-worker restart (lock and paused timer survive), the same URL in two tabs, and a real one-minute budget expiry. CI runs all three on every push and pull request.
 
 To validate and build a release artifact locally:
 
 ```bash
-npm run validate:version -- v1.5.1
+npm run validate:version -- v1.6.0
 npm run package
 ```
 
@@ -304,6 +299,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Highlight |
 |---------|-----------|
+| Unreleased | Production hardening: session-only API keys, strict AI verdicts, in-place dwell locks with a pausable timer, origin-only session data, browser lifecycle tests in CI |
 | 1.5.0 | Heuristic self-setup engine — category-aware policy, onboarding step 3, settings grid |
 | 1.4.0 | In-page shadow-DOM overlay, dwell tracking, SPA support, LLM confidence gate |
 | 1.2.1 | Secure session key storage, onboarding wizard, cooldown tests |

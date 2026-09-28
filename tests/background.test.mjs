@@ -103,7 +103,7 @@ globalThis.chrome = {
     session: {
       get: (keys, callback) => {
         const res = {};
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const key of keysArr) {
           if (sessionStorageData[key] !== undefined) {
             res[key] = sessionStorageData[key];
@@ -116,7 +116,7 @@ globalThis.chrome = {
         if (callback) callback();
       },
       remove: (keys, callback) => {
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const k of keysArr) {
           delete sessionStorageData[k];
         }
@@ -130,7 +130,7 @@ globalThis.chrome = {
     local: {
       get: (keys, callback) => {
         const res = {};
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const key of keysArr) {
           if (storageData[key] !== undefined) {
             res[key] = structuredClone(storageData[key]);
@@ -147,7 +147,7 @@ globalThis.chrome = {
         if (callback) callback();
       },
       remove: (keys, callback) => {
-        const keysArr = Array.isArray(keys) ? keys : [keys];
+        const keysArr = keys == null ? Object.keys(storageData) : Array.isArray(keys) ? keys : [keys];
         for (const k of keysArr) {
           delete storageData[k];
         }
@@ -169,7 +169,21 @@ const {
   createHistoryEntry,
   isTrackableUrl,
 } = await import('../background.js');
-const { beginStorageDeletion, endStorageDeletion, enqueueStorageMutation } = await import('../storage-queue.js');
+const { beginStorageDeletion, endStorageDeletion, enqueueStorageMutation, getStorageGeneration } = await import('../storage-queue.js');
+
+// Model the epoch attached by actual extension-page clients.
+const originalListener = messageListener;
+messageListener = (message, sender, respond) => originalListener({ epoch: getStorageGeneration(), ...message }, sender, respond);
+
+test('content-script senders cannot delete personal storage', async () => {
+  storageData.syntheticSentinel = 'keep';
+  const response = await new Promise(resolve => messageListener(
+    { type: 'DELETE_ALL_DATA' }, { tab: { id: 7 }, url: 'https://example.test/' }, resolve,
+  ));
+  assert.equal(storageData.syntheticSentinel, 'keep');
+  assert.equal(response.status, 'error');
+  delete storageData.syntheticSentinel;
+});
 
 test('loadConfig resets in-memory variables to defaults when storage is cleared', async () => {
   // Verify initially loaded values (non-defaults)
@@ -214,7 +228,7 @@ test('migrateLlmStorage migrates legacy key to llmApiKey in session storage on l
   assert.equal(storageData.openaiApiKey, undefined);
 });
 
-test('createHistoryEntry includes overrides array with reflection text', () => {
+test('createHistoryEntry keeps override hostnames but never reflection text', () => {
   const session = {
     id: 'abc123',
     intent: 'write report',
@@ -233,9 +247,9 @@ test('createHistoryEntry includes overrides array with reflection text', () => {
   assert.equal(entry.overrides.length, 2);
   // Privacy: history stores hostname only (not full URL)
   assert.equal(entry.overrides[0].hostname, 'reddit.com');
-  assert.equal(entry.overrides[0].reflection, 'needed a break');
+  assert.equal('reflection' in entry.overrides[0], false);
   assert.equal(entry.overrides[1].hostname, 'twitter.com');
-  assert.equal(entry.overrides[1].reflection, null);
+  assert.equal(JSON.stringify(entry).includes('needed a break'), false);
   assert.equal(entry.reportViewed, false);
   assert.ok('onIntentRatio' in entry);
 });
@@ -247,7 +261,7 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
   setQuotaBackoff({ retryAfterMs: 100000 });
   assert.ok(isLlmBackedOff(), 'LLM should be backed off initially');
 
-  storageData.activeSession = { id: 'session-456', intent: 'code', isActive: true };
+  storageData.activeSession = { id: 'session-456', intent: 'code', isActive: true, startTime: Date.now() };
   storageData.overrideCooldowns = [['some-site.com', 8888]];
   await reloadConfig();
 
@@ -258,7 +272,7 @@ test('SESSION_CLEARED message resets background in-memory variables and clears L
 
   let response = null;
   await new Promise((resolve) => {
-    messageListener({ type: 'SESSION_CLEARED' }, {}, (res) => {
+    messageListener({ type: 'SESSION_CLEARED' }, { url: 'chrome-extension://mock/newtab.html' }, (res) => {
       response = res;
       resolve();
     });
@@ -293,7 +307,7 @@ test('loadConfig queued sanitize does not overwrite a newer history written whil
 });
 
 test('aborted loadConfig allows a later loadConfig to apply storage', async () => {
-  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: Date.now() + 1, events: [] };
   pauseStorageGets = true;
   try {
     const aborted = reloadConfig();
@@ -306,13 +320,13 @@ test('aborted loadConfig allows a later loadConfig to apply storage', async () =
     flushPausedStorageGets();
   }
 
-  storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: 2, events: [] };
+  storageData.activeSession = { id: 'fresh-session', intent: 'new', isActive: true, startTime: Date.now() + 2, events: [] };
   await loadConfig();
   assert.equal(getInMemoryState().currentSession?.id, 'fresh-session');
 });
 
 test('aborted loadConfig does not null a newer in-flight configPromise', async () => {
-  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: 1, events: [] };
+  storageData.activeSession = { id: 'stale-session', intent: 'old', isActive: true, startTime: Date.now() + 1, events: [] };
   pauseStorageGets = true;
   let aborted;
   let later;
@@ -321,10 +335,10 @@ test('aborted loadConfig does not null a newer in-flight configPromise', async (
     aborted = reloadConfig();
     beginStorageDeletion();
     endStorageDeletion();
-    storageData.activeSession = { id: 'from-B', intent: 'keep', isActive: true, startTime: 2, events: [] };
+    storageData.activeSession = { id: 'from-B', intent: 'keep', isActive: true, startTime: Date.now() + 2, events: [] };
     later = reloadConfig();
     flushOnePausedStorageGet();
-    storageData.activeSession = { id: 'from-C', intent: 'should-not-apply', isActive: true, startTime: 3, events: [] };
+    storageData.activeSession = { id: 'from-C', intent: 'should-not-apply', isActive: true, startTime: Date.now() + 3, events: [] };
     third = loadConfig();
     flushPausedStorageGets();
     await Promise.all([aborted, later, third]);
@@ -472,7 +486,7 @@ test('TEST_INTERVENTION without a trackable http(s) tab errors and does not crea
   try {
     let response = null;
     await new Promise((resolve) => {
-      messageListener({ type: 'TEST_INTERVENTION' }, {}, (res) => {
+      messageListener({ type: 'TEST_INTERVENTION' }, { url: 'chrome-extension://mock/options.html' }, (res) => {
         response = res;
         resolve();
       });
@@ -494,4 +508,28 @@ test('TEST_INTERVENTION without a trackable http(s) tab errors and does not crea
     storageData.trackingEnabled = previousTracking;
     storageData.activeSession = previousSession;
   }
+});
+
+test('starting a session clears related-domain exceptions from the previous session', async () => {
+  storageData.relatedDomainMarks = { 'distraction.localhost': { count: 1, lastMarkedAt: Date.now() } };
+  await reloadConfig();
+  const response = await new Promise(resolve => messageListener({
+    type: 'SESSION_STARTED',
+    session: { id: 'fresh-related-scope', intent: 'Draft quarterly report',
+      startTime: Date.now(), isActive: true, timeBudget: null, events: [] },
+  }, { url: 'chrome-extension://mock/newtab.html' }, resolve));
+  assert.equal(response.status, 'ok');
+  assert.deepEqual(storageData.relatedDomainMarks || {}, {});
+});
+
+test('ending a session removes its related-domain exceptions', async () => {
+  storageData.activeSession = { id: 'ending-related-scope', intent: 'Draft quarterly report',
+    startTime: Date.now(), isActive: true, events: [] };
+  storageData.relatedDomainMarks = { 'distraction.localhost': { count: 1, lastMarkedAt: Date.now() } };
+  await reloadConfig();
+  const response = await new Promise(resolve => messageListener({
+    type: 'END_ACTIVE_SESSION', sessionId: 'ending-related-scope',
+  }, { url: 'chrome-extension://mock/newtab.html' }, resolve));
+  assert.equal(response.status, 'ok');
+  assert.deepEqual(storageData.relatedDomainMarks || {}, {});
 });

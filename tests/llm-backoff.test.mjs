@@ -51,3 +51,24 @@ test('_resetBackoffCallbackForTest clears the registered callback', () => {
   assert.equal(called, false, 'callback should not fire after reset');
   clearLlmBackoff();
 });
+test('parseRetryAfterMs prefers the Retry-After header and bounds every hint', async () => {
+  const { MAX_BACKOFF_MS, MIN_BACKOFF_MS, DEFAULT_QUOTA_BACKOFF_MS } = await import('../llm-backoff.js');
+  const now = Date.parse('2026-09-27T00:00:00Z');
+  assert.equal(parseRetryAfterMs('retry in 5s', now, '120'), 120_000);
+  assert.equal(parseRetryAfterMs('', now, 'Sun, 27 Sep 2026 00:02:00 GMT'), 120_000);
+  assert.equal(parseRetryAfterMs('retry in 1e9s', now), DEFAULT_QUOTA_BACKOFF_MS);
+  assert.equal(parseRetryAfterMs('retry in 999999999s', now), MAX_BACKOFF_MS);
+  assert.equal(parseRetryAfterMs('', now, '0'), MIN_BACKOFF_MS);
+  assert.equal(parseRetryAfterMs('', now, 'garbage'), DEFAULT_QUOTA_BACKOFF_MS);
+  assert.equal(parseRetryAfterMs('retry in .s', now), DEFAULT_QUOTA_BACKOFF_MS);
+});
+
+test('setQuotaBackoff ignores non-finite windows instead of storing NaN', () => {
+  clearLlmBackoff();
+  let received = null;
+  registerBackoffCallback((until) => { received = until; });
+  setQuotaBackoff({ retryAfterMs: Number.NaN, now: 1000 });
+  assert.ok(Number.isFinite(received));
+  _resetBackoffCallbackForTest();
+  clearLlmBackoff();
+});

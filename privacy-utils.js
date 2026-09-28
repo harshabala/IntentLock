@@ -4,6 +4,8 @@ export const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const ERROR_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 export const MAX_SESSION_HISTORY = 100;
 export const MAX_ERROR_LOG_ENTRIES = 200;
+// A session nobody ended (closed laptop, forgotten window) stops collecting.
+export const ACTIVE_SESSION_MAX_MS = 24 * 60 * 60 * 1000;
 
 const SECRET_KEY_RE = /(api[-_]?key|access[-_]?token|(?:client|refresh|id|oauth)[-_]?token|token|auth(?:orization)?|bearer|cookie|password|secret|credential|private[-_]?key)/i;
 const SECRET_QUERY_RE = /([?#&](?:x[-_]?api[-_]?key|api[-_]?key|client[-_]?secret|app[-_]?secret|access[-_]?token|(?:client|refresh|id|oauth)[-_]?token|auth(?:orization)?|bearer|cookie|password|secret|credential|private[-_]?key|signature|sig|token|key)=)[^&#\s]*/gi;
@@ -85,25 +87,42 @@ function normalizedHostname(value) {
   }
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Completed-session summaries keep only these fields. Anything else an older
+// version stored (event arrays, plans, URLs, notes) is dropped on sanitize.
+export const HISTORY_ENTRY_FIELDS = Object.freeze([
+  'id', 'intent', 'startTime', 'endTime', 'timeBudget', 'driftCount', 'totalEvents',
+  'activeMs', 'alignedActiveMs', 'onIntentRatio', 'interventionCount', 'overrideCount',
+  'reportViewed', 'overrides', 'topDomains',
+]);
+
 export function sanitizeHistoryEntry(entry) {
-  if (!entry || typeof entry !== 'object') return null;
-  const copy = redactSecrets({ ...entry });
-  delete copy.events;
+  if (!isPlainObject(entry)) return null;
+  const known = Object.fromEntries(HISTORY_ENTRY_FIELDS
+    .filter((field) => Object.prototype.hasOwnProperty.call(entry, field))
+    .map((field) => [field, entry[field]]));
+  const copy = redactSecrets(known);
   if (Array.isArray(entry.overrides)) {
-    copy.overrides = entry.overrides.map((override) => ({
-      timestamp: override.timestamp || 0,
+    // Reflection text is never kept in a summary; older entries lose it here.
+    copy.overrides = entry.overrides.filter(isPlainObject).map((override) => ({
+      timestamp: Number.isFinite(override.timestamp) ? override.timestamp : 0,
       hostname: normalizedHostname(override.hostname) || hostnameFromUrl(override.url),
-      reflection: typeof override.reflection === 'string' ? redactSecrets(override.reflection) : null,
     }));
   }
   if (Array.isArray(entry.topDomains)) {
-    copy.topDomains = entry.topDomains.map((domain = {}) => ({
+    copy.topDomains = entry.topDomains.filter(isPlainObject).map((domain) => ({
       hostname: normalizedHostname(domain.hostname || domain.domain),
       activeMs: Number.isFinite(domain.activeMs) ? Math.max(0, domain.activeMs) : 0,
       aligned: domain.aligned === true,
       alignedMs: Number.isFinite(domain.alignedMs) ? Math.max(0, domain.alignedMs) : 0,
     }));
   }
+  // Screens iterate these; a corrupted non-array value must not break them.
+  if (!Array.isArray(copy.overrides)) delete copy.overrides;
+  if (!Array.isArray(copy.topDomains)) delete copy.topDomains;
   return copy;
 }
 

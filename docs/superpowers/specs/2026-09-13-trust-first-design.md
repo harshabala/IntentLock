@@ -1,0 +1,25 @@
+# Trust-first completion design
+
+Approved direction: user approved trust-first on September 6 and instructed completion of the six-area scope on September 13, 2026. This is an engineering acceptance contract, not a claim of product perfection.
+
+## Scope and choices
+
+Keep Chrome MV3, vanilla JavaScript, offline heuristics, decisive full-page interventions and optional AI. No accounts, telemetry, gamification, framework rewrite, runtime dependencies or new analytics dashboard. Preserve the existing typography and visual language. Improve operational trust before visual ornament.
+
+1. The service worker is the authoritative mutation owner. Persist a monotonic privacy epoch and deletion-in-progress marker; stale operations cannot restore deleted state across runtimes or worker revival. A partial deletion fails closed for collection and can be retried. Success means both storage areas have been cleared of user data; a non-personal safety marker may remain.
+2. API keys have one canonical session-storage location, never a new local fallback. Migration is serialized and only removes a source after confirmed canonical persistence. Missing session storage disables keyed AI, not offline enforcement. Explicit removal clears every legacy alias. Privacy changes invalidate pending provider work through body consumption and downstream cache/UI use.
+3. Active sessions expire after 24 hours without a new session start. Persist only origin-level event URLs; full navigation URLs needed to restore a currently locked tab are restricted to live intervention state and removed at resolution/expiry. Completed summaries use an allowlist; new summaries omit free-text reflections and per-event browsing. Keep bounded 30-day/100-entry summaries and 14-day/200-entry sanitized diagnostics; prune on startup and an alarm, not just display/export. Existing history is sanitized under these stated constraints, not silently exported. Intent remains in the current session and bounded completed summary, disclosed as free text rather than described as anonymous.
+4. Correct cumulative dwell accounting, hostname-boundary scope, explicit rule precedence and legitimate writing/coding work. Explicit allow suppresses drift enforcement, not the independent time budget and not automatically alignment metrics. Session-related corrections remain scoped to that session and matched host/descendants, never parent or sibling domains. Neither inferred keywords nor optional AI may overrule an explicit permission/correction. Use a versioned synthetic corpus, with false interruptions and missed drift reported separately; the policy score is not a calibrated probability.
+5. Show the effective rules before starting and the actual reason at intervention. Explain five-minute override versus session-related correction and time expiry. Mutation-dependent screens wait for verified success; errors retain input and offer retry. Budget is blank or whole minutes 1–480. Dialog keyboard behavior is complete; compulsory locks retain deliberate exit actions rather than Escape dismissal.
+6. Expand real Chromium journeys and add browser CI. Test worker/browser restart, same-URL tabs, separate windows, timer expiry, deletion while locked and provider/privacy races with synthetic data. Maintain release packaging/version validation and update truthful architecture/privacy/install/update documentation. Manual assistive-technology and live-user evidence remain explicitly recorded external gates.
+
+## Acceptance and release boundary
+
+Every implementation task needs failing regression evidence, passing focused/full tests, independent specification review and then quality review. Final integration adds browser tests, packaging and CI. No silent test skips or substituted production runtime. Do not merge, publish a store release, recruit participants or send study messages without explicit instructions. Existing GitHub update authorization permits pushing reviewed changes and updating the existing draft PR.
+
+The seven-day voluntary pilot kit already exists. Actual recruitment, consent, owner/contact/channel decisions and subjective usefulness evidence cannot be replaced with synthetic tests or fabricated outcomes. Report those as pending, not as completed development.
+
+## Verified platform references
+
+- [Chrome storage API](https://developer.chrome.com/docs/extensions/reference/api/storage/): session storage is memory-backed, restricted to trusted contexts by default, and cleared on extension disable/reload/update and browser restart. Local storage is asynchronous and persists; a runtime-local queue is not cross-context coordination.
+- [Playwright extension testing](https://playwright.dev/docs/chrome-extensions): use bundled Chromium and a persistent context for unpacked extensions. Keep lifecycle tests distinct from ordinary page reload tests.

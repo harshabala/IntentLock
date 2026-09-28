@@ -83,7 +83,7 @@ test('manifest-ordered classic scripts bootstrap content tracking in one VM cont
   assert.equal(calls.storageChangedListeners.length, 1);
   assert.equal(calls.runtimeMessageListeners.length, 1);
   assert.equal(calls.storageGets.length, 1);
-  assert.deepEqual(Array.from(calls.storageGets[0]), ['activeSession', 'trackingEnabled']);
+  assert.deepEqual(Array.from(calls.storageGets[0]), ['activeSession', 'trackingEnabled', 'privacyMutationState']);
   assert.ok(calls.documentListeners.has('visibilitychange'));
   assert.ok(calls.windowListeners.has('beforeunload'));
   assert.ok(calls.windowListeners.has('popstate'));

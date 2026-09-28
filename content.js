@@ -7,6 +7,19 @@ let pageTracker = null;
 let overlay = null;
 let trackingActive = false;
 let pendingIntervention = null;
+let privacyRevision = 0;
+// Dwell stops accumulating while the system is idle or the session timer is paused.
+let systemIdle = false;
+let sessionPaused = false;
+
+function applyTrackerIdle() {
+  if (pageTracker) pageTracker.setIdle(systemIdle || sessionPaused);
+}
+
+function setSessionPaused(session) {
+  sessionPaused = Number.isFinite(session?.pausedAt);
+  applyTrackerIdle();
+}
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -31,6 +44,7 @@ function ensureTracker() {
   pageTracker = createPageTracker({
     onReport: (payload) => sendContentEvent(payload),
   });
+  applyTrackerIdle();
   return pageTracker;
 }
 
@@ -103,7 +117,10 @@ function stopTracking() {
 }
 
 function syncSessionState() {
-  chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+  const revision = privacyRevision;
+  chrome.storage.local.get(['activeSession', 'trackingEnabled', 'privacyMutationState'], (result) => {
+    if (revision !== privacyRevision || result.privacyMutationState?.deleting) return;
+    setSessionPaused(result.activeSession);
     if (result.activeSession?.isActive && result.trackingEnabled !== false) {
       startTracking();
     } else {
@@ -117,6 +134,7 @@ function syncSessionState() {
     }
 
     sendRuntimeMessage({ type: 'GET_INTERVENTION_STATE' }).then(({ response }) => {
+      if (revision !== privacyRevision) return;
       if (response?.ok && response.state) {
         pendingIntervention = response.state;
         ensureOverlay().show({
@@ -131,13 +149,27 @@ function syncSessionState() {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
+  const sessionChanged = changes.activeSession && (
+    changes.activeSession.oldValue?.id !== changes.activeSession.newValue?.id ||
+    changes.activeSession.oldValue?.isActive !== changes.activeSession.newValue?.isActive
+  );
+  if (changes.privacyMutationState || sessionChanged || changes.trackingEnabled) privacyRevision++;
+  if (changes.activeSession) setSessionPaused(changes.activeSession.newValue);
+  if (changes.privacyMutationState?.newValue?.deleting) {
+    stopTracking();
+    if (overlay) overlay.hide();
+    pendingIntervention = null;
+    return;
+  }
   if (changes.trackingEnabled && changes.trackingEnabled.newValue === false) {
     stopTracking();
     if (overlay) overlay.hide();
     pendingIntervention = null;
   }
   if (changes.trackingEnabled?.newValue === true) {
-    chrome.storage.local.get(['activeSession'], (result) => {
+    const revision = privacyRevision;
+    chrome.storage.local.get(['activeSession', 'privacyMutationState'], (result) => {
+      if (revision !== privacyRevision || result.privacyMutationState?.deleting) return;
       if (result.activeSession?.isActive) startTracking();
     });
   } else if (changes.activeSession?.newValue?.isActive && changes.trackingEnabled?.newValue !== false) {
@@ -149,7 +181,12 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'SHOW_INTERVENTION') {
-    chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+    const revision = privacyRevision;
+    chrome.storage.local.get(['activeSession', 'trackingEnabled', 'privacyMutationState'], (result) => {
+      if (revision !== privacyRevision || result.privacyMutationState?.deleting) {
+        sendResponse({ shown: false, reason: 'data_deleted' });
+        return;
+      }
       if (result.trackingEnabled === false || !result.activeSession?.isActive) {
         sendResponse({ shown: false, reason: 'tracking_disabled' });
         return;
@@ -169,7 +206,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'HIDE_INTERVENTION') {
+  if (message.type === 'HIDE_INTERVENTION' || message.type === 'DATA_DELETION_STARTED' || message.type === 'DATA_DELETED') {
+    privacyRevision++;
+    stopTracking();
     if (overlay) overlay.hide();
     pendingIntervention = null;
     sendResponse({ hidden: true });
@@ -183,7 +222,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'IDLE_STATE') {
-    if (pageTracker) pageTracker.setIdle(Boolean(message.idle));
+    systemIdle = Boolean(message.idle);
+    applyTrackerIdle();
     sendResponse({ status: 'ok' });
     return true;
   }

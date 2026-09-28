@@ -1,3 +1,4 @@
+import { initializeStorageClient } from './storage-client.js';
 // Load and apply theme override as early as possible
 chrome.storage.local.get(['theme'], (result) => {
   const theme = result.theme || 'auto';
@@ -24,14 +25,21 @@ import {
   clearErrorLog,
   formatErrorLogForExport,
 } from './error-log.js';
-import { beginStorageDeletion, endStorageDeletion } from './storage-queue.js';
+let privacyRevision = 0;
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'DATA_DELETION_STARTED') beginStorageDeletion();
-  if (message?.type === 'DATA_DELETED') endStorageDeletion();
+  if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') privacyRevision++;
 });
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const listEl = document.getElementById('error-log-list');
   const emptyEl = document.getElementById('empty-log');
   const copyBtn = document.getElementById('copy-log-btn');
@@ -88,9 +96,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function refresh() {
-    allEntries = await getErrorLog();
-    renderEntries();
+    const revision = privacyRevision;
+    try {
+      const entries = await getErrorLog();
+      if (revision !== privacyRevision) return;
+      allEntries = entries;
+      renderEntries();
+    } catch (error) { showStatus(error.message); }
   }
+
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+      allEntries = [];
+      renderEntries();
+    }
+  });
 
   document.querySelectorAll('.diagnostics-filters .filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -125,10 +145,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   clearBtn.addEventListener('click', async () => {
-    await clearErrorLog();
-    allEntries = [];
-    renderEntries();
-    showStatus('Diagnostic log cleared.');
+    clearBtn.disabled = true;
+    try {
+      await clearErrorLog();
+      allEntries = [];
+      renderEntries();
+      showStatus('Diagnostic log cleared.');
+    } catch (error) { showStatus(error.message); }
+    finally { clearBtn.disabled = false; }
   });
 
   refresh();

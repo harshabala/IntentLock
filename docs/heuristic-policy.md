@@ -141,9 +141,9 @@ Stored in `chrome.storage.local` under the key `heuristicPolicy`, version 1:
 
 ### Precedence (highest to lowest)
 
-1. `customAllowDomains` match → **allow** (category block ignored)
-2. `customBlockDomains` match → **block** (category allow ignored)
-3. `categoryPolicies[DOMAIN_TO_CATEGORY[hostname]]`
+1. Session-related correction (marked host or its subdomains, never a parent or sibling) → **no drift enforcement**; optional AI is not consulted
+2. Custom rule → the most specific matching `customAllowDomains` / `customBlockDomains` entry wins. A rule covers its domain and subdomains at label boundaries (`reddit.com` covers `old.reddit.com`, never `reddit.com.evil.test`). An allow wins a tie with a block of the same scope. A custom allow suppresses drift enforcement (dwell, scoring and optional AI), not the separate time budget.
+3. `categoryPolicies[DOMAIN_TO_CATEGORY[hostname]]` — exact listed host, or its `m.` / `mobile.` host (`m.youtube.com` follows `youtube.com`). Other subdomains do not inherit a parent's category.
 4. Domain not in any category → **neutral** (behavioral signals still score)
 
 ### `resolveDomainPolicy(hostname, policy)`
@@ -188,20 +188,21 @@ Returns `'block' | 'warn' | 'allow' | 'neutral'`. Safe with `null` policy (retur
 
 ```js
 const CATEGORY_ALIGNMENT = {
+  deep_work:              ['productivity'],
   job_search:             ['job_boards', 'professional_network'],
-  deep_work:              ['documentation', 'productivity', 'code_forge', 'ai_tools'],
   coding:                 ['code_forge', 'documentation', 'ai_tools'],
+  research:               ['documentation', 'news'],
   learning:               ['documentation', 'code_forge', 'ai_tools'],
-  writing:                ['documentation', 'productivity', 'ai_tools'],
-  research:               ['documentation', 'news', 'ai_tools'],
   admin:                  ['email', 'messaging', 'productivity'],
+  communication:          ['messaging', 'email'],
   creative:               ['productivity', 'ai_tools'],
   health:                 ['health'],
   shopping:               ['shopping'],
-  communication:          ['email', 'messaging'],
-  entertainment_allowed:  ['streaming', 'gaming', 'short_video', 'social_media'],
+  entertainment_allowed:  ['short_video', 'streaming', 'gaming', 'social_media', 'memes'],
 };
 ```
+
+Technical Q&A hosts (`stackoverflow.com`, `*.stackexchange.com`, `superuser.com`, `serverfault.com`, `askubuntu.com`, `mathoverflow.net`) are catalogued as forums but count as aligned for `coding` and `learning` intents only. A custom block still wins.
 
 ---
 
@@ -214,18 +215,24 @@ evaluatePolicyDrift({
   events: Array,         // session.events — last N tab/dwell/SPA events
   policy: HeuristicPolicy | null,  // null → fail-open to deep_work/balanced
   now: number,           // Date.now() — injectable for tests
+  relatedHostnames: string[], // session-related corrections
 }) → {
   shouldIntervene: boolean,
   score: number,          // 0–1
   reason: string,         // machine code: 'blocked_category' | 'aligned' | 'empty_terms' | 'invalid_url' | ...
   reasonLabel: string,    // human-readable for intervention UI
   signals: string[],      // e.g. ['blocked_category:social_media', 'tab_switches:5', 'dwell:130s']
+  explicit?: true,        // present for 'related_correction' / 'explicit_allow'; the worker then skips optional AI
 }
 ```
+
+Dwell counts each report's `dwellDeltaMs` once (events without a delta contribute their largest cumulative `dwellMs`). Events that are malformed, future-dated or older than two minutes are ignored.
 
 Fast paths (return immediately):
 - `url` fails `new URL()` → `{ shouldIntervene: false, reason: 'invalid_url' }`
 - Policy null/invalid → fail-open to `buildDefaultPolicy('deep_work', 'balanced')`
+- Session-related correction matches → score 0, `reason: 'related_correction'`
+- Custom allow is the most specific rule → score 0, `reason: 'explicit_allow'`
 - `domainPolicy === 'block'` + not category-aligned + not keyword-aligned → score 0.95, `reason: 'blocked_category'`
 - `domainPolicy === 'allow'` + category-aligned → score 0, `reason: 'aligned'`
 - `intentTerms(intent).length === 0` → score 0, `reason: 'empty_terms'`
@@ -238,8 +245,8 @@ Fast paths (return immediately):
 
 Converts the old flat domain list to a v1 policy:
 
-- Domains already in `DOMAIN_TO_CATEGORY` (e.g. `twitter.com`, `youtube.com`) are covered by category policy — **not** added to `customBlockDomains`
-- Domains not in any category (user's custom additions) are preserved in `customBlockDomains`
+- Domains whose category the default policy already blocks (e.g. `twitter.com`, `youtube.com`) are covered by category policy — **not** added to `customBlockDomains`
+- Every other valid entry, including catalogued domains the default would allow or warn on (e.g. `github.com`), is preserved in `customBlockDomains`; malformed entries are dropped
 - Base policy: `buildDefaultPolicy('deep_work', 'balanced')`
 
 Called automatically in `background.js` `loadConfig()` if `heuristicPolicy` is missing but `customDistractionSites` exists. Result is persisted back to storage.

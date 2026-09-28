@@ -6,7 +6,7 @@
 
 - Chrome (any recent version supporting MV3)
 - Node.js 18+ (for running tests — not needed for the extension itself)
-- No dependencies, bundler, or build install is required; the repository scripts use Node and the system `zip` utility.
+- Loading the extension and running Node tests require no dependency install or bundler. Packaging uses Node and the system `zip` utility. The separate browser suite needs npm dependencies and Playwright's Chromium.
 
 ---
 
@@ -51,21 +51,38 @@ Or just point Chrome at the repo folder and avoid the sync entirely.
 # Single suite
 node --test tests/heuristic-policy.test.mjs
 
-# All suites
+# All dependency-free Node suites (not browser journeys)
 npm test
 
 # Verbose (shows individual test names)
-node --test --reporter=spec tests/*.mjs
+node --test --test-reporter=spec tests/*.test.mjs
 
 # Manifest, runtime reference, workflow, packaging, and version checks
 npm run verify:static
-npm run validate:version -- v1.5.1
+npm run validate:version -- v1.6.0
 
 # Deterministic release artifact (writes to dist/ by default)
 npm run package
 ```
 
-All tests use Node's built-in `node:test` + `assert/strict`. No test runner to install.
+The Node suites use built-in `node:test` + `assert/strict`; `npm test` needs no
+dependency install and does not discover browser tests. CI (`.github/workflows/test.yml`)
+runs `npm test`, `npm run verify:static`, version validation and a package build on
+Node 18/20/22, plus a separate `browser` job that installs the pinned Playwright and
+Chromium and runs the real journeys with the browser sandbox enabled. Locally, run the
+real browser suite separately:
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:browser
+```
+
+See [browser journeys](browser-journeys.md) for the pinned browser, isolation,
+actual coverage, historical results and setup failures. See
+[manual acceptance for 1.6.0](manual-acceptance.md) for lifecycle, real-time and
+accessibility checks, and [pilot preparation](pilot/README.md) for the voluntary
+seven-day protocol. Neither automated success nor preparation means a pilot ran.
 
 The release ZIP is built from an explicit runtime allowlist with stable entry order and timestamps. It excludes tests, docs, source plans, package metadata, and development helpers. GitHub Actions validates the tag against `manifest.json` before attaching the ZIP to a GitHub Release.
 
@@ -73,8 +90,8 @@ The release ZIP is built from an explicit runtime allowlist with stable entry or
 
 | File | What it covers |
 |------|---------------|
-| `heuristic-policy.test.mjs` | Intent classification, site lookup, policy builders, drift scoring, migration (48 tests) |
-| `background.test.mjs` | Service worker helper functions (2 tests) |
+| `heuristic-policy.test.mjs` | Intent classification, site lookup, policy builders, drift scoring, migration |
+| `background.test.mjs` | Service worker helper functions |
 | `drift.test.mjs` | Legacy heuristic drift scoring |
 | `drift-cache.test.mjs` | TTL cache hit/miss/eviction |
 | `drift-threshold.test.mjs` | Score threshold boundary conditions |
@@ -119,7 +136,7 @@ IntentLock/
 ├── history.html / .js             # Session history viewer
 ├── icon.svg / icon*.png           # Extension icons
 ├── CHANGELOG.md
-├── tests/                         # node:test test suites
+├── tests/                         # Node suites; browser/ contains Playwright journeys
 └── docs/                          # This documentation
     ├── architecture.md
     ├── heuristic-policy.md
@@ -179,17 +196,34 @@ No other files need to change — the settings grid and policy schema pick it up
 
 ## Security notes
 
-- **No `eval`, no `innerHTML` with user input** anywhere in the codebase
-- **No remote code** — all domain data and rules ship in the extension package. `providers.js` makes `fetch()` calls only when the user has configured a provider and a session is active (LLM inference, not code loading)
-- **No telemetry** — `heuristicPolicy` and all session data stay in `chrome.storage.local`
-- **API key storage** — `chrome.storage.session` is cleared on browser close when available; a local `llmApiKey` fallback is used only when session storage is unavailable.
-- **Tracking switch is authoritative** — disabling tracking stops content tracking, background event/drift evaluation, and provider calls.
-- **Provider endpoint policy** — built-in cloud endpoints are fixed; custom cloud endpoints require HTTPS, and local HTTP endpoints must be loopback-only. Gemini query-key authentication is the only built-in exception because the provider requires it.
-- **Provider context minimization** — LLM prompts receive origin-only browsing context (no path, query, or fragment) and explicitly mark page-derived values as untrusted data.
-- **Bounded retention** — completed session history is retained for 30 days (maximum 100 entries); diagnostics are retained for 14 days (maximum 200 entries). Export sanitizes legacy URL fields and recursively redacts credentials.
-- **Deletion is final** — Delete all data clears local and session storage and does not recreate an LLM provider configuration.
-- **Domain validation** on user input in Settings: `HOSTNAME_RE = /^[a-z0-9][a-z0-9\-.]*\.[a-z]{2,}$/` — rejects IPs, wildcards, protocols, and paths
-- **Fail-open** — bad policy or missing storage key never throws to the caller; falls back to `buildDefaultPolicy('deep_work', 'balanced')`
+These notes describe current 1.6.0 source, not a completed security audit.
+Earlier 1.5.1 remediation work was not all merged; do not inherit its guarantees.
+
+- The manifest permits packaged scripts and broad HTTP/HTTPS page access.
+  Optional AI performs inference through the configured provider and can send
+  declared intent and browsing context off-device. The pilot adds no telemetry
+  and requires AI to remain unconfigured in a fresh profile.
+- `llm.js` minimizes browsing URLs to origins in drift prompts. This does not
+  anonymize declared intent or other free text. Do not use real secrets in QA.
+- Settings writes keys to `chrome.storage.session` when available, with a local
+  fallback otherwise. `providers.js` can also read legacy local key aliases even
+  when session storage exists. Session-only key storage is not an absolute guarantee.
+- Built-in provider endpoints are validated; custom HTTP is restricted to loopback
+  and custom cloud endpoints require HTTPS. Use a non-forwarding local fake
+  provider for QA, never a live cloud account or real API key.
+- Tracking opt-out is intended to stop new event/drift evaluation and calls; the
+  browser suite covers overlay removal and no appended events after opt-out.
+  In-flight provider work and storage/deletion races need the manual checks.
+- Local active-session events/lock state can contain URLs. History sanitization
+  removes event arrays and normalizes selected URL fields, but retains intent,
+  reflections and hostnames. Secret-pattern redaction is not anonymization.
+- Retention helpers use 30 days/100 completed sessions and 14 days/200 diagnostic
+  entries. Filtering a view is not proof that expired storage was erased on every
+  path or on a continuous timer. Verify both storage and views manually.
+- Delete all data requests worker-owned local/session clearing. The automated
+  journey verifies deletion after tracking opt-out and page reload; it does not
+  prove durability through all queued writes, migrations, provider responses or
+  browser restarts. Do not claim deletion is universally final without evidence.
 
 ---
 

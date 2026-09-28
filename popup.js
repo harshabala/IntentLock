@@ -1,14 +1,24 @@
+import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
+import { activeElapsedMs, isSessionPaused } from './session-metrics.js';
 
 let dataDeletionInProgress = false;
+let privacyRevision = 0;
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+    privacyRevision++;
+    const content = document.getElementById('content');
+    if (content) content.textContent = '';
+  }
   if (message?.type === 'DATA_DELETION_STARTED') dataDeletionInProgress = true;
   if (message?.type === 'DATA_DELETED') dataDeletionInProgress = false;
 });
 
 function loadSessionHistory(callback) {
-  chrome.storage.local.get(['sessionHistory'], (result) => {
+  const revision = privacyRevision;
+  chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+    if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) return;
     const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
     const sanitizedHistory = sanitizeSessionHistory(rawHistory);
     callback(sanitizedHistory);
@@ -51,7 +61,15 @@ function quotedIntent(text) {
   return el;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await initializeStorageClient(); }
+  catch (error) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'alert');
+    status.textContent = error.message;
+    document.body.appendChild(status);
+    return;
+  }
   const content = document.getElementById('content');
 
   function addFooter(parent) {
@@ -98,14 +116,14 @@ document.addEventListener('DOMContentLoaded', () => {
     dialog.setAttribute('aria-labelledby', h3.id);
 
     const p = document.createElement('p');
-    const elapsed = Math.round((Date.now() - (session.startTime || Date.now())) / 60000);
+    const elapsed = Math.round(activeElapsedMs(session) / 60000);
     const events = Array.isArray(session.events) ? session.events : [];
     const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
     const overrides = typeof session.overrideCount === 'number'
       ? session.overrideCount
       : storedOverrides.length > 0
         ? storedOverrides.length
-        : events.filter((e) => e.actionType === 'OVERRIDE').length;
+        : events.filter((e) => e?.actionType === 'OVERRIDE').length;
     p.textContent = `${elapsed} minutes. ${overrides} override${overrides !== 1 ? 's' : ''}. End this session?`;
 
     const actions = document.createElement('div');
@@ -119,9 +137,29 @@ document.addEventListener('DOMContentLoaded', () => {
     confirmBtn.textContent = 'End session';
 
     function closeDialog() {
+      document.removeEventListener('keydown', onKeydown, true);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       if (trigger && typeof trigger.focus === 'function') trigger.focus();
     }
+
+    // Modal keyboard contract: Escape cancels, Tab and Shift+Tab stay inside.
+    function onKeydown(event) {
+      if (!overlay.parentNode) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDialog();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [cancelBtn, confirmBtn].filter(button => !button.disabled);
+      const index = focusable.indexOf(document.activeElement);
+      event.preventDefault();
+      const next = event.shiftKey
+        ? focusable[(index <= 0 ? focusable.length : index) - 1]
+        : focusable[(index + 1) % focusable.length];
+      next?.focus();
+    }
+    document.addEventListener('keydown', onKeydown, true);
 
     cancelBtn.addEventListener('click', () => closeDialog());
     confirmBtn.addEventListener('click', () => {
@@ -175,7 +213,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateUI() {
-    chrome.storage.local.get(['activeSession', 'llmBackoffUntil'], (result) => {
+    const revision = privacyRevision;
+    chrome.storage.local.get(['activeSession', 'llmBackoffUntil', 'privacyMutationState'], (result) => {
+      if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) return;
       const session = result.activeSession;
 
       if (!session || !session.isActive) {
@@ -191,7 +231,14 @@ document.addEventListener('DOMContentLoaded', () => {
       content.appendChild(timeEl);
 
       function updateTime() {
-        const elapsed = Math.round((Date.now() - session.startTime) / 60000);
+        const elapsed = Math.round(activeElapsedMs(session) / 60000);
+        if (isSessionPaused(session)) {
+          timeEl.textContent = session.timeBudget
+            ? `Paused · ${Math.max(0, session.timeBudget - elapsed)} min remaining`
+            : `Paused · ${elapsed} min elapsed`;
+          timeEl.classList.remove('time-exceeded');
+          return;
+        }
         if (session.timeBudget) {
           const remaining = session.timeBudget - elapsed;
           if (remaining > 0) {
@@ -214,12 +261,19 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = 'End session';
       btn.addEventListener('click', (e) => {
         if (dataDeletionInProgress) return;
-        showConfirmEndDialog(session, e.currentTarget, () => {
-          chrome.runtime.sendMessage({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, () => {
-            chrome.runtime.sendMessage({ type: 'SESSION_CLEARED' }, () => {
-              chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
-              window.close();
-            });
+        showConfirmEndDialog(session, e.currentTarget || btn, () => {
+          const epoch = captureStorageEpoch();
+          btn.disabled = true;
+          sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(guardStorageContinuation(response => {
+            if (!response.session) throw new Error('The session could not be ended.');
+            chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html?report=last') });
+            window.close();
+          })).catch(error => {
+            btn.disabled = false;
+            const status = document.createElement('p');
+            status.setAttribute('role', 'alert');
+            status.textContent = error.message;
+            content.appendChild(status);
           });
         });
       });

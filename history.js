@@ -20,10 +20,11 @@ chrome.storage.local.get(['theme'], (result) => {
 });
 
 let dataDeletionInProgress = false;
+let privacyRevision = 0;
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'DATA_DELETION_STARTED') dataDeletionInProgress = true;
-  if (message?.type === 'DATA_DELETED') dataDeletionInProgress = false;
+  if (message?.type === 'DATA_DELETION_STARTED') { dataDeletionInProgress = true; privacyRevision++; }
+  if (message?.type === 'DATA_DELETED') { dataDeletionInProgress = false; privacyRevision++; }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -34,10 +35,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let allSessions = [];
   let currentFilter = 'all';
   let searchQuery = '';
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
+      allSessions = [];
+      historyList.textContent = '';
+      emptyState.classList.remove('hidden');
+    }
+  });
 
   function loadSessionHistory(callback) {
+    const revision = privacyRevision;
     import('./privacy-utils.js').then(({ sanitizeSessionHistory }) => {
-      chrome.storage.local.get(['sessionHistory'], (result) => {
+      chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+        if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) { callback([]); return; }
         const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
         const sanitizedHistory = sanitizeSessionHistory(rawHistory);
         callback(sanitizedHistory);
