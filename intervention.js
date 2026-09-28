@@ -43,6 +43,25 @@ function replaceWithMessage(title, body) {
   return container;
 }
 
+const actionContainers = new WeakSet();
+
+function addActionButton(container, label, onClick) {
+  if (!container) return null;
+  const button = document.createElement('button');
+  button.type = 'button';
+  const first = !actionContainers.has(container);
+  actionContainers.add(container);
+  button.className = first ? 'primary-btn' : 'btn--ghost';
+  button.textContent = label;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try { await onClick(); } finally { button.disabled = false; }
+  });
+  container.appendChild(button);
+  if (first) button.focus?.();
+  return button;
+}
+
 function closeCurrentTab(onFailure = setError) {
   return new Promise((resolve) => chrome.tabs.getCurrent((tab) => {
     if (chrome.runtime.lastError || !tab?.id) {
@@ -193,8 +212,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else if (interventionState?.reason) {
     reasonText.textContent = interventionState.reason;
   }
+  // A failed lookup is not an expired lock: offer a retry, not a dead end.
+  const lookupFailed = Boolean(stateResult.error) || stateResult.response?.ok !== true;
+  if (lookupFailed) {
+    const failed = replaceWithMessage('Could not load this lock',
+      'IntentLock could not read this lock. Try again, or close this tab.');
+    addActionButton(failed, 'Try again', () => globalThis.location.reload());
+    addActionButton(failed, 'Close this tab', () => closeCurrentTab((error) => setError(error)));
+    setError(stateResult.error?.message || stateResult.response?.error || 'The lock lookup failed.');
+    return;
+  }
   if (!interventionState) {
-    setError(stateResult.response?.error || 'This intervention is no longer active.');
+    const expired = replaceWithMessage('This lock is no longer active',
+      'The session ended or this lock was already resolved.');
+    addActionButton(expired, 'Close this tab', () => closeCurrentTab((error) => setError(error)));
+    addActionButton(expired, 'Start a new session', () => {
+      globalThis.location.href = chrome.runtime.getURL('newtab.html');
+    });
+    return;
   }
   reflectionInput.addEventListener('input', () => {
     const error = document.getElementById('transition-error');
