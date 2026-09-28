@@ -9,6 +9,7 @@ import * as policy from '../heuristic-policy.js';
 import * as logs from '../error-log.js';
 import * as privacy from '../privacy-utils.js';
 import * as metrics from '../session-metrics.js';
+import * as providers from '../providers.js';
 
 const h = privacyChrome();
 globalThis.chrome = h.chrome;
@@ -46,7 +47,7 @@ async function loadPage(file = 'newtab.js') {
     if (type === 'keydown') keydown.add(handler);
   };
   const context = vm.createContext({
-    ...client, ...policy, ...logs, ...privacy, ...metrics, document, chrome: h.chrome,
+    ...client, ...policy, ...logs, ...privacy, ...metrics, ...providers, document, chrome: h.chrome,
     window: { matchMedia, close() {} }, location: { search: '' }, URLSearchParams, crypto, console,
     setInterval: () => 1, clearInterval() {}, setTimeout: () => 1,
     requestAnimationFrame: callback => callback(),
@@ -176,5 +177,33 @@ test('popup end dialog traps Tab, cancels on Escape and restores focus', async (
   assert.equal(document.activeElement, end, 'focus returns to End session');
   assert.equal(h.local.activeSession?.id, 'popup-keys', 'Escape cancels without ending');
   assert.equal(document.pressKey('Tab').defaultPrevented, false, 'the trap is released after closing');
+  await h.send({ type: 'DELETE_ALL_DATA' });
+});
+
+test('newtab shows the effective rules, budget and AI status before starting', async () => {
+  await h.send({ type: 'DELETE_ALL_DATA' });
+  h.local.hasSeenOnboarding = true;
+  h.local.heuristicPolicy = { ...policy.buildDefaultPolicy('deep_work', 'strict'), setupCompleted: true,
+    customBlockDomains: ['a.example', 'b.example'], customAllowDomains: ['c.example'] };
+  let { document } = await loadPage();
+  const summary = () => document.getElementById('effective-rules').textContent;
+  await until(() => summary().length > 0);
+  assert.match(summary(), /2 custom blocks, 1 custom allow/);
+  assert.match(summary(), /no time budget/);
+  assert.match(summary(), /AI second opinion: off \(local rules only\)/);
+  const intent = document.getElementById('intent-input');
+  intent.value = 'fix the login bug in our react app';
+  intent.dispatchEvent({ type: 'input' });
+  const budget = document.getElementById('time-budget');
+  budget.value = '45';
+  budget.dispatchEvent({ type: 'input' });
+  assert.match(summary(), /^Rules: Coding, strict strictness/);
+  assert.match(summary(), /45-minute budget/);
+
+  h.local.llmProviderConfig = { providerId: 'openai', model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1/chat/completions' };
+  ({ document } = await loadPage());
+  await until(() => /OpenAI/.test(document.getElementById('effective-rules').textContent));
+  assert.match(document.getElementById('effective-rules').textContent, /off \(OpenAI key not saved in this browser session\)/);
+  assert.equal(document.getElementById('effective-rules').textContent.includes('sk-'), false);
   await h.send({ type: 'DELETE_ALL_DATA' });
 });

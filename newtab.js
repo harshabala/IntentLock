@@ -19,7 +19,8 @@ chrome.storage.local.get(['theme'], (result) => {
   }
 });
 
-import { mergePolicyWithIntent } from './heuristic-policy.js';
+import { mergePolicyWithIntent, INTENT_CATEGORIES } from './heuristic-policy.js';
+import { getProvider, providerRequiresApiKey } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
 import {
@@ -716,7 +717,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     btn.id = 'start-btn';
     btn.textContent = 'Lock in';
 
-    form.append(intentGroup, timeGroup, btn);
+    // Show the rules this session will actually use before it starts: the
+    // same merged policy the worker enforces, the budget, and AI status.
+    const rulesSummary = document.createElement('p');
+    rulesSummary.id = 'effective-rules';
+    rulesSummary.className = 'field-hint effective-rules';
+    rulesSummary.setAttribute('aria-live', 'polite');
+    let aiStatus = 'AI second opinion: off (local rules only).';
+    const renderRules = () => {
+      const policy = mergePolicyWithIntent(intentInput.value.trim(), cachedHeuristicPolicy);
+      const category = INTENT_CATEGORIES.find(c => c.id === policy.intentCategoryId)?.label || 'General';
+      const blocks = Array.isArray(policy.customBlockDomains) ? policy.customBlockDomains.length : 0;
+      const allows = Array.isArray(policy.customAllowDomains) ? policy.customAllowDomains.length : 0;
+      const rawBudget = timeInput.value.trim();
+      const budget = /^[0-9]+$/.test(rawBudget) && Number(rawBudget) >= 1 && Number(rawBudget) <= 480
+        ? `${Number(rawBudget)}-minute budget`
+        : 'no time budget';
+      rulesSummary.textContent = `Rules: ${category}, ${policy.strictness || 'balanced'} strictness; `
+        + `${blocks} custom block${blocks === 1 ? '' : 's'}, ${allows} custom allow${allows === 1 ? '' : 's'}; `
+        + `${budget}. ${aiStatus}`;
+    };
+    intentInput.addEventListener('input', renderRules);
+    timeInput.addEventListener('input', renderRules);
+    renderRules();
+    const aiRevision = privacyRevision;
+    chrome.storage.local.get(['llmProviderConfig'], (local) => {
+      const provider = getProvider(local?.llmProviderConfig?.providerId);
+      const finish = (hasKey) => {
+        if (aiRevision !== privacyRevision || !provider) return;
+        const needsKey = providerRequiresApiKey(provider.id, local.llmProviderConfig);
+        aiStatus = needsKey && !hasKey
+          ? `AI second opinion: off (${provider.label} key not saved in this browser session).`
+          : `AI second opinion: ${provider.label}. Local rules still decide first.`;
+        renderRules();
+      };
+      if (!provider) return;
+      if (chrome.storage.session) chrome.storage.session.get(['llmApiKey'], (s) => finish(Boolean(s?.llmApiKey)));
+      else finish(false);
+    });
+
+    form.append(intentGroup, timeGroup, rulesSummary, btn);
     container.appendChild(form);
 
     const statusMsg = document.createElement('div');
