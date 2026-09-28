@@ -8,8 +8,17 @@
 - AI verdicts must be a plain object with a boolean verdict and a 0–1 confidence; anything else cannot lock.
 
 ### Privacy
+- Session events store only origins plus a precomputed intent-keyword flag; stored events from older versions are rewritten.
+- Session summaries drop reflection text and keep only a fixed set of known fields; stored summaries are rewritten.
 - Page titles are no longer collected or stored.
 - Sessions not ended within 24 hours end automatically; history and diagnostics are pruned in storage at startup and hourly.
+
+### Added
+- Pause timer / Resume timer on the new-tab session view. Paused time does not count toward dwell or the time budget, no dwell lock fires while paused, and the state survives worker restarts.
+
+### Changed
+- Dwell rules (2 minutes on an unaligned or watched site) now lock the page in place instead of only at the next navigation. Checks use local rules only; existing locks and override cooldowns prevent repeats.
+- Research intents no longer treat every forum as aligned.
 
 ### Fixed
 - Dwell time counted cumulative reports repeatedly (90 s read as 180 s).
