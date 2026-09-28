@@ -383,4 +383,7 @@ test('CI runs every Node suite, release checks and the real Chromium journeys', 
   assert.match(workflow, /node-version: \[18\.x, 20\.x, 22\.x\]/);
   assert.doesNotMatch(workflow, /secrets\./, 'test workflow must not read secrets');
   assert.doesNotMatch(workflow, /chromiumSandbox:\s*false|--no-sandbox/);
+  const config = await readRoot('playwright.config.mjs');
+  assert.match(config, /testDir:\s*'\.\/tests\/browser'/);
+  assert.match(config, /testMatch:\s*'\*\*\/\*\.spec\.mjs'/, 'every browser spec, including lifecycle, runs in CI');
 });

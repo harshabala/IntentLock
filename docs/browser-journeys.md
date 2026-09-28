@@ -61,6 +61,15 @@ the install command when it is absent. A launch/dependency error also fails the 
 
 ## Automated coverage
 
+`tests/browser/lifecycle.spec.mjs` adds real-Chromium lifecycle checks: a lock and a
+paused timer survive a service-worker restart (the worker is stopped through its
+DevTools target and revived by page activity); the same URL in two tabs locks
+independently and data deletion unlocks both, after which the fallback page reports
+the lock as no longer active; and a real one-minute budget expires and locks the
+active page. Separate windows are not covered: headless Chromium moves a tab opened
+in a new window back into the first window. Shared UI steps live in
+`tests/browser/steps.mjs`.
+
 | Scenario | Actual assertion |
 | --- | --- |
 | First run without an API key | Welcome, policy settings, rehearsal heading and disabled rehearsal Continue; then Got it opens intent form. Settings key is blank. |
