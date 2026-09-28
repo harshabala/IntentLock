@@ -688,7 +688,9 @@ const CATEGORY_ALIGNMENT = {
   deep_work:           ['productivity'],
   job_search:          ['job_boards', 'professional_network'],
   coding:              ['code_forge', 'documentation', 'ai_tools'],
-  research:            ['documentation', 'news', 'forums'],
+  // Forums are not research by default: reddit or Hacker News must earn
+  // alignment through intent keywords or an explicit rule.
+  research:            ['documentation', 'news'],
   learning:            ['documentation', 'code_forge', 'ai_tools'],
   admin:               ['email', 'messaging', 'productivity'],
   communication:       ['messaging', 'email'],

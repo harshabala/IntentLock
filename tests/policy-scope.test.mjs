@@ -85,3 +85,18 @@ test('technical Q&A alignment stays narrow', () => {
   const custom = evaluatePolicyDrift({ intent, policy: blocked, events: [], url: 'https://stackoverflow.com/questions/1/x' });
   assert.equal(custom.shouldIntervene, true);
 });
+
+test('research sessions do not treat every forum as aligned', () => {
+  const policy = { ...buildDefaultPolicy('research', 'balanced'), intentCategoryId: 'research' };
+  const intent = 'survey battery chemistry papers';
+  const url = 'https://www.reddit.com/r/funny/comments/1';
+  const dwell = [0, 1, 2, 3].map(i => ({ actionType: 'PAGE_DWELL', url, timestamp: 200_000 - i * 30_000,
+    dwellMs: (4 - i) * 30_000, dwellDeltaMs: 30_000 }));
+  const result = evaluatePolicyDrift({ intent, policy, url, events: dwell, now: 200_000 });
+  assert.equal(result.shouldIntervene, true, JSON.stringify(result));
+  const keyword = evaluatePolicyDrift({ intent, policy, events: dwell, now: 200_000,
+    url: 'https://www.reddit.com/r/batteries/comments/1/battery_chemistry' });
+  assert.equal(keyword.shouldIntervene, false, 'intent keywords still align a forum thread');
+  const docs = evaluatePolicyDrift({ intent, policy, events: [], url: 'https://developer.mozilla.org/en-US/' });
+  assert.equal(docs.shouldIntervene, false);
+});
