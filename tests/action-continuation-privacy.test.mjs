@@ -29,13 +29,22 @@ async function loadPage(file = 'newtab.js') {
   document.body.removeChild = child => { document.body.children = document.body.children.filter(node => node !== child); child.parentNode = null; };
   document.querySelector = selector => document.body.querySelector(selector);
   document.querySelectorAll = selector => document.body.querySelectorAll(selector);
-  document.removeEventListener = () => {};
+  const keydown = new Set();
+  document.removeEventListener = (type, handler) => { if (type === 'keydown') keydown.delete(handler); };
+  document.pressKey = (key, shiftKey = false) => {
+    const event = { key, shiftKey, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    for (const handler of [...keydown]) handler(event);
+    return event;
+  };
   const container = document.createElement('main');
   container.className = 'lock-container';
   container.id = 'content';
   document.body.appendChild(container);
   let ready;
-  document.addEventListener = (type, handler) => { if (type === 'DOMContentLoaded') ready = handler; };
+  document.addEventListener = (type, handler) => {
+    if (type === 'DOMContentLoaded') ready = handler;
+    if (type === 'keydown') keydown.add(handler);
+  };
   const context = vm.createContext({
     ...client, ...policy, ...logs, ...privacy, ...metrics, document, chrome: h.chrome,
     window: { matchMedia, close() {} }, location: { search: '' }, URLSearchParams, crypto, console,
@@ -142,4 +151,30 @@ test('newtab rejects malformed time budgets without starting a session', async (
     await h.send({ type: 'DELETE_ALL_DATA' });
     h.local.hasSeenOnboarding = true;
   }
+});
+
+test('popup end dialog traps Tab, cancels on Escape and restores focus', async () => {
+  await h.send({ type: 'DELETE_ALL_DATA' });
+  await client.sendStorageAction({ type: 'SESSION_STARTED', session: {
+    id: 'popup-keys', intent: 'synthetic intent', isActive: true, startTime: Date.now(), events: [] } });
+  const { document, container } = await loadPage('popup.js');
+  const end = button(container, 'End session');
+  end.focus();
+  end.click();
+  const dialog = document.querySelector('.confirm-overlay');
+  const cancel = button(dialog, 'Cancel');
+  const confirm = button(dialog, 'End session');
+  assert.equal(document.activeElement, cancel);
+  assert.equal(document.pressKey('Tab').defaultPrevented, true);
+  assert.equal(document.activeElement, confirm);
+  document.pressKey('Tab');
+  assert.equal(document.activeElement, cancel, 'Tab wraps to the first control');
+  document.pressKey('Tab', true);
+  assert.equal(document.activeElement, confirm, 'Shift+Tab wraps to the last control');
+  document.pressKey('Escape');
+  assert.equal(document.querySelector('.confirm-overlay'), null);
+  assert.equal(document.activeElement, end, 'focus returns to End session');
+  assert.equal(h.local.activeSession?.id, 'popup-keys', 'Escape cancels without ending');
+  assert.equal(document.pressKey('Tab').defaultPrevented, false, 'the trap is released after closing');
+  await h.send({ type: 'DELETE_ALL_DATA' });
 });

@@ -137,9 +137,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     confirmBtn.textContent = 'End session';
 
     function closeDialog() {
+      document.removeEventListener('keydown', onKeydown, true);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       if (trigger && typeof trigger.focus === 'function') trigger.focus();
     }
+
+    // Modal keyboard contract: Escape cancels, Tab and Shift+Tab stay inside.
+    function onKeydown(event) {
+      if (!overlay.parentNode) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDialog();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [cancelBtn, confirmBtn].filter(button => !button.disabled);
+      const index = focusable.indexOf(document.activeElement);
+      event.preventDefault();
+      const next = event.shiftKey
+        ? focusable[(index <= 0 ? focusable.length : index) - 1]
+        : focusable[(index + 1) % focusable.length];
+      next?.focus();
+    }
+    document.addEventListener('keydown', onKeydown, true);
 
     cancelBtn.addEventListener('click', () => closeDialog());
     confirmBtn.addEventListener('click', () => {
@@ -241,7 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.textContent = 'End session';
       btn.addEventListener('click', (e) => {
         if (dataDeletionInProgress) return;
-        showConfirmEndDialog(session, e.currentTarget, () => {
+        showConfirmEndDialog(session, e.currentTarget || btn, () => {
           const epoch = captureStorageEpoch();
           btn.disabled = true;
           sendStorageAction({ type: 'END_ACTIVE_SESSION', sessionId: session.id }, epoch).then(guardStorageContinuation(response => {
