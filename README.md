@@ -186,6 +186,7 @@ flowchart TD
 | Warn category + unaligned + dwell ≥ 60 s | +0.20 |
 | Warn category + unaligned + dwell ≥ 120 s | Floor score at 0.7 → intervene |
 | Any domain + unaligned + dwell ≥ 120 s | Floor score at 0.7 → intervene |
+| Dwell rules | Re-checked on every 30 s dwell report, so they lock the page in place; local rules only (no AI). Paused timers record no dwell and fire no dwell locks. Cooldowns and existing locks prevent repeats |
 | Threshold | `DRIFT_CONFIDENCE_THRESHOLD = 0.7` |
 
 ### Heuristic policy engine

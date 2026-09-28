@@ -25,6 +25,8 @@ import { sanitizeSessionHistory } from './privacy-utils.js';
 import {
   ON_INTENT_METHOD_COPY,
   PRIVACY_COPY,
+  activeElapsedMs,
+  isSessionPaused,
 } from './session-metrics.js';
 import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { showOnboardingWizard } from './onboarding.js';
@@ -298,11 +300,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     parent.appendChild(timerEl);
 
     function getElapsed() {
-      return Date.now() - session.startTime;
+      return activeElapsedMs(session);
     }
 
     function tick() {
       const elapsed = getElapsed();
+      timerEl.classList.toggle('timer-paused', isSessionPaused(session));
+      if (isSessionPaused(session)) {
+        timeLabel.textContent = 'Paused';
+        timeValue.textContent = formatTime(session.timeBudget
+          ? Math.abs(session.timeBudget * 60000 - elapsed)
+          : elapsed);
+        return;
+      }
       if (session.timeBudget) {
         const budgetMs = session.timeBudget * 60000;
         const remaining = budgetMs - elapsed;
@@ -386,13 +396,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     const actions = document.createElement('div');
     actions.className = 'session-actions';
 
+    // Pausing stops the timer, the budget and dwell-based locks until resumed.
+    const pauseBtn = document.createElement('button');
+    pauseBtn.type = 'button';
+    pauseBtn.className = 'btn--ghost pause-btn';
+    const paused = isSessionPaused(session);
+    pauseBtn.textContent = paused ? 'Resume timer' : 'Pause timer';
+    pauseBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    const pauseStatus = document.createElement('p');
+    pauseStatus.className = 'pause-status';
+    pauseStatus.setAttribute('role', 'status');
+    pauseStatus.textContent = paused ? 'Timer paused. Dwell locks and the time budget wait until you resume.' : '';
+    pauseBtn.addEventListener('click', () => {
+      if (dataDeletionInProgress || pauseBtn.disabled) return;
+      const epoch = captureStorageEpoch();
+      pauseBtn.disabled = true;
+      sendStorageAction({ type: 'PAUSE_SESSION', sessionId: session.id, paused: !paused }, epoch)
+        .then(guardStorageContinuation(response => {
+          if (response.session?.isActive) showActiveState(response.session);
+        }))
+        .catch(error => {
+          pauseBtn.disabled = false;
+          pauseStatus.setAttribute('role', 'alert');
+          pauseStatus.textContent = error.message;
+        });
+    });
+
     const btn = document.createElement('button');
     btn.className = 'complete-btn';
     btn.textContent = 'End session';
     btn.addEventListener('click', (e) => showConfirmEndDialog(container, session, e.currentTarget));
-    actions.appendChild(btn);
+    actions.append(pauseBtn, btn);
 
-    container.appendChild(actions);
+    container.append(actions, pauseStatus);
   }
 
   // ── Confirmation dialog ─────────────────────────────────────────────
@@ -408,7 +444,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     h3.textContent = 'End session?';
 
     const p = document.createElement('p');
-    const elapsed = Math.round((Date.now() - session.startTime) / 60000);
+    const elapsed = Math.round(activeElapsedMs(session) / 60000);
     const events = Array.isArray(session.events) ? session.events : [];
     const overrides = typeof session.overrideCount === 'number'
       ? session.overrideCount

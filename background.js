@@ -19,6 +19,9 @@ import {
   ensureMetrics,
   qualifiesForActivation,
   topDomains,
+  isSessionPaused,
+  sessionPausedMs,
+  budgetEndsAt,
 } from './session-metrics.js';
 import {
   sanitizeSessionHistory,
@@ -686,7 +689,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
     'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
     'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
-    'TEST_INTERVENTION', 'REPORT_VIEWED', 'STORAGE_MUTATION'
+    'TEST_INTERVENTION', 'REPORT_VIEWED', 'STORAGE_MUTATION', 'PAUSE_SESSION'
   ];
   if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
     return false;
@@ -701,7 +704,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Capture on receipt, before config reads or other callbacks. Page payloads
   // carry their original epoch; classic content events are bound on receipt.
   const epoch = message.epoch === undefined ? getStorageGeneration() : message.epoch;
-  if (['STORAGE_MUTATION', 'SESSION_STARTED', 'END_ACTIVE_SESSION', 'SESSION_CLEARED', 'OVERRIDE_INTERVENTION'].includes(message.type) && !Number.isSafeInteger(message.epoch)) {
+  if (['STORAGE_MUTATION', 'SESSION_STARTED', 'END_ACTIVE_SESSION', 'SESSION_CLEARED', 'OVERRIDE_INTERVENTION', 'PAUSE_SESSION'].includes(message.type) && !Number.isSafeInteger(message.epoch)) {
     sendResponse({ status: 'error', message: 'A mutation epoch is required.' });
     return false;
   }
@@ -785,6 +788,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       endActiveSession(message.reflection, (endedSession, error) => {
         sendResponse(error ? { status: 'error', message: error.message } : { status: 'ok', session: endedSession });
       }, message.sessionId || null, epoch);
+    } else if (message.type === 'PAUSE_SESSION') {
+      handleSessionPause(message, epoch).then(session => sendResponse({ status: 'ok', session }), (error) => {
+        sendResponse({ status: 'error', message: error.message || 'Unable to change the session timer.' });
+      });
     } else if (message.type === 'REPORT_VIEWED') {
       handleReportViewed(message.sessionId, sendResponse);
     } else if (message.type === 'LOG_ERROR') {
@@ -856,19 +863,10 @@ function loadConfig() {
         currentSession = data.activeSession;
         ensureMetrics(currentSession);
 
-        // Restore time budget alarm if session has a valid time budget. A
-        // corrupted value must not read as "already exceeded" and lock a tab.
-        if (Number.isFinite(currentSession.timeBudget) && currentSession.timeBudget > 0 &&
-            Number.isFinite(currentSession.startTime)) {
-          const elapsedMinutes = (Date.now() - currentSession.startTime) / 60000;
-          const remainingMinutes = currentSession.timeBudget - elapsedMinutes;
-          if (remainingMinutes > 0) {
-            chrome.alarms.create(timeBudgetAlarmName, { 
-              when: currentSession.startTime + (currentSession.timeBudget * 60000) 
-            });
-          } else {
-            triggerIntervention("Time budget exceeded.");
-          }
+        // Restore the budget alarm from persisted state. A corrupted budget
+        // is ignored and a paused timer has no alarm.
+        if (scheduleBudgetAlarm(currentSession)) {
+          triggerIntervention("Time budget exceeded.");
         }
       } else {
         currentSession = null;
@@ -997,15 +995,48 @@ function handleSessionStart(session, epoch = getStorageGeneration()) {
     assertStorageCommit();
     currentSession = session;
 
-    chrome.alarms.clear(timeBudgetAlarmName);
-
-    if (session.timeBudget) {
-      chrome.alarms.create(timeBudgetAlarmName, {
-        when: session.startTime + (session.timeBudget * 60000)
-      });
-    }
+    scheduleBudgetAlarm(session);
 
     await createTabGroup(session.intent);
+    return session;
+  }, epoch);
+}
+
+// Returns true when the running budget is already exhausted. Alarms, not
+// in-memory timers, carry the deadline across service-worker restarts.
+function scheduleBudgetAlarm(session) {
+  chrome.alarms.clear(timeBudgetAlarmName);
+  if (!session?.isActive || isSessionPaused(session)) return false;
+  const endsAt = budgetEndsAt(session);
+  if (endsAt === null) return false;
+  if (endsAt <= Date.now()) return true;
+  chrome.alarms.create(timeBudgetAlarmName, { when: endsAt });
+  return false;
+}
+
+// ── Session pause ──────────────────────────────────────────────────────
+
+function handleSessionPause(message, epoch) {
+  if (typeof message.paused !== 'boolean') return Promise.reject(new Error('Invalid pause request.'));
+  return enqueueSessionMutation(async () => {
+    const { activeSession: session } = await storageGet(['activeSession']);
+    if (!session?.isActive || (message.sessionId && session.id !== message.sessionId)) {
+      throw new Error('There is no active session to pause.');
+    }
+    const now = Date.now();
+    const paused = isSessionPaused(session);
+    if (message.paused === paused) return session; // Repeated clicks are harmless.
+    if (message.paused) {
+      session.pausedAt = now;
+      session.pausedMs = sessionPausedMs(session);
+    } else {
+      session.pausedMs = sessionPausedMs(session) + Math.max(0, now - session.pausedAt);
+      session.pausedAt = null;
+    }
+    await storageSet({ activeSession: session });
+    assertStorageCommit();
+    currentSession = session;
+    if (scheduleBudgetAlarm(session)) triggerIntervention("Time budget exceeded.");
     return session;
   }, epoch);
 }
@@ -1075,8 +1106,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
-        if (session && session.isActive) {
-          triggerIntervention("Time budget exceeded.");
+        // A paused timer cannot expire; resuming reschedules the alarm.
+        if (session && session.isActive && !isSessionPaused(session)) {
+          const endsAt = budgetEndsAt(session);
+          if (endsAt !== null && endsAt <= Date.now() + 1000) {
+            triggerIntervention("Time budget exceeded.");
+          } else {
+            scheduleBudgetAlarm(session);
+          }
         }
       });
     });
@@ -1158,6 +1195,8 @@ function logEvent(actionType, url, extras = {}) {
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
+    // Paused time is not dwell: drop dwell reports while the timer is paused.
+    if (actionType === 'PAGE_DWELL' && isSessionPaused(session)) return;
 
     const event = minimizeSessionEvent({
       timestamp: Date.now(),
@@ -1219,7 +1258,7 @@ function handleContentEvent(payload, tabId) {
       const result = await storageGet(['activeSession', 'trackingEnabled']);
       if (result.trackingEnabled === false) return;
       const session = result.activeSession;
-      if (!session?.isActive) return;
+      if (!session?.isActive || isSessionPaused(session)) return;
       ensureMetrics(session);
       const metricUrl = payload.actionType === 'SPA_NAVIGATION'
         ? (payload.previousUrl || payload.url)
@@ -1241,10 +1280,14 @@ function handleContentEvent(payload, tabId) {
     });
   }
 
-  logEvent(payload.actionType, payload.url, extras);
+  const logged = logEvent(payload.actionType, payload.url, extras);
 
   if (payload.actionType === 'SPA_NAVIGATION') {
     evaluateDrift(payload.navigationUrl || payload.url, tabId);
+  } else if (payload.actionType === 'PAGE_DWELL' && payload.dwellDeltaMs > 0) {
+    // Dwell limits apply while the user stays on the page, once the report is
+    // recorded. Local rules only: optional AI is not re-asked every 30 s.
+    logged.then(() => evaluateDrift(payload.url, tabId, { dwellCheck: true }), () => {});
   }
 }
 
@@ -1254,20 +1297,26 @@ let lastEvaluatedUrl = null;
 let lastEvaluatedTime = 0;
 const DRIFT_DEBOUNCE_MS = 5000;
 
-function evaluateDrift(url, tabId) {
+function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
   const epoch = getStorageGeneration();
   chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
     if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
+    // A paused timer fires no dwell-based lock.
+    if (dwellCheck && isSessionPaused(session)) return;
 
     const now = Date.now();
-    if (url === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
-      return;
+    // Dwell checks are paced by the tracker (one per 30 s report) and never
+    // reach the provider; the debounce guards navigation checks.
+    if (!dwellCheck) {
+      if (url === lastEvaluatedUrl && (now - lastEvaluatedTime) < DRIFT_DEBOUNCE_MS) {
+        return;
+      }
+      lastEvaluatedUrl = url;
+      lastEvaluatedTime = now;
     }
-    lastEvaluatedUrl = url;
-    lastEvaluatedTime = now;
 
     // Check per-domain override cooldown
     const evaluatedDomain = extractDomain(url);
@@ -1321,7 +1370,7 @@ function evaluateDrift(url, tabId) {
     }
     // Optional AI is a second opinion; it never overrules an explicit allow
     // or a session-related correction.
-    if (policyDrift.explicit) return;
+    if (policyDrift.explicit || dwellCheck) return;
 
     checkDriftLLM(session.intent, url, sessionEvents(session)).then(res => {
       if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;

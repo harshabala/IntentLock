@@ -8,6 +8,18 @@ let overlay = null;
 let trackingActive = false;
 let pendingIntervention = null;
 let privacyRevision = 0;
+// Dwell stops accumulating while the system is idle or the session timer is paused.
+let systemIdle = false;
+let sessionPaused = false;
+
+function applyTrackerIdle() {
+  if (pageTracker) pageTracker.setIdle(systemIdle || sessionPaused);
+}
+
+function setSessionPaused(session) {
+  sessionPaused = Number.isFinite(session?.pausedAt);
+  applyTrackerIdle();
+}
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -32,6 +44,7 @@ function ensureTracker() {
   pageTracker = createPageTracker({
     onReport: (payload) => sendContentEvent(payload),
   });
+  applyTrackerIdle();
   return pageTracker;
 }
 
@@ -107,6 +120,7 @@ function syncSessionState() {
   const revision = privacyRevision;
   chrome.storage.local.get(['activeSession', 'trackingEnabled', 'privacyMutationState'], (result) => {
     if (revision !== privacyRevision || result.privacyMutationState?.deleting) return;
+    setSessionPaused(result.activeSession);
     if (result.activeSession?.isActive && result.trackingEnabled !== false) {
       startTracking();
     } else {
@@ -140,6 +154,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     changes.activeSession.oldValue?.isActive !== changes.activeSession.newValue?.isActive
   );
   if (changes.privacyMutationState || sessionChanged || changes.trackingEnabled) privacyRevision++;
+  if (changes.activeSession) setSessionPaused(changes.activeSession.newValue);
   if (changes.privacyMutationState?.newValue?.deleting) {
     stopTracking();
     if (overlay) overlay.hide();
@@ -207,7 +222,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'IDLE_STATE') {
-    if (pageTracker) pageTracker.setIdle(Boolean(message.idle));
+    systemIdle = Boolean(message.idle);
+    applyTrackerIdle();
     sendResponse({ status: 'ok' });
     return true;
   }

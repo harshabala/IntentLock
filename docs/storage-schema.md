@@ -18,6 +18,8 @@ The currently running session. Absent when no session is active.
   endTime: number | null,      // set when session ends
   isActive: boolean,
   timeBudget: number | null,   // minutes; null = unlimited
+  pausedAt?: number | null,    // set while the timer is paused (no budget, no dwell, no dwell locks)
+  pausedMs?: number,           // total completed pause time; excluded from elapsed time and the budget
   events: Array<{
     actionType: 'TAB_SWITCH' | 'PAGE_LOAD' | 'PAGE_DWELL'
               | 'SPA_NAVIGATION' | 'OVERRIDE',

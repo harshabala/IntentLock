@@ -1,5 +1,6 @@
 import { initializeStorageClient, captureStorageEpoch, sendStorageAction, guardStorageContinuation } from './storage-client.js';
 import { sanitizeSessionHistory } from './privacy-utils.js';
+import { activeElapsedMs, isSessionPaused } from './session-metrics.js';
 
 let dataDeletionInProgress = false;
 let privacyRevision = 0;
@@ -115,7 +116,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     dialog.setAttribute('aria-labelledby', h3.id);
 
     const p = document.createElement('p');
-    const elapsed = Math.round((Date.now() - (session.startTime || Date.now())) / 60000);
+    const elapsed = Math.round(activeElapsedMs(session) / 60000);
     const events = Array.isArray(session.events) ? session.events : [];
     const storedOverrides = Array.isArray(session.overrides) ? session.overrides : [];
     const overrides = typeof session.overrideCount === 'number'
@@ -210,7 +211,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       content.appendChild(timeEl);
 
       function updateTime() {
-        const elapsed = Math.round((Date.now() - session.startTime) / 60000);
+        const elapsed = Math.round(activeElapsedMs(session) / 60000);
+        if (isSessionPaused(session)) {
+          timeEl.textContent = session.timeBudget
+            ? `Paused · ${Math.max(0, session.timeBudget - elapsed)} min remaining`
+            : `Paused · ${elapsed} min elapsed`;
+          timeEl.classList.remove('time-exceeded');
+          return;
+        }
         if (session.timeBudget) {
           const remaining = session.timeBudget - elapsed;
           if (remaining > 0) {

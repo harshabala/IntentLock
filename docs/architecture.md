@@ -43,6 +43,7 @@ All messages are plain objects `{ type: string, ...payload }`. The service worke
 |-------------|--------|-------------|
 | `SESSION_STARTED` | newtab.js | Persists new session to storage, starts time-budget alarm, clears drift cache |
 | `END_ACTIVE_SESSION` | newtab.js / popup.js | Finalises session, appends to `sessionHistory`, clears state |
+| `PAUSE_SESSION` | newtab.js | Pauses or resumes the session timer (`paused: boolean`); clears or reschedules the budget alarm |
 | `SESSION_CLEARED` | newtab.js / popup.js | Removes completed-session state, clears alarms and cooldowns while preserving history |
 | `DELETE_ALL_DATA` | options.js | Service worker clears local/session data behind a deletion barrier |
 | `GET_SESSION` | popup.js / newtab.js | Returns `activeSession` from storage |
