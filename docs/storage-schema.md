@@ -97,7 +97,7 @@ Array<{
 }>
 ```
 
-Exportable as JSON via Settings → Export session history. Full event arrays, legacy override URLs and reflection text are not retained in the history summary; overrides keep only a timestamp and hostname. Older stored summaries are rewritten to this shape by the startup/hourly retention pass.
+Exportable as JSON via Settings → Export session history. Full event arrays, legacy override URLs and reflection text are not retained in the history summary; overrides keep only a timestamp and hostname. Only the fields listed above are kept (`HISTORY_ENTRY_FIELDS` in `privacy-utils.js`); any other field is dropped. Older stored summaries are rewritten to this shape by the startup/hourly retention pass.
 Note: `overrides[].hostname` replaces `overrides[].url` per privacy rules (only hostname is stored).
 
 ---

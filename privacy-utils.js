@@ -91,10 +91,20 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Completed-session summaries keep only these fields. Anything else an older
+// version stored (event arrays, plans, URLs, notes) is dropped on sanitize.
+export const HISTORY_ENTRY_FIELDS = Object.freeze([
+  'id', 'intent', 'startTime', 'endTime', 'timeBudget', 'driftCount', 'totalEvents',
+  'activeMs', 'alignedActiveMs', 'onIntentRatio', 'interventionCount', 'overrideCount',
+  'reportViewed', 'overrides', 'topDomains',
+]);
+
 export function sanitizeHistoryEntry(entry) {
   if (!isPlainObject(entry)) return null;
-  const copy = redactSecrets({ ...entry });
-  delete copy.events;
+  const known = Object.fromEntries(HISTORY_ENTRY_FIELDS
+    .filter((field) => Object.prototype.hasOwnProperty.call(entry, field))
+    .map((field) => [field, entry[field]]));
+  const copy = redactSecrets(known);
   if (Array.isArray(entry.overrides)) {
     // Reflection text is never kept in a summary; older entries lose it here.
     copy.overrides = entry.overrides.filter(isPlainObject).map((override) => ({

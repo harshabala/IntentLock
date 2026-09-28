@@ -130,3 +130,19 @@ test('history sanitization drops corrupted override and domain records instead o
   assert.equal('overrides' in shapeless, false);
   assert.equal('topDomains' in shapeless, false);
 });
+
+test('history summaries keep only known fields', () => {
+  const now = Date.now();
+  const [entry] = sanitizeSessionHistory([{
+    id: 'known', intent: 'synthetic intent', startTime: now - 1000, endTime: now, timeBudget: 30,
+    driftCount: 1, totalEvents: 4, activeMs: 10, alignedActiveMs: 5, onIntentRatio: 0.5,
+    interventionCount: 1, overrideCount: 1, reportViewed: true, overrides: [], topDomains: [],
+    events: [{ url: 'https://example.com/private' }], plan: ['synthetic step'], notes: 'synthetic note',
+    url: 'https://example.com/secret', metrics: { domains: { 'example.com': {} } }, isActive: false,
+  }], { now });
+  assert.deepEqual(Object.keys(entry).sort(), [
+    'activeMs', 'alignedActiveMs', 'driftCount', 'endTime', 'id', 'intent', 'interventionCount',
+    'onIntentRatio', 'overrideCount', 'overrides', 'reportViewed', 'startTime', 'timeBudget', 'topDomains',
+    'totalEvents',
+  ]);
+});

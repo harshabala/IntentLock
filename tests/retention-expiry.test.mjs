@@ -108,3 +108,11 @@ test('an abandoned session summary keeps no reflection text', () => {
   assert.deepEqual(result.local.sessionHistory[0].overrides.map(o => o.hostname), ['example.com']);
   assert.equal(JSON.stringify(result.local).includes('synthetic private reflection'), false);
 });
+
+test('startup migration removes unknown fields from stored summaries', () => {
+  const now = Date.now();
+  const result = startWorker({ sessionHistory: [{ id: 'legacy', intent: 'synthetic', startTime: now - HOUR, endTime: now,
+    events: [{ url: 'https://example.com/private-path' }], plan: ['synthetic plan step'], url: 'https://example.com/q?x=1' }] });
+  const [entry] = result.local.sessionHistory;
+  assert.deepEqual(Object.keys(entry).sort(), ['endTime', 'id', 'intent', 'startTime']);
+});
