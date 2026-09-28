@@ -184,6 +184,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const title = document.getElementById('intervention-title');
   if (interventionState?.reason === 'Time budget exceeded.') {
     if (title) title.textContent = 'Time budget exceeded.';
+    const explanation = document.getElementById('lock-explanation');
+    if (explanation) explanation.textContent = 'Your time budget has run out. Continuing does not add time; end the session when you are done.';
     if (reasonText) {
       reasonText.textContent = '';
       reasonText.hidden = true;

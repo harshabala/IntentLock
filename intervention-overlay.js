@@ -6,6 +6,16 @@
   const TIME_BUDGET_COPY = 'Time budget exceeded.';
   const CONTINUE_HINT_ID = 'intentlock-continue-hint';
 
+  // What each way out actually does, so the choice is informed.
+  const DRIFT_EXPLANATION = 'Continue anyway allows this site for 5 minutes. '
+    + 'Tick "related" to allow it for the rest of this session. Your time budget runs separately.';
+  const BUDGET_EXPLANATION = 'Your time budget has run out. Continuing does not add time; '
+    + 'end the session when you are done.';
+
+  function lockExplanation(reason) {
+    return reason === TIME_BUDGET_COPY ? BUDGET_EXPLANATION : DRIFT_EXPLANATION;
+  }
+
   function lockHeading(reason) {
     return reason === TIME_BUDGET_COPY ? TIME_BUDGET_COPY : DRIFT_COPY;
   }
@@ -340,6 +350,8 @@
       const text = reason && reason !== heading ? reason : '';
       reasonEl.textContent = text;
       reasonEl.hidden = !text;
+      const explainEl = shadow?.querySelector('[data-role="explanation"]');
+      if (explainEl) explainEl.textContent = lockExplanation(reason);
     }
 
     function setTransitionBusy(busy) {
@@ -446,11 +458,12 @@
       panelEl.setAttribute('role', 'dialog');
       panelEl.setAttribute('aria-modal', 'true');
       panelEl.setAttribute('aria-labelledby', 'intentlock-intervention-title');
-      panelEl.setAttribute('aria-describedby', 'intentlock-intervention-reason');
+      panelEl.setAttribute('aria-describedby', 'intentlock-intervention-reason intentlock-intervention-explanation');
       panelEl.innerHTML = `
       <h1>You are drifting from your intent.</h1>
       <p class="reason" id="intentlock-intervention-reason" data-role="reason"></p>
       <p class="intent-quote" data-role="intent"></p>
+      <p class="hint" id="intentlock-intervention-explanation" data-role="explanation"></p>
       <label for="intentlock-reflection">Why?</label>
       `;
       panelEl.querySelector('h1')?.setAttribute('id', 'intentlock-intervention-title');
