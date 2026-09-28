@@ -1,3 +1,8 @@
+import { webcrypto } from 'node:crypto';
+
+// Node 18 may not expose the browser Web Crypto global.
+globalThis.crypto ??= webcrypto;
+
 // Synthetic IO: get snapshots at invocation; mutations complete when released.
 export function privacyChrome(localData = {}, sessionData = {}) {
   const local = structuredClone(localData), session = structuredClone(sessionData);
