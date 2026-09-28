@@ -116,3 +116,16 @@ test('startup migration removes unknown fields from stored summaries', () => {
   const [entry] = result.local.sessionHistory;
   assert.deepEqual(Object.keys(entry).sort(), ['endTime', 'id', 'intent', 'startTime']);
 });
+
+test('startup migration reduces live session events to origins', () => {
+  const result = startWorker({ activeSession: session(HOUR, { timeBudget: null, intent: 'quarterly budget memo', events: [
+    { actionType: 'PAGE_LOAD', url: 'https://docs.example/budget/q3?token=synthetic-secret', timestamp: Date.now() - 1000, pageTitle: 'Synthetic title' },
+    { actionType: 'SPA_NAVIGATION', url: 'https://app.example/a/b', previousUrl: 'https://app.example/a/b', navigationUrl: 'https://app.example/c', timestamp: Date.now() - 500 },
+  ] }) });
+  const [load, nav] = result.local.activeSession.events;
+  assert.deepEqual(load, { actionType: 'PAGE_LOAD', url: 'https://docs.example', timestamp: load.timestamp, intentMatch: true });
+  assert.equal(nav.url, 'https://app.example');
+  assert.equal(nav.navigationUrl, 'https://app.example');
+  assert.equal(nav.intentMatch, false);
+  assert.equal(JSON.stringify(result.local).includes('synthetic-secret'), false);
+});

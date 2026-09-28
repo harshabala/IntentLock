@@ -5,6 +5,7 @@ import {
   buildDefaultPolicy,
   migrateLegacyDistractionSites,
   isUrlAligned,
+  minimizeSessionEvent,
 } from './heuristic-policy.js';
 import { checkDriftLLM } from './llm.js';
 import { clearDriftCache } from './drift-cache.js';
@@ -437,7 +438,17 @@ function sameJson(a, b) {
 // summaries and diagnostics to their stated bounds in storage.
 async function applyRetention(now = Date.now()) {
   const session = (await storageGet(['activeSession'])).activeSession;
-  if (isSessionExpired(session, now)) await finalizeActiveSession(null, session.id || null);
+  if (isSessionExpired(session, now)) {
+    await finalizeActiveSession(null, session.id || null);
+  } else if (session?.isActive && Array.isArray(session.events)) {
+    // Older versions stored full URLs (paths, queries) in live events.
+    const events = sessionEvents(session).map(event => minimizeSessionEvent(event, session.intent)).filter(Boolean);
+    if (!sameJson(events, session.events)) {
+      session.events = events;
+      await storageSet({ activeSession: session });
+      currentSession = session;
+    }
+  }
 
   const data = await storageGet(['activeSession', 'sessionHistory', 'errorLog']);
   const values = {};
@@ -575,14 +586,14 @@ async function handleInterventionTransition(message, sender) {
     const originalUrl = state.originalUrl || null;
     session.metrics.overrideCount = (session.metrics.overrideCount || 0) + 1;
     session.events = sessionEvents(session);
-    session.events.push({
+    session.events.push(minimizeSessionEvent({
       timestamp: Date.now(),
       actionType: 'OVERRIDE',
       url: originalUrl,
       hostname: extractDomain(originalUrl),
       reflection: reflection || null,
       source: 'intervention',
-    });
+    }, session.intent));
 
     const values = { activeSession: session };
     if (message.markRelated || transition === 'mark-related') {
@@ -1148,12 +1159,12 @@ function logEvent(actionType, url, extras = {}) {
     const session = result.activeSession;
     if (!session || !session.isActive) return;
 
-    const event = {
+    const event = minimizeSessionEvent({
       timestamp: Date.now(),
       url,
       actionType,
       ...extras,
-    };
+    }, session.intent);
     session.events = sessionEvents(session);
     session.events.push(event);
 
@@ -1478,6 +1489,10 @@ function triggerIntervention(reason, tabId = null) {
 
 function handleOverride(sessionData, epoch = getStorageGeneration()) {
   if (!sessionData) return Promise.resolve();
+  if (typeof sessionData === 'object') {
+    sessionData.events = sessionEvents(sessionData)
+      .map(event => minimizeSessionEvent(event, sessionData.intent)).filter(Boolean);
+  }
   return enqueueSessionMutation(async () => {
     await storageSet({ activeSession: sessionData });
     assertStorageCommit();

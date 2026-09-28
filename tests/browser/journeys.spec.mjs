@@ -63,7 +63,9 @@ test('first run, blank budget, related work, real lock, reflection, reload and s
   const firstId = await start(home, journey);
   const work = await visit(journey, 'work.localhost', '/quarterly/report');
   await expect.poll(async () => (await journey.storage()).activeSession.events
-    .some(event => event.url === work.url())).toBe(true);
+    .some(event => event.url === new URL(work.url()).origin && event.intentMatch === true)).toBe(true);
+  // Stored events keep origins only; the path's keyword verdict is precomputed.
+  expect(JSON.stringify((await journey.storage()).activeSession.events)).not.toContain('/quarterly/report');
   await work.locator('#document').fill('Quarterly report draft');
   await work.getByRole('button', { name: 'Save local draft' }).click();
   await expect(work.locator(lockHost)).not.toBeVisible();

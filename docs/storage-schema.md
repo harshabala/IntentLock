@@ -21,11 +21,12 @@ The currently running session. Absent when no session is active.
   events: Array<{
     actionType: 'TAB_SWITCH' | 'PAGE_LOAD' | 'PAGE_DWELL'
               | 'SPA_NAVIGATION' | 'OVERRIDE',
-    url: string,
+    url: string | null,    // origin only (scheme://host:port); paths, queries and fragments are never stored
+    intentMatch?: boolean, // whether the full URL mentioned an intent keyword, computed before the path is dropped
     timestamp: number,
     dwellMs?: number,      // PAGE_DWELL / SPA_NAVIGATION — cumulative active milliseconds on page
     dwellDeltaMs?: number, // active milliseconds since the previous report (counted once)
-    previousUrl?: string, navigationUrl?: string, // SPA_NAVIGATION only
+    previousUrl?: string, navigationUrl?: string, // SPA_NAVIGATION only — origins
     reflection?: string,   // OVERRIDE only — kept only while the session is active; never copied into history
   }>,
   metrics?: {

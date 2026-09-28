@@ -676,6 +676,38 @@ export function intentTerms(intent) {
   )];
 }
 
+function originOf(url) {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a full URL (host, path, query) mentions an intent term. */
+export function urlMatchesIntent(url, intent) {
+  return isKeywordAligned(url, intentTerms(intent));
+}
+
+/**
+ * Stored session events keep only origins. The keyword verdict that needed the
+ * full path is computed once, before the path is dropped, as `intentMatch`.
+ */
+export function minimizeSessionEvent(event, intent) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+  const copy = { ...event };
+  delete copy.pageTitle;
+  if (typeof copy.url === 'string') {
+    if (typeof copy.intentMatch !== 'boolean') copy.intentMatch = urlMatchesIntent(copy.url, intent);
+    copy.url = originOf(copy.url);
+  }
+  for (const key of ['previousUrl', 'navigationUrl']) {
+    if (typeof copy[key] === 'string') copy[key] = originOf(copy[key]);
+  }
+  return copy;
+}
+
 function isKeywordAligned(url, terms) {
   const parsed = parseUrl(url);
   if (!parsed || terms.length === 0) return false;
@@ -767,11 +799,13 @@ const REASON_LABELS = {
 // page-tracker reports cumulative dwellMs plus the dwellDeltaMs since its last
 // report. Sum deltas so each active second counts once; events without a delta
 // (older sessions) contribute only their largest cumulative value.
+// Events store origins, so dwell is counted per site (origin), not per path.
 function recentDwellMs(recentEvents, url) {
+  const origin = originOf(url);
   let deltaTotal = 0;
   let legacyMax = 0;
   for (const e of recentEvents) {
-    if (e.actionType !== 'PAGE_DWELL' || e.url !== url) continue;
+    if (e.actionType !== 'PAGE_DWELL' || !origin || originOf(e.url) !== origin) continue;
     if (Number.isFinite(e.dwellDeltaMs)) deltaTotal += Math.max(0, e.dwellDeltaMs);
     else if (Number.isFinite(e.dwellMs)) legacyMax = Math.max(legacyMax, e.dwellMs);
   }
@@ -845,7 +879,8 @@ export function evaluatePolicyDrift({
   const unrelated = recentEvents.filter(e => {
     if (!e.url) return false;
     const ep = parseUrl(e.url);
-    return ep && !isKeywordAligned(e.url, terms) && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
+    const keywordMatch = typeof e.intentMatch === 'boolean' ? e.intentMatch : isKeywordAligned(e.url, terms);
+    return ep && !keywordMatch && !isCategoryAligned(ep.hostname, safePolicy.intentCategoryId);
   });
   const tabSwitches = recentEvents.filter(e => e.actionType === 'TAB_SWITCH').length;
   const sameDomainLoads = recentEvents.filter(e => {
