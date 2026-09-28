@@ -262,25 +262,18 @@ Key `chrome.storage.local` entries:
 ### Testing
 
 ```bash
-node --test tests/heuristic-policy.test.mjs   # 48 tests — policy engine
-node --test tests/background.test.mjs          # 2 tests  — service worker helpers
-node --test tests/drift.test.mjs               # heuristic drift scoring
-node --test tests/drift-cache.test.mjs         # TTL cache
-node --test tests/llm-backoff.test.mjs         # quota backoff
-node --test tests/providers.test.mjs           # provider config validation
-node --test tests/page-tracker.test.mjs        # dwell tracking + SPA detection
-node --test tests/error-log.test.mjs           # diagnostic log
-node --test tests/static-smoke.test.mjs        # manifest + asset integrity
-npm test                                        # all tests
-npm run verify:static                           # static/runtime/release checks
+npm test                                        # all unit tests (358)
+npm run verify:static                           # static/runtime/release checks (74)
+node --test tests/heuristic-policy.test.mjs     # one suite, e.g. the policy engine
+npx playwright test                             # real-Chromium journeys + lifecycle (5)
 ```
 
-Uses Node's built-in `node:test` + `assert/strict`. No dependencies or test runner to install.
+Unit tests use Node's built-in `node:test` + `assert/strict`, with no dependencies. The browser suite loads the unpacked extension in Chromium and covers two user journeys plus lifecycle cases: a real service-worker restart (lock and paused timer survive), the same URL in two tabs, and a real one-minute budget expiry. CI runs all three on every push and pull request.
 
 To validate and build a release artifact locally:
 
 ```bash
-npm run validate:version -- v1.5.1
+npm run validate:version -- v1.6.0
 npm run package
 ```
 
@@ -306,6 +299,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Highlight |
 |---------|-----------|
+| Unreleased | Production hardening: session-only API keys, strict AI verdicts, in-place dwell locks with a pausable timer, origin-only session data, browser lifecycle tests in CI |
 | 1.5.0 | Heuristic self-setup engine — category-aware policy, onboarding step 3, settings grid |
 | 1.4.0 | In-page shadow-DOM overlay, dwell tracking, SPA support, LLM confidence gate |
 | 1.2.1 | Secure session key storage, onboarding wizard, cooldown tests |
