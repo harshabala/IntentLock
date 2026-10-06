@@ -1,31 +1,13 @@
+import './theme.js';
+import { summarizeWeek, PRIVACY_COPY } from './session-metrics.js';
+import { sanitizeSessionHistory } from './privacy-utils.js';
+
 let privacyRevision = 0;
 chrome.runtime.onMessage.addListener(message => {
   if (message?.type === 'DATA_DELETION_STARTED' || message?.type === 'DATA_DELETED') {
     privacyRevision++;
     const summary = document.getElementById('week-summary');
     if (summary) summary.textContent = '';
-  }
-});
-import { summarizeWeek, PRIVACY_COPY } from './session-metrics.js';
-import { sanitizeSessionHistory } from './privacy-utils.js';
-
-chrome.storage.local.get(['theme'], (result) => {
-  const theme = result.theme || 'auto';
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.classList.remove('theme-light');
-    root.classList.add('theme-dark');
-  } else if (theme === 'light') {
-    root.classList.remove('theme-dark');
-    root.classList.add('theme-light');
-  } else {
-    root.classList.remove('theme-light');
-    const colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-    const syncAutoTheme = () => {
-      root.classList.toggle('theme-dark', colorSchemeMedia.matches);
-    };
-    syncAutoTheme();
-    colorSchemeMedia.addEventListener('change', syncAutoTheme);
   }
 });
 

@@ -108,6 +108,7 @@ test('all extension javascript files parse', async () => {
     'popup.js',
     'analytics.js',
     'storage-queue.js',
+    'theme.js',
   ]) {
     const result = spawnSync(process.execPath, ['--check', file], {
       cwd: root,
@@ -509,21 +510,32 @@ test('lock reflection textarea sets aria-invalid only after empty Continue', asy
 });
 
 test('auto theme subscribes to prefers-color-scheme change', async () => {
-  const files = ['newtab.js', 'options.js', 'popup.js', 'analytics.js', 'history.js', 'diagnostics.js'];
-  for (const file of files) {
+  for (const file of ['newtab.js', 'popup.js', 'analytics.js', 'history.js', 'diagnostics.js']) {
     const src = await text(file);
-    assert.match(
-      src,
-      /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/,
-      `${file} must query prefers-color-scheme`,
-    );
-    assert.match(
-      src,
-      /addEventListener\(\s*['"]change['"]/,
-      `${file} must listen for color-scheme change`,
-    );
+    assert.match(src, /import ['"]\.\/theme\.js['"]/, `${file} must load the shared theme module`);
   }
+  const theme = await text('theme.js');
+  assert.match(
+    theme,
+    /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/,
+    'theme.js must query prefers-color-scheme',
+  );
+  assert.match(
+    theme,
+    /addEventListener\(\s*['"]change['"]/,
+    'theme.js must listen for color-scheme change',
+  );
   const options = await text('options.js');
+  assert.match(
+    options,
+    /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/,
+    'options.js must query prefers-color-scheme',
+  );
+  assert.match(
+    options,
+    /addEventListener\(\s*['"]change['"]/,
+    'options.js must listen for color-scheme change',
+  );
   assert.match(
     options,
     /removeEventListener\(\s*['"]change['"]/,
@@ -741,8 +753,8 @@ test('history-meta diagnostics-meta tabular-nums and h1 intent-statement text-wr
 
 test('theme auto applies theme-dark when matchMedia prefers dark', async () => {
   const options = await text('options.js');
-  const newtab = await text('newtab.js');
-  for (const src of [options, newtab]) {
+  const theme = await text('theme.js');
+  for (const src of [options, theme]) {
     assert.match(src, /matchMedia\(\s*['"]\(prefers-color-scheme:\s*dark\)['"]\s*\)/);
     assert.match(src, /theme-dark/);
   }

@@ -1,25 +1,5 @@
+import './theme.js';
 import { initializeStorageClient } from './storage-client.js';
-// Load and apply theme override as early as possible
-chrome.storage.local.get(['theme'], (result) => {
-  const theme = result.theme || 'auto';
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.classList.remove('theme-light');
-    root.classList.add('theme-dark');
-  } else if (theme === 'light') {
-    root.classList.remove('theme-dark');
-    root.classList.add('theme-light');
-  } else {
-    root.classList.remove('theme-light');
-    const colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-    const syncAutoTheme = () => {
-      root.classList.toggle('theme-dark', colorSchemeMedia.matches);
-    };
-    syncAutoTheme();
-    colorSchemeMedia.addEventListener('change', syncAutoTheme);
-  }
-});
-
 import {
   getErrorLog,
   clearErrorLog,
