@@ -26,6 +26,7 @@ import {
 import {
   sanitizeSessionHistory,
   sanitizeUrl,
+  hostnameFromUrl,
   pruneByRetention,
   redactSecrets,
   SESSION_RETENTION_MS,
@@ -229,19 +230,22 @@ function transitionKey(sessionId, nonce, transition) {
   return `${sessionId}:${nonce}:${transition}`;
 }
 
+function pruneOldestEntries(record, max, timeKey) {
+  const keys = Object.keys(record);
+  if (keys.length <= max) return record;
+  keys
+    .sort((a, b) => (record[a][timeKey] || 0) - (record[b][timeKey] || 0))
+    .slice(0, keys.length - max)
+    .forEach((oldKey) => delete record[oldKey]);
+  return record;
+}
+
 function rememberCompletedTransition(completed, key, tabId, closeTab = false) {
   const next = {
     ...completed,
     [key]: { tabId, closeTab, completedAt: Date.now() },
   };
-  const keys = Object.keys(next);
-  if (keys.length > MAX_COMPLETED_TRANSITIONS) {
-    keys
-      .sort((a, b) => (next[a].completedAt || 0) - (next[b].completedAt || 0))
-      .slice(0, keys.length - MAX_COMPLETED_TRANSITIONS)
-      .forEach((oldKey) => delete next[oldKey]);
-  }
-  return next;
+  return pruneOldestEntries(next, MAX_COMPLETED_TRANSITIONS, 'completedAt');
 }
 
 function relatedHostnamesList() {
@@ -307,8 +311,7 @@ function broadcastIdleState(isIdle) {
 chrome.idle.onStateChanged.addListener((newState) => {
   const epoch = getStorageGeneration();
   const isIdle = (newState === 'idle' || newState === 'locked');
-  chrome.storage.local.get(['trackingEnabled'], (result) => {
-    if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+  getLocalIfCurrent(['trackingEnabled'], epoch, (result) => {
     if (result.trackingEnabled === false) {
       isCurrentlyIdle = false;
       lastIdleTime = 0;
@@ -332,18 +335,44 @@ chrome.idle.onStateChanged.addListener((newState) => {
   });
 });
 
-// Helper for trackable URLs
 function isTrackableUrl(url) {
   return sanitizeUrl(url) != null;
 }
 
-// Helper to extract bare hostname from a URL
-function extractDomain(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
-  } catch {
-    return null;
+const extractDomain = hostnameFromUrl;
+
+function domainsShareCooldown(evaluatedDomain, cooldownDomain) {
+  return evaluatedDomain === cooldownDomain ||
+    evaluatedDomain.endsWith(`.${cooldownDomain}`) ||
+    cooldownDomain.endsWith(`.${evaluatedDomain}`);
+}
+
+function isDomainOnCooldown(evaluatedDomain, cooldowns, now = Date.now()) {
+  if (!evaluatedDomain) return false;
+  for (const [cooldownDomain, expiresAt] of cooldowns.entries()) {
+    if (now < expiresAt && domainsShareCooldown(evaluatedDomain, cooldownDomain)) {
+      return true;
+    }
   }
+  return false;
+}
+
+function pruneExpiredCooldowns(now = Date.now()) {
+  let mapChanged = false;
+  for (const [cooldownDomain, expiresAt] of overrideCooldowns.entries()) {
+    if (now >= expiresAt) {
+      overrideCooldowns.delete(cooldownDomain);
+      mapChanged = true;
+    }
+  }
+  return mapChanged;
+}
+
+function getLocalIfCurrent(keys, epoch, onResult) {
+  chrome.storage.local.get(keys, (result) => {
+    if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+    onResult(result);
+  });
 }
 
 function openSessionReportTab() {
@@ -605,13 +634,7 @@ async function handleInterventionTransition(message, sender) {
         const marks = { ...(result.relatedDomainMarks || relatedDomainMarks || {}) };
         const previous = marks[host] || { count: 0, lastMarkedAt: 0 };
         marks[host] = { count: (previous.count || 0) + 1, lastMarkedAt: Date.now() };
-        const keys = Object.keys(marks);
-        if (keys.length > 200) {
-          keys
-            .sort((a, b) => (marks[a].lastMarkedAt || 0) - (marks[b].lastMarkedAt || 0))
-            .slice(0, keys.length - 200)
-            .forEach((key) => delete marks[key]);
-        }
+        pruneOldestEntries(marks, 200, 'lastMarkedAt');
         relatedDomainMarks = marks;
         values.relatedDomainMarks = marks;
       }
@@ -668,8 +691,7 @@ function handleSessionCleared(sendResponse) {
 chrome.commands.onCommand.addListener((command) => {
   const epoch = getStorageGeneration();
   if (command === 'toggle-session') {
-    chrome.storage.local.get(['activeSession'], (result) => {
-      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+    getLocalIfCurrent(['activeSession'], epoch, (result) => {
       const session = result.activeSession;
       if (session && session.isActive) {
         endActiveSession(null, (ended, error) => {
@@ -684,27 +706,159 @@ chrome.commands.onCommand.addListener((command) => {
 
 // ── Message handling ───────────────────────────────────────────────────
 
+const HANDLED_MESSAGES = new Set([
+  'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
+  'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
+  'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
+  'TEST_INTERVENTION', 'REPORT_VIEWED', 'STORAGE_MUTATION', 'PAUSE_SESSION',
+]);
+const CONTENT_MESSAGES = new Set(['CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION', 'LOG_ERROR']);
+const MUTATION_MESSAGES = new Set([
+  'STORAGE_MUTATION', 'SESSION_STARTED', 'END_ACTIVE_SESSION', 'SESSION_CLEARED', 'OVERRIDE_INTERVENTION', 'PAUSE_SESSION',
+]);
+
+function replyOk(sendResponse, extra = {}) {
+  sendResponse({ status: 'ok', ...extra });
+}
+
+function replyError(sendResponse, error, fallback) {
+  sendResponse({ status: 'error', message: error?.message || fallback });
+}
+
+const messageHandlers = {
+  STORAGE_MUTATION(message, _sender, sendResponse, epoch) {
+    applyStorageCommand(message.command, message.payload, epoch).then(
+      value => sendResponse({ status: 'ok', value }),
+      error => sendResponse({ status: 'error', message: error.message }),
+    );
+  },
+  SESSION_STARTED(message, _sender, sendResponse, epoch) {
+    handleSessionStart(message.session, epoch).then(
+      () => replyOk(sendResponse),
+      (error) => replyError(sendResponse, error, 'Unable to start the session.'),
+    );
+  },
+  OVERRIDE_INTERVENTION(message, _sender, sendResponse, epoch) {
+    handleOverride(message.sessionData, epoch).then(
+      () => replyOk(sendResponse),
+      (error) => replyError(sendResponse, error, 'Unable to apply the override.'),
+    );
+  },
+  GET_SESSION(_message, _sender, sendResponse, epoch) {
+    if (currentSession) {
+      sendResponse({ session: currentSession });
+      return;
+    }
+    chrome.storage.local.get(['activeSession'], (result) => {
+      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) {
+        sendResponse({ status: 'error', session: null, message: 'Data changed while reading the session.' });
+        return;
+      }
+      sendResponse({ session: result.activeSession || null });
+    });
+  },
+  GET_INTERVENTION_STATE(message, sender, sendResponse, epoch) {
+    const requestedTabId = Number.isInteger(sender.tab?.id) ? sender.tab.id : message.tabId;
+    getInterventionStateForTab(requestedTabId, epoch).then((state) => {
+      assertStorageEpoch(epoch);
+      sendResponse({ ok: true, state });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error.message || 'Unable to read intervention state.' });
+    });
+  },
+  CONFIG_UPDATED(_message, _sender, sendResponse) {
+    reloadConfig()
+      .then(() => replyOk(sendResponse))
+      .catch((err) => {
+        console.error('CONFIG_UPDATED reload failed:', err);
+        sendResponse({ status: 'error', message: err?.message || 'reload failed' });
+      });
+  },
+  SESSION_CLEARED(_message, _sender, sendResponse) {
+    enqueueSessionMutation(async () => {
+      ungroupTabs();
+      currentSession = null;
+      clearDriftCache();
+      clearLlmBackoff();
+      overrideCooldowns.clear();
+      await storageRemove([
+        INTERVENTION_STATE_KEY,
+        'interventionState',
+        'overrideCooldowns',
+        COMPLETED_TRANSITION_KEY,
+        'sessionTabGroupId',
+      ]);
+      configPromise = null;
+      await loadConfig();
+      return { status: 'ok' };
+    }).then(sendResponse, () => {
+      sendResponse({ status: 'error', message: 'Unable to clear the completed session state.' });
+    });
+  },
+  END_ACTIVE_SESSION(message, _sender, sendResponse, epoch) {
+    endActiveSession(message.reflection, (endedSession, error) => {
+      sendResponse(error ? { status: 'error', message: error.message } : { status: 'ok', session: endedSession });
+    }, message.sessionId || null, epoch);
+  },
+  PAUSE_SESSION(message, _sender, sendResponse, epoch) {
+    handleSessionPause(message, epoch).then(
+      session => sendResponse({ status: 'ok', session }),
+      (error) => replyError(sendResponse, error, 'Unable to change the session timer.'),
+    );
+  },
+  REPORT_VIEWED(message, _sender, sendResponse) {
+    handleReportViewed(message.sessionId, sendResponse);
+  },
+  LOG_ERROR(message, _sender, sendResponse) {
+    logError(message.payload || {}).then(() => replyOk(sendResponse));
+  },
+  CONTENT_EVENT(message, sender, sendResponse) {
+    handleContentEvent(message.payload, sender.tab?.id);
+    replyOk(sendResponse);
+  },
+  INTERVENTION_TRANSITION(message, sender, sendResponse) {
+    handleInterventionTransition(message, sender).then(sendResponse, (error) => {
+      sendResponse({ ok: false, error: error.message || 'Intervention transition failed.' });
+    });
+  },
+  TEST_INTERVENTION(_message, _sender, sendResponse) {
+    chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
+      if (result.trackingEnabled === false) {
+        sendResponse({ ok: false, error: 'Tracking is disabled.' });
+        return;
+      }
+      const session = result.activeSession;
+      if (!session?.isActive) {
+        sendResponse({ ok: false, error: 'Start a session first (Lock in on the new tab).' });
+        return;
+      }
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const activeTab = tabs.find((tab) => tab.id && tab.url && isTrackableUrl(tab.url));
+        if (!activeTab) {
+          sendResponse({ ok: false, error: 'Open a website first, then try the lock.' });
+          return;
+        }
+        triggerIntervention('Test intervention — drift detection is working.', activeTab.id);
+        sendResponse({ ok: true });
+      });
+    });
+  },
+};
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const handledMessages = [
-    'SESSION_STARTED', 'OVERRIDE_INTERVENTION', 'GET_SESSION',
-    'CONFIG_UPDATED', 'SESSION_CLEARED', 'DELETE_ALL_DATA', 'END_ACTIVE_SESSION', 'LOG_ERROR',
-    'CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION',
-    'TEST_INTERVENTION', 'REPORT_VIEWED', 'STORAGE_MUTATION', 'PAUSE_SESSION'
-  ];
-  if (!message || typeof message !== 'object' || !handledMessages.includes(message.type)) {
+  if (!message || typeof message !== 'object' || !HANDLED_MESSAGES.has(message.type)) {
     return false;
   }
 
   const page = isExtensionPage(sender);
-  const contentMessages = ['CONTENT_EVENT', 'GET_INTERVENTION_STATE', 'INTERVENTION_TRANSITION', 'LOG_ERROR'];
-  if ((sender?.id && sender.id !== chrome.runtime.id) || (!page && !(sender?.tab && contentMessages.includes(message.type)))) {
+  if ((sender?.id && sender.id !== chrome.runtime.id) || (!page && !(sender?.tab && CONTENT_MESSAGES.has(message.type)))) {
     sendResponse({ status: 'error', message: 'This operation requires an extension page.' });
     return false;
   }
   // Capture on receipt, before config reads or other callbacks. Page payloads
   // carry their original epoch; classic content events are bound on receipt.
   const epoch = message.epoch === undefined ? getStorageGeneration() : message.epoch;
-  if (['STORAGE_MUTATION', 'SESSION_STARTED', 'END_ACTIVE_SESSION', 'SESSION_CLEARED', 'OVERRIDE_INTERVENTION', 'PAUSE_SESSION'].includes(message.type) && !Number.isSafeInteger(message.epoch)) {
+  if (MUTATION_MESSAGES.has(message.type) && !Number.isSafeInteger(message.epoch)) {
     sendResponse({ status: 'error', message: 'A mutation epoch is required.' });
     return false;
   }
@@ -714,121 +868,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  const handler = messageHandlers[message.type];
   authorityReady.then(() => {
     assertStorageEpoch(epoch);
     return loadConfig();
   }).then(() => {
     assertStorageEpoch(epoch);
-    if (message.type === 'STORAGE_MUTATION') {
-      applyStorageCommand(message.command, message.payload, epoch).then(
-        value => sendResponse({ status: 'ok', value }),
-        error => sendResponse({ status: 'error', message: error.message }),
-      );
-    } else if (message.type === 'SESSION_STARTED') {
-      handleSessionStart(message.session, epoch).then(() => {
-        sendResponse({ status: 'ok' });
-      }, (error) => {
-        sendResponse({ status: 'error', message: error.message || 'Unable to start the session.' });
-      });
-    } else if (message.type === 'OVERRIDE_INTERVENTION') {
-      handleOverride(message.sessionData, epoch).then(() => {
-        sendResponse({ status: 'ok' });
-      }, (error) => {
-        sendResponse({ status: 'error', message: error.message || 'Unable to apply the override.' });
-      });
-    } else if (message.type === 'GET_SESSION') {
-      // Return the latest from storage if in-memory is null
-      if (currentSession) {
-        sendResponse({ session: currentSession });
-      } else {
-        chrome.storage.local.get(['activeSession'], (result) => {
-          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) {
-            sendResponse({ status: 'error', session: null, message: 'Data changed while reading the session.' });
-            return;
-          }
-          sendResponse({ session: result.activeSession || null });
-        });
-      }
-    } else if (message.type === 'GET_INTERVENTION_STATE') {
-      const requestedTabId = Number.isInteger(sender.tab?.id) ? sender.tab.id : message.tabId;
-      getInterventionStateForTab(requestedTabId, epoch).then((state) => {
-        assertStorageEpoch(epoch);
-        sendResponse({ ok: true, state });
-      }).catch((error) => {
-        sendResponse({ ok: false, error: error.message || 'Unable to read intervention state.' });
-      });
-    } else if (message.type === 'CONFIG_UPDATED') {
-      reloadConfig()
-        .then(() => sendResponse({ status: 'ok' }))
-        .catch((err) => {
-          console.error('CONFIG_UPDATED reload failed:', err);
-          sendResponse({ status: 'error', message: err?.message || 'reload failed' });
-        });
-    } else if (message.type === 'SESSION_CLEARED') {
-      enqueueSessionMutation(async () => {
-        ungroupTabs();
-        currentSession = null;
-        clearDriftCache();
-        clearLlmBackoff();
-        overrideCooldowns.clear();
-        await storageRemove([
-          INTERVENTION_STATE_KEY,
-          'interventionState',
-          'overrideCooldowns',
-          COMPLETED_TRANSITION_KEY,
-          'sessionTabGroupId',
-        ]);
-        configPromise = null;
-        await loadConfig();
-        return { status: 'ok' };
-      }).then(sendResponse, () => {
-        sendResponse({ status: 'error', message: 'Unable to clear the completed session state.' });
-      });
-    } else if (message.type === 'END_ACTIVE_SESSION') {
-      endActiveSession(message.reflection, (endedSession, error) => {
-        sendResponse(error ? { status: 'error', message: error.message } : { status: 'ok', session: endedSession });
-      }, message.sessionId || null, epoch);
-    } else if (message.type === 'PAUSE_SESSION') {
-      handleSessionPause(message, epoch).then(session => sendResponse({ status: 'ok', session }), (error) => {
-        sendResponse({ status: 'error', message: error.message || 'Unable to change the session timer.' });
-      });
-    } else if (message.type === 'REPORT_VIEWED') {
-      handleReportViewed(message.sessionId, sendResponse);
-    } else if (message.type === 'LOG_ERROR') {
-      logError(message.payload || {}).then(() => {
-        sendResponse({ status: 'ok' });
-      });
-    } else if (message.type === 'CONTENT_EVENT') {
-      handleContentEvent(message.payload, sender.tab?.id);
-      sendResponse({ status: 'ok' });
-    } else if (message.type === 'INTERVENTION_TRANSITION') {
-      handleInterventionTransition(message, sender).then((result) => {
-        sendResponse(result);
-      }, (error) => {
-        sendResponse({ ok: false, error: error.message || 'Intervention transition failed.' });
-      });
-    } else if (message.type === 'TEST_INTERVENTION') {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
-        if (result.trackingEnabled === false) {
-          sendResponse({ ok: false, error: 'Tracking is disabled.' });
-          return;
-        }
-        const session = result.activeSession;
-        if (!session?.isActive) {
-          sendResponse({ ok: false, error: 'Start a session first (Lock in on the new tab).' });
-          return;
-        }
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-          const activeTab = tabs.find((tab) => tab.id && tab.url && isTrackableUrl(tab.url));
-          if (!activeTab) {
-            sendResponse({ ok: false, error: 'Open a website first, then try the lock.' });
-            return;
-          }
-          triggerIntervention('Test intervention — drift detection is working.', activeTab.id);
-          sendResponse({ ok: true });
-        });
-      });
-    }
+    handler?.(message, sender, sendResponse, epoch);
   }).catch(error => sendResponse({ status: 'error', message: error.message }));
   return true; // Keep channel open for async response
 });
@@ -871,11 +917,7 @@ function loadConfig() {
       } else {
         currentSession = null;
       }
-      if (data.trackingEnabled !== undefined) {
-        trackingEnabled = data.trackingEnabled;
-      } else {
-        trackingEnabled = true;
-      }
+      trackingEnabled = data.trackingEnabled !== undefined ? data.trackingEnabled : true;
       customDistractionSites = getEffectiveDistractionSites(data.customDistractionSites);
       if (data.heuristicPolicy && data.heuristicPolicy.version === 1) {
         heuristicPolicy = data.heuristicPolicy;
@@ -888,21 +930,9 @@ function loadConfig() {
       } else {
         heuristicPolicy = buildDefaultPolicy('deep_work', 'balanced');
       }
-      if (data.sessionTabGroupId !== undefined) {
-        sessionTabGroupId = data.sessionTabGroupId;
-      } else {
-        sessionTabGroupId = null;
-      }
-      if (data.isCurrentlyIdle !== undefined) {
-        isCurrentlyIdle = data.isCurrentlyIdle;
-      } else {
-        isCurrentlyIdle = false;
-      }
-      if (data.lastIdleTime !== undefined) {
-        lastIdleTime = data.lastIdleTime;
-      } else {
-        lastIdleTime = 0;
-      }
+      sessionTabGroupId = data.sessionTabGroupId !== undefined ? data.sessionTabGroupId : null;
+      isCurrentlyIdle = data.isCurrentlyIdle !== undefined ? data.isCurrentlyIdle : false;
+      lastIdleTime = data.lastIdleTime !== undefined ? data.lastIdleTime : 0;
       if (Array.isArray(data.overrideCooldowns)) {
         overrideCooldowns.clear();
         data.overrideCooldowns.forEach((entry) => {
@@ -916,11 +946,9 @@ function loadConfig() {
       if (data.llmBackoffUntil && data.llmBackoffUntil > Date.now()) {
         setQuotaBackoff({ retryAfterMs: data.llmBackoffUntil - Date.now() });
       }
-      if (data.relatedDomainMarks && typeof data.relatedDomainMarks === 'object') {
-        relatedDomainMarks = data.relatedDomainMarks;
-      } else {
-        relatedDomainMarks = {};
-      }
+      relatedDomainMarks = (data.relatedDomainMarks && typeof data.relatedDomainMarks === 'object')
+        ? data.relatedDomainMarks
+        : {};
       resolve();
     });
   });
@@ -1102,8 +1130,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === timeBudgetAlarmName) {
     loadConfig().then(() => {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
-        if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+      getLocalIfCurrent(['activeSession', 'trackingEnabled'], epoch, (result) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         // A paused timer cannot expire; resuming reschedules the alarm.
@@ -1126,8 +1153,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const epoch = getStorageGeneration();
   if (changeInfo.status === 'complete' && isTrackableUrl(tab.url)) {
     loadConfig().then(() => {
-      chrome.storage.local.get(['activeSession', 'trackingEnabled'], (result) => {
-        if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+      getLocalIfCurrent(['activeSession', 'trackingEnabled'], epoch, (result) => {
         if (result.trackingEnabled === false) return;
         const session = result.activeSession;
         if (session && session.isActive) {
@@ -1143,8 +1169,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onActivated.addListener((activeInfo) => {
   const epoch = getStorageGeneration();
   loadConfig().then(() => {
-    chrome.storage.local.get(['trackingEnabled', 'activeSession', 'isCurrentlyIdle', 'lastIdleTime'], (result) => {
-      if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+    getLocalIfCurrent(['trackingEnabled', 'activeSession', 'isCurrentlyIdle', 'lastIdleTime'], epoch, (result) => {
       if (result.trackingEnabled === false) return;
       const session = result.activeSession;
       if (session && session.isActive) {
@@ -1299,8 +1324,7 @@ const DRIFT_DEBOUNCE_MS = 5000;
 
 function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
   const epoch = getStorageGeneration();
-  chrome.storage.local.get(['activeSession', 'customDistractionSites', 'trackingEnabled'], (result) => {
-    if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+  getLocalIfCurrent(['activeSession', 'customDistractionSites', 'trackingEnabled'], epoch, (result) => {
     if (result.trackingEnabled === false) return;
     const session = result.activeSession;
     if (!session || !session.isActive) return;
@@ -1321,32 +1345,14 @@ function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
       lastEvaluatedTime = now;
     }
 
-    // Check per-domain override cooldown
     const evaluatedDomain = extractDomain(url);
     if (evaluatedDomain) {
-      let hasCooldown = false;
-      let mapChanged = false;
-      const expiredDomains = [];
-      for (const [cooldownDomain, expiresAt] of overrideCooldowns.entries()) {
-        if (now < expiresAt) {
-          if (evaluatedDomain === cooldownDomain || 
-              evaluatedDomain.endsWith(`.${cooldownDomain}`) || 
-              cooldownDomain.endsWith(`.${evaluatedDomain}`)) {
-            hasCooldown = true;
-          }
-        } else {
-          expiredDomains.push(cooldownDomain);
-          mapChanged = true;
-        }
-      }
-      if (expiredDomains.length > 0) {
-        expiredDomains.forEach(domain => overrideCooldowns.delete(domain));
-      }
+      const mapChanged = pruneExpiredCooldowns(now);
       if (mapChanged) {
         void enqueueSessionMutation(() => storageSet({ overrideCooldowns: Array.from(overrideCooldowns.entries()) }), epoch);
       }
-      if (hasCooldown) {
-        return; // Still in cooldown — skip intervention
+      if (isDomainOnCooldown(evaluatedDomain, overrideCooldowns, now)) {
+        return;
       }
     }
 
@@ -1378,41 +1384,22 @@ function evaluateDrift(url, tabId, { dwellCheck = false } = {}) {
     checkDriftLLM(session.intent, url, sessionEvents(session)).then(res => {
       if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
       if (!res.isAligned && res.confidence >= DRIFT_CONFIDENCE_THRESHOLD) {
-        chrome.storage.local.get(['activeSession', 'overrideCooldowns'], (storageResult) => {
-          if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+        getLocalIfCurrent(['activeSession', 'overrideCooldowns'], epoch, (storageResult) => {
           const current = storageResult.activeSession;
           if (current && current.isActive && current.id === session.id) {
-            // Check if domain is currently on cooldown
-            const evaluatedDomain = extractDomain(url);
-            if (evaluatedDomain) {
-              const cooldowns = new Map(storageResult.overrideCooldowns || []);
-              const now = Date.now();
-              let hasCooldown = false;
-              for (const [cooldownDomain, expiresAt] of cooldowns.entries()) {
-                if (now < expiresAt) {
-                  if (evaluatedDomain === cooldownDomain || 
-                      evaluatedDomain.endsWith(`.${cooldownDomain}`) || 
-                      cooldownDomain.endsWith(`.${evaluatedDomain}`)) {
-                    hasCooldown = true;
-                    break;
-                  }
-                }
-              }
-              if (hasCooldown) return; // Skip intervention due to active cooldown
-            }
+            const cooldowns = new Map(storageResult.overrideCooldowns || []);
+            if (isDomainOnCooldown(extractDomain(url), cooldowns)) return;
 
-            // Verify the tab is still on the evaluated URL
-            if (tabId) {
-              chrome.tabs.get(tabId, (tab) => {
-                if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
-                if (chrome.runtime.lastError || !tab) return;
-                if (tab.url === url) {
-                  triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
-                }
-              });
-            } else {
-              triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
+            const fire = () => triggerIntervention('Your recent browsing no longer matches your declared intent.', tabId);
+            if (!tabId) {
+              fire();
+              return;
             }
+            chrome.tabs.get(tabId, (tab) => {
+              if (epoch !== getStorageGeneration() || isStorageDeletionActive()) return;
+              if (chrome.runtime.lastError || !tab) return;
+              if (tab.url === url) fire();
+            });
           }
         });
       }
