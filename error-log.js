@@ -57,7 +57,6 @@ export function classifyApiError(status, bodyText = '', providerId = 'unknown') 
   try {
     const parsed = JSON.parse(body);
     providerMessage = parsed?.error?.message
-      || parsed?.error?.message
       || parsed?.message
       || parsed?.[0]?.error?.message
       || null;
