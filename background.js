@@ -339,7 +339,13 @@ function isTrackableUrl(url) {
   return sanitizeUrl(url) != null;
 }
 
-const extractDomain = hostnameFromUrl;
+function extractDomain(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return null;
+  }
+}
 
 function domainsShareCooldown(evaluatedDomain, cooldownDomain) {
   return evaluatedDomain === cooldownDomain ||

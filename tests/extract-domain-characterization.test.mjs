@@ -3,16 +3,14 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { hostnameFromUrl } from '../privacy-utils.js';
 
-/** Pre-refactor extractDomain from origin/main background.js. */
-function extractDomainLegacy(url) {
+/** Restored extractDomain (same body as origin/main background.js). */
+function extractDomain(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
   } catch {
     return null;
   }
 }
-
-const extractDomain = hostnameFromUrl;
 
 const CASES = [
   ['empty string', ''],
@@ -27,21 +25,23 @@ const CASES = [
   ['undefined', undefined],
 ];
 
-test('extractDomain aliases hostnameFromUrl and pins degenerate URLs', () => {
+test('background.js extractDomain is the legacy function, not hostnameFromUrl', async () => {
+  const bg = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+  assert.match(bg, /function extractDomain\(url\) \{/);
+  assert.doesNotMatch(bg, /const extractDomain = hostnameFromUrl/);
+});
+
+test('extractDomain pins legacy empty-host as empty string', () => {
   for (const [label, url] of CASES) {
     const got = extractDomain(url);
-    const legacy = extractDomainLegacy(url);
-    if (legacy === '' && got === null) {
-      continue;
-    }
-    assert.equal(got, legacy, `${label}: new=${JSON.stringify(got)} legacy=${JSON.stringify(legacy)}`);
+    const privacy = hostnameFromUrl(url);
+    if (got === '' && privacy === null) continue;
+    assert.equal(got, privacy, `${label}: extractDomain=${JSON.stringify(got)} hostnameFromUrl=${JSON.stringify(privacy)}`);
   }
   assert.equal(extractDomain(''), null);
   assert.equal(extractDomain('chrome://settings'), 'settings');
-  assert.equal(extractDomainLegacy('about:blank'), '');
-  assert.equal(extractDomain('about:blank'), null);
-  assert.equal(extractDomainLegacy('file:///tmp/x'), '');
-  assert.equal(extractDomain('file:///tmp/x'), null);
+  assert.equal(extractDomain('about:blank'), '');
+  assert.equal(extractDomain('file:///tmp/x'), '');
   assert.equal(extractDomain('https://user:pass@example.com/path'), 'example.com');
   assert.equal(extractDomain('https://127.0.0.1/x'), '127.0.0.1');
   assert.equal(extractDomain('https://example.com./a'), 'example.com.');
@@ -52,7 +52,9 @@ test('every extractDomain caller treats null and empty string the same (truthine
   const lines = bg.split('\n');
   const hits = [];
   lines.forEach((line, i) => {
-    if (line.includes('extractDomain(')) hits.push({ line: i + 1, text: line.trim() });
+    if (line.includes('extractDomain(') && !line.includes('function extractDomain')) {
+      hits.push({ line: i + 1, text: line.trim() });
+    }
   });
   assert.ok(hits.length >= 6, `expected several callers, got ${hits.length}`);
   const unsafe = hits.filter(({ text }) => {
@@ -67,7 +69,7 @@ test('every extractDomain caller treats null and empty string the same (truthine
   assert.equal(
     assigned.length,
     1,
-    'override event stores extractDomain() directly; empty-host now null vs legacy ""',
+    'override event stores extractDomain() directly (legacy empty-host is "")',
   );
   assert.deepEqual(unsafe, [], `callers that may distinguish null vs "": ${JSON.stringify(unsafe)}`);
 });
