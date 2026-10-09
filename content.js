@@ -52,53 +52,34 @@ function showTransitionError(message) {
   if (overlay) overlay.setError(message);
 }
 
+function sendInterventionTransition(transition, extra = {}, fallbackError) {
+  return async (arg) => {
+    const state = extra.stateFrom ? extra.stateFrom(arg) : arg;
+    const result = await sendRuntimeMessage({
+      type: 'INTERVENTION_TRANSITION',
+      transition,
+      sessionId: state?.sessionId,
+      nonce: state?.nonce,
+      ...(extra.payloadFrom ? extra.payloadFrom(arg) : {}),
+    });
+    if (result.response?.ok) {
+      pendingIntervention = null;
+      overlay.hide();
+    } else {
+      showTransitionError(result.response?.error || result.error?.message || fallbackError);
+    }
+  };
+}
+
 function ensureOverlay() {
   if (!overlay) {
     overlay = createInterventionOverlay({
-      onOverride: async ({ reflection, markRelated, state }) => {
-        const result = await sendRuntimeMessage({
-          type: 'INTERVENTION_TRANSITION',
-          transition: 'override',
-          sessionId: state?.sessionId,
-          nonce: state?.nonce,
-          reflection,
-          markRelated,
-        });
-        if (result.response?.ok) {
-          pendingIntervention = null;
-          overlay.hide();
-        } else {
-          showTransitionError(result.response?.error || result.error?.message || 'Unable to continue.');
-        }
-      },
-      onCloseTab: async (state) => {
-        const result = await sendRuntimeMessage({
-          type: 'INTERVENTION_TRANSITION',
-          transition: 'close-tab',
-          sessionId: state?.sessionId,
-          nonce: state?.nonce,
-        });
-        if (result.response?.ok) {
-          pendingIntervention = null;
-          overlay.hide();
-        } else {
-          showTransitionError(result.response?.error || result.error?.message || 'Unable to close this lock.');
-        }
-      },
-      onEndSession: async (state) => {
-        const result = await sendRuntimeMessage({
-          type: 'INTERVENTION_TRANSITION',
-          transition: 'end-session',
-          sessionId: state?.sessionId,
-          nonce: state?.nonce,
-        });
-        if (result.response?.ok) {
-          pendingIntervention = null;
-          overlay.hide();
-        } else {
-          showTransitionError(result.response?.error || result.error?.message || 'Unable to end the session.');
-        }
-      },
+      onOverride: sendInterventionTransition('override', {
+        stateFrom: (arg) => arg.state,
+        payloadFrom: ({ reflection, markRelated }) => ({ reflection, markRelated }),
+      }, 'Unable to continue.'),
+      onCloseTab: sendInterventionTransition('close-tab', {}, 'Unable to close this lock.'),
+      onEndSession: sendInterventionTransition('end-session', {}, 'Unable to end the session.'),
     });
   }
   return overlay;

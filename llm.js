@@ -5,6 +5,7 @@ import {
   cleanJsonString,
   getLlmConfig,
   isLlmConfigured,
+  trackingIsDisabled,
 } from './providers.js';
 import { logError, ERROR_TYPES, captureErrorEpoch, isErrorEpochCurrent } from './error-log.js';
 import { sanitizeUrl } from './privacy-utils.js';
@@ -191,10 +192,3 @@ async function generateIntentPlan(intent) {
 }
 
 export { checkDriftLLM, generateIntentPlan, cleanJsonString };
-
-async function trackingIsDisabled() {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) return false;
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['trackingEnabled'], (result) => resolve(result?.trackingEnabled === false));
-  });
-}

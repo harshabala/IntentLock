@@ -1,23 +1,5 @@
-// Load and apply theme override as early as possible
-chrome.storage.local.get(['theme'], (result) => {
-  const theme = result.theme || 'auto';
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.classList.remove('theme-light');
-    root.classList.add('theme-dark');
-  } else if (theme === 'light') {
-    root.classList.remove('theme-dark');
-    root.classList.add('theme-light');
-  } else {
-    root.classList.remove('theme-light');
-    const colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-    const syncAutoTheme = () => {
-      root.classList.toggle('theme-dark', colorSchemeMedia.matches);
-    };
-    syncAutoTheme();
-    colorSchemeMedia.addEventListener('change', syncAutoTheme);
-  }
-});
+import './theme.js';
+import { sanitizeSessionHistory } from './privacy-utils.js';
 
 let dataDeletionInProgress = false;
 let privacyRevision = 0;
@@ -45,16 +27,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function loadSessionHistory(callback) {
     const revision = privacyRevision;
-    import('./privacy-utils.js').then(({ sanitizeSessionHistory }) => {
-      chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
-        if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) { callback([]); return; }
-        const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
-        const sanitizedHistory = sanitizeSessionHistory(rawHistory);
-        callback(sanitizedHistory);
-      });
-    }).catch((error) => {
-      console.error('Unable to sanitize session history.', error);
-      callback([]);
+    chrome.storage.local.get(['sessionHistory', 'privacyMutationState'], (result) => {
+      if (dataDeletionInProgress || revision !== privacyRevision || result.privacyMutationState?.deleting) { callback([]); return; }
+      const rawHistory = Array.isArray(result.sessionHistory) ? result.sessionHistory : [];
+      callback(sanitizeSessionHistory(rawHistory));
     });
   }
 

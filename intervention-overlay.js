@@ -405,17 +405,15 @@
 
     function enforceHostVisibility() {
       if (!host || !lockedVisible) return;
-      if (host.style.getPropertyValue('display') !== 'block') {
-        host.style.setProperty('display', 'block', 'important');
-      }
-      if (host.style.getPropertyValue('visibility') !== 'visible') {
-        host.style.setProperty('visibility', 'visible', 'important');
-      }
-      if (host.style.getPropertyValue('opacity') !== '1') {
-        host.style.setProperty('opacity', '1', 'important');
-      }
-      if (host.style.getPropertyValue('pointer-events') !== 'auto') {
-        host.style.setProperty('pointer-events', 'auto', 'important');
+      for (const [prop, value] of Object.entries({
+        display: 'block',
+        visibility: 'visible',
+        opacity: '1',
+        'pointer-events': 'auto',
+      })) {
+        if (host.style.getPropertyValue(prop) !== value) {
+          host.style.setProperty(prop, value, 'important');
+        }
       }
       host.hidden = false;
       host.removeAttribute('aria-hidden');

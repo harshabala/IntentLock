@@ -359,8 +359,26 @@ export async function getLlmConfig() {
   });
 }
 
+async function postProviderJson(url, { providerId, body, headers = {} }) {
+  const controller = createProviderController();
+  try {
+    await assertTrackingEnabled(providerId);
+  } catch (error) {
+    if (controller) activeProviderControllers.delete(controller);
+    throw error;
+  }
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+    controller,
+  });
+  if (!response.ok) await throwApiFailure(response, providerId);
+  return response.json();
+}
+
 async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, authType, providerId }) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
   let url = baseUrl;
   const effectiveAuthType = providerId === 'custom'
     ? authType
@@ -385,32 +403,13 @@ async function callOpenAiCompatible({ baseUrl, apiKey, model, prompt, jsonMode, 
     body.response_format = { type: 'json_object' };
   }
 
-  const controller = createProviderController();
-  try {
-    await assertTrackingEnabled(providerId);
-  } catch (error) {
-    if (controller) activeProviderControllers.delete(controller);
-    throw error;
-  }
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    controller,
-  });
-
-  if (!response.ok) {
-    await throwApiFailure(response, providerId);
-  }
-
-  const data = await response.json();
+  const data = await postProviderJson(url, { providerId, body, headers });
   return data.choices?.[0]?.message?.content ?? null;
 }
 
 async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens, temperature, providerId }) {
   const root = baseUrl.replace(/\/$/, '');
   const url = `${root}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
@@ -421,26 +420,7 @@ async function callGemini({ baseUrl, apiKey, model, prompt, jsonMode, maxTokens,
   if (jsonMode) {
     body.generationConfig.responseMimeType = 'application/json';
   }
-
-  const controller = createProviderController();
-  try {
-    await assertTrackingEnabled(providerId);
-  } catch (error) {
-    if (controller) activeProviderControllers.delete(controller);
-    throw error;
-  }
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    controller,
-  });
-
-  if (!response.ok) {
-    await throwApiFailure(response, providerId);
-  }
-
-  const data = await response.json();
+  const data = await postProviderJson(url, { providerId, body });
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
 }
 
@@ -454,26 +434,7 @@ async function callOllama({ baseUrl, model, prompt, jsonMode, maxTokens, tempera
   if (jsonMode) {
     body.format = 'json';
   }
-
-  const controller = createProviderController();
-  try {
-    await assertTrackingEnabled(providerId);
-  } catch (error) {
-    if (controller) activeProviderControllers.delete(controller);
-    throw error;
-  }
-  const response = await fetchWithTimeout(baseUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    controller,
-  });
-
-  if (!response.ok) {
-    await throwApiFailure(response, providerId);
-  }
-
-  const data = await response.json();
+  const data = await postProviderJson(baseUrl, { providerId, body });
   return data.message?.content ?? null;
 }
 
@@ -644,7 +605,7 @@ export async function chatCompletion(prompt, options = {}) {
   }
 }
 
-async function trackingIsDisabled() {
+export async function trackingIsDisabled() {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return false;
   return new Promise((resolve) => {
     chrome.storage.local.get(['trackingEnabled'], (result) => resolve(result?.trackingEnabled === false));

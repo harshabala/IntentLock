@@ -54,6 +54,7 @@ const expectedRuntimeFiles = [
   'storage-queue.js',
   'storage-client.js',
   'storage-authority.js',
+  'theme.js',
 ];
 
 async function readRoot(relativePath) {

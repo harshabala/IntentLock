@@ -1,24 +1,4 @@
-// Load and apply theme override as early as possible
-chrome.storage.local.get(['theme'], (result) => {
-  const theme = result.theme || 'auto';
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.classList.remove('theme-light');
-    root.classList.add('theme-dark');
-  } else if (theme === 'light') {
-    root.classList.remove('theme-dark');
-    root.classList.add('theme-light');
-  } else {
-    root.classList.remove('theme-light');
-    const colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-    const syncAutoTheme = () => {
-      root.classList.toggle('theme-dark', colorSchemeMedia.matches);
-    };
-    syncAutoTheme();
-    colorSchemeMedia.addEventListener('change', syncAutoTheme);
-  }
-});
-
+import './theme.js';
 import { mergePolicyWithIntent, INTENT_CATEGORIES } from './heuristic-policy.js';
 import { getProvider, providerRequiresApiKey } from './providers.js';
 import { logError, ERROR_TYPES } from './error-log.js';
@@ -335,19 +315,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     tick();
     timerInterval = setInterval(tick, 1000);
     return timerEl;
-  }
-
-  function createHistoryEntry(session) {
-    const events = Array.isArray(session.events) ? session.events : [];
-    return {
-      id: session.id,
-      intent: session.intent,
-      startTime: session.startTime,
-      endTime: session.endTime,
-      timeBudget: session.timeBudget,
-      driftCount: events.filter(e => e?.actionType === 'OVERRIDE').length,
-      totalEvents: events.length
-    };
   }
 
   // ── Active session state ────────────────────────────────────────────

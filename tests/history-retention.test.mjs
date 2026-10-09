@@ -14,7 +14,7 @@ test('history and module UIs sanitize and persist retention-pruned session histo
   const analytics = await source('analytics.js');
   const newtab = await source('newtab.js');
 
-  assert.match(history, /import\('\.\/privacy-utils\.js'\)/);
+  assert.match(history, /import \{ sanitizeSessionHistory \} from '\.\/privacy-utils\.js';/);
   assert.match(history, /sanitizeSessionHistory\(rawHistory\)/);
   assert.doesNotMatch(history, /chrome\.storage\.local\.set\(\{ sessionHistory: sanitizedHistory \}/);
 
